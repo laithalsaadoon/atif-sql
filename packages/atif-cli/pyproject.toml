@@ -1,11 +1,10 @@
 [project]
-# The installable name IS the typed command. This is the one distribution a user
-# installs (`uv tool install atif-sql`); the other six members are internal module
-# boundaries that ship as its pinned dependencies. The DIRECTORY and MODULE stay
-# `atif_cli` — a distribution name and a module name are independent, and renaming
-# the module would churn [tool.ruff] src, [tool.ty], [tool.pyright],
-# [tool.coverage.run], and the import-linter contracts for no gain.
-name = "atif-sql"
+# A DEV manifest, not a published distribution. The published name is `atif-sql`,
+# declared once at the workspace root, whose single wheel carries this module and
+# the other six. This file exists so uv can install the package editable, so
+# import-linter can read what it is allowed to import, and so its tests have a
+# home — none of which needs an index.
+name = "atif-cli"
 version = "0.1.0"
 description = "ATIF-native analytics over Claude Code agent trajectories: convert, materialize, and query agent sessions with DuckDB."
 readme = "README.md"
@@ -43,9 +42,6 @@ dependencies = [
     "duckdb>=1.5.2,<2",
     "loguru>=0.7.3",
 ]
-
-[project.scripts]
-atif-sql = "atif_cli.app:main"
 
 [project.urls]
 Homepage = "https://github.com/theagenticguy/atif-sql"

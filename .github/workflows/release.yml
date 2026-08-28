@@ -87,11 +87,13 @@ jobs:
           restore-keys: uv-${{ runner.os }}-
       - run: mise run install:ci
 
-      # `[tool.commitizen] version` is what `cz bump` reads and rewrites — the workspace root
-      # carries no `[project]` table, so there is no PEP 621 version for commitizen's default
-      # provider to find. Asserting it here rather than letting `cz bump` fail later puts the
-      # check before `mise run check`, so the answer arrives in seconds instead of after the
-      # full gate, and names the file to edit rather than reporting `[NO_VERSION_SPECIFIED]`.
+      # `[tool.commitizen] version` is what `cz bump` reads and rewrites, and it is the source of
+      # truth because `version_provider` defaults to reading it. The root's `[project] version` is
+      # the one a wheel carries, and it moves through `version_files` — so both hold the same
+      # string and a missing commitizen key means nothing bumps at all. Asserting it here rather
+      # than letting `cz bump` fail later puts the check before `mise run check`, so the answer
+      # arrives in seconds instead of after the full gate, and names the file to edit rather than
+      # reporting `[NO_VERSION_SPECIFIED]`.
       #
       # The OUTPUT is the assertion, not the exit status: `cz version --project` prints "No
       # project information in this project." and still exits 0 when the key is absent.
@@ -102,7 +104,7 @@ jobs:
           case "$current" in
             [0-9]*) echo "current version: $current" ;;
             *)
-              echo "::error::[tool.commitizen] in pyproject.toml carries no 'version' key, so cz cannot bump. RELEASING.md has the exact block to add, including the version_files entries that keep the seven member manifests and their intra-workspace pins in step."
+              echo "::error::[tool.commitizen] in pyproject.toml carries no 'version' key, so cz cannot bump. RELEASING.md has the exact block to add, including the version_files entries that keep the published version, the seven member manifests, and their intra-workspace pins in step."
               exit 1
               ;;
           esac

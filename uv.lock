@@ -5,24 +5,13 @@ requires-python = ">=3.13"
 [manifest]
 members = [
     "atif-analytics",
+    "atif-cli",
     "atif-converter",
     "atif-corpus",
     "atif-duck",
     "atif-embed",
     "atif-models",
     "atif-sql",
-]
-
-[manifest.dependency-groups]
-dev = [
-    { name = "commitizen", specifier = ">=4.13.10" },
-    { name = "hypothesis", specifier = ">=6.157.0" },
-    { name = "import-linter", specifier = ">=2.3" },
-    { name = "lefthook", specifier = ">=2.1.6" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.15.11" },
-    { name = "ty", specifier = ">=0.0.31" },
 ]
 
 [[package]]
@@ -206,6 +195,33 @@ requires-dist = [
 ]
 
 [[package]]
+name = "atif-cli"
+version = "0.1.0"
+source = { editable = "packages/atif-cli" }
+dependencies = [
+    { name = "atif-analytics" },
+    { name = "atif-converter" },
+    { name = "atif-corpus" },
+    { name = "atif-duck" },
+    { name = "atif-embed" },
+    { name = "cyclopts" },
+    { name = "duckdb" },
+    { name = "loguru" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atif-analytics", editable = "packages/atif-analytics" },
+    { name = "atif-converter", editable = "packages/atif-converter" },
+    { name = "atif-corpus", editable = "packages/atif-corpus" },
+    { name = "atif-duck", editable = "packages/atif-duck" },
+    { name = "atif-embed", editable = "packages/atif-embed" },
+    { name = "cyclopts", specifier = ">=4.10.2" },
+    { name = "duckdb", specifier = ">=1.5.2,<2" },
+    { name = "loguru", specifier = ">=0.7.3" },
+]
+
+[[package]]
 name = "atif-converter"
 version = "0.1.0"
 source = { editable = "packages/atif-converter" }
@@ -299,7 +315,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.11.0" },
-    { name = "boto3", specifier = ">=1.40.0" },
+    { name = "boto3", specifier = ">=1.42.91" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "pydantic", specifier = ">=2.13.2" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
@@ -309,28 +325,74 @@ requires-dist = [
 [[package]]
 name = "atif-sql"
 version = "0.1.0"
-source = { editable = "packages/atif-cli" }
+source = { editable = "." }
 dependencies = [
-    { name = "atif-analytics" },
-    { name = "atif-converter" },
-    { name = "atif-corpus" },
-    { name = "atif-duck" },
-    { name = "atif-embed" },
+    { name = "anyio" },
+    { name = "boto3" },
     { name = "cyclopts" },
     { name = "duckdb" },
+    { name = "graspologic-native" },
+    { name = "harbor" },
+    { name = "hdbscan" },
+    { name = "lancedb" },
     { name = "loguru" },
+    { name = "numpy" },
+    { name = "polars" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pytz" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+    { name = "tenacity" },
+    { name = "umap-learn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "commitizen" },
+    { name = "hypothesis" },
+    { name = "import-linter" },
+    { name = "lefthook" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "ty" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "atif-analytics", editable = "packages/atif-analytics" },
-    { name = "atif-converter", editable = "packages/atif-converter" },
-    { name = "atif-corpus", editable = "packages/atif-corpus" },
-    { name = "atif-duck", editable = "packages/atif-duck" },
-    { name = "atif-embed", editable = "packages/atif-embed" },
+    { name = "anyio", specifier = ">=4.11.0" },
+    { name = "boto3", specifier = ">=1.42.91" },
     { name = "cyclopts", specifier = ">=4.10.2" },
     { name = "duckdb", specifier = ">=1.5.2,<2" },
+    { name = "graspologic-native", specifier = ">=1.3.1,<2" },
+    { name = "harbor", specifier = ">=0.22.0,<0.23" },
+    { name = "hdbscan", specifier = ">=0.8.44" },
+    { name = "lancedb", specifier = ">=0.30,<0.38" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "numpy", specifier = ">=2.4.4,<2.6" },
+    { name = "polars", specifier = ">=1.40.0" },
+    { name = "pyarrow", specifier = ">=23.0.1" },
+    { name = "pydantic", specifier = ">=2.13.2" },
+    { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "pytz", specifier = ">=2024.1" },
+    { name = "scikit-learn", specifier = ">=1.5" },
+    { name = "scipy", specifier = ">=1.16" },
+    { name = "tenacity", specifier = ">=9.1.4" },
+    { name = "umap-learn", specifier = ">=0.5.12" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "commitizen", specifier = ">=4.13.10" },
+    { name = "hypothesis", specifier = ">=6.157.0" },
+    { name = "import-linter", specifier = ">=2.3" },
+    { name = "lefthook", specifier = ">=2.1.6" },
+    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "ruff", specifier = ">=0.15.11" },
+    { name = "ty", specifier = ">=0.0.31" },
 ]
 
 [[package]]

@@ -1,8 +1,10 @@
 # Contributing to atif-sql
 
-atif-sql is a uv workspace: a virtual root (`pyproject.toml` carries no
-`[project]` table, only `[tool.uv.workspace] members = ["packages/*"]`) plus
-seven installable members under `packages/`. Everything below is read off the
+atif-sql is a uv workspace whose root is also the one published distribution:
+`pyproject.toml` carries both a `[project]` table (the single `atif-sql` wheel,
+which bundles all seven module trees) and `[tool.uv.workspace] members =
+["packages/*"]`. The seven packages under `packages/` are development members,
+not install targets. Everything below is read off the
 checked-in config — `mise.toml`, `pyproject.toml`, `lefthook.yml`, and
 `AGENTS.md` — so if a claim here and a config file disagree, the config file
 wins and this document is the bug.

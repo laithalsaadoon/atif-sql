@@ -2,7 +2,7 @@
 
 Every process in this system starts as a CLI invocation. There is one console
 script, `atif-sql = "atif_cli.app:main"`
-(`packages/atif-cli/pyproject.toml:43`), and its ten commands are the complete
+(`packages/atif-cli/pyproject.toml:42`), and its ten commands are the complete
 initiator set — nine `@app.command` sites plus the `cron` sub-App registered at
 `packages/atif-cli/src/atif_cli/app.py:66`. No HTTP route, RPC tool, message
 handler, or job queue exists to initiate anything else; the only scheduled

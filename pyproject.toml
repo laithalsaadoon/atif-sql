@@ -1,9 +1,100 @@
-# atif-sql — virtual workspace root.
+# atif-sql — the ONE published distribution, and the workspace root.
 #
-# This pyproject carries NO [project] table on purpose: the root is a uv
-# "virtual" workspace member that only pins the member list, the shared dev
-# dependency-group, and the shared tool config (ruff / ty / import-linter /
-# pytest). Every installable package lives under packages/*.
+# The root is both. `[project]` below is what goes to PyPI: a single wheel
+# carrying all seven module trees, so `uvx atif-sql` resolves exactly one name.
+# `[tool.uv.workspace]` keeps the seven packages under packages/* as workspace
+# members, which is how the layer and independence contracts stay enforceable
+# and how each package keeps its own tests — development is unchanged, only the
+# publishing shape is one.
+#
+# The members are NOT published. Their `pyproject.toml` files are dev manifests:
+# they declare what each package may import, which import-linter reads, and
+# `mise run install` installs them editable. A member's `version` moves with the
+# root's on every bump so the workspace stays coherent, and nothing resolves
+# those versions from an index.
+
+[project]
+name = "atif-sql"
+version = "0.1.0"
+description = "ATIF-native analytics over Claude Code agent trajectories: convert, materialize, and query agent sessions with DuckDB."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Laith Al-Saadoon" }]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+# The UNION of every member's third-party requirements, and nothing else: no
+# `atif-*` entry appears here, because there is no sibling distribution left to
+# resolve from an index. A single wheel means this list is the only thing an
+# installer sees, so it cannot be derived at build time and it cannot drift
+# unnoticed either — `packages/atif-cli/tests/test_distribution.py` asserts it
+# equals the members' union exactly, and a member that adds a dependency without
+# adding it here fails that test rather than shipping an ImportError.
+dependencies = [
+    "anyio>=4.11.0",
+    "boto3>=1.42.91",
+    "cyclopts>=4.10.2",
+    "duckdb>=1.5.2,<2",
+    "graspologic-native>=1.3.1,<2",
+    "harbor>=0.22.0,<0.23",
+    "hdbscan>=0.8.44",
+    "lancedb>=0.30,<0.38",
+    "loguru>=0.7.3",
+    "numpy>=2.4.4,<2.6",
+    "polars>=1.40.0",
+    "pyarrow>=23.0.1",
+    "pydantic-settings>=2.13.1",
+    "pydantic>=2.13.2",
+    "pytz>=2024.1",
+    "scikit-learn>=1.5",
+    "scipy>=1.16",
+    "tenacity>=9.1.4",
+    "umap-learn>=0.5.12",
+]
+
+[project.scripts]
+atif-sql = "atif_cli.app:main"
+
+[project.urls]
+Homepage = "https://github.com/theagenticguy/atif-sql"
+Repository = "https://github.com/theagenticguy/atif-sql"
+Issues = "https://github.com/theagenticguy/atif-sql/issues"
+Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+
+# hatchling rather than uv_build, for one reason: uv_build resolves every module
+# under a single `module-root` (default `src`), and these seven live under
+# `packages/*/src/`. hatchling's `packages` list takes a path per module, so one
+# wheel spans all seven trees with NO source movement — which is what keeps
+# `[tool.ruff] src`, `[tool.ty]`, `[tool.pyright]`, `[tool.coverage.run]`,
+# `[tool.bandit]`, the import-linter contracts, and every doc citation valid.
+[build-system]
+requires = ["hatchling>=1.28.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "packages/atif-cli/src/atif_cli",
+    "packages/atif-analytics/src/atif_analytics",
+    "packages/atif-converter/src/atif_converter",
+    "packages/atif-corpus/src/atif_corpus",
+    "packages/atif-duck/src/atif_duck",
+    "packages/atif-embed/src/atif_embed",
+    "packages/atif-models/src/atif_models",
+]
+
+[tool.hatch.build.targets.sdist]
+# An sdist that cannot rebuild the wheel is worse than no sdist. The wheel is
+# built from `packages/*/src`, so the sdist has to carry those trees plus the
+# manifests and the license.
+include = ["packages/*/src/**", "packages/*/pyproject.toml", "pyproject.toml", "README.md", "LICENSE"]
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -346,7 +437,14 @@ pre_bump_hooks = [
 # The pin entries are per-file rather than globbed on purpose: `--check-consistency`
 # requires a hit in every matched file, and five of the seven members carry no
 # intra-workspace pin.
+#
+# The first entry is THIS file, and it matches two lines: `[project] version`, which is what
+# the published wheel carries, and `[tool.commitizen] version` above, which commitizen owns as
+# the source of truth. Both hold the same string and both take the same replacement, so the
+# overlap is idempotent rather than a conflict — and leaving `[project] version` out would ship
+# a wheel whose version disagreed with its own tag.
 version_files = [
+    'pyproject.toml:^version',
     'packages/*/pyproject.toml:^version',
     'packages/atif-cli/pyproject.toml:^\s*"atif-',
     'packages/atif-analytics/pyproject.toml:^\s*"atif-models==',

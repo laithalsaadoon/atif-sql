@@ -2,19 +2,18 @@
 
 **The supported entry point is the `atif-sql` command, not an import.** This repository ships exactly
 one installable distribution, `atif-sql`, whose only console script is
-`atif-sql = "atif_cli.app:main"` — `packages/atif-cli/pyproject.toml:43`. The other six workspace
-members ship as that distribution's pinned dependencies and are described in the manifest itself as
-"internal module boundaries", with the distribution name deliberately split from the `atif_cli` module
-name — `packages/atif-cli/pyproject.toml:2-7`. Install with `uvx atif-sql` or
+`atif-sql = "atif_cli.app:main"` — `pyproject.toml:64`. All seven workspace members ship inside that
+one wheel rather than as install targets, and the published name is deliberately split from the
+`atif_cli` module that provides the entry point — `pyproject.toml:16-18`. Install with `uvx atif-sql` or
 `uv tool install atif-sql`; `docs/reference/cli.md` is the primary reference for the surface a user
 actually calls.
 
 What follows documents the **internal seam**: the 30 highest-traffic symbols that one workspace member
 imports from another. That seam is enforced rather than conventional — the root `pyproject.toml`
-declares `[tool.importlinter]` over all seven root packages at `pyproject.toml:364-365`, with an
-`independence` contract at `pyproject.toml:416-419` forbidding atif-converter, atif-corpus, atif-duck,
+declares `[tool.importlinter]` over all seven root packages at `pyproject.toml:462-463`, with an
+`independence` contract at `pyproject.toml:514-517` forbidding atif-converter, atif-corpus, atif-duck,
 atif-models, and atif-embed from importing each other at all, and a `forbidden` contract at
-`pyproject.toml:421-425` limiting atif-analytics to atif-models alone. Every symbol below is a real
+`pyproject.toml:519-523` limiting atif-analytics to atif-models alone. Every symbol below is a real
 declaration read at the cited line; none of them is a supported import path for code outside this
 workspace, and no compatibility promise attaches to any of them.
 

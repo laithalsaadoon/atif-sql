@@ -1,7 +1,7 @@
 # atif-sql · Contract map
 
 **What counts as a contract here.** This workspace has almost no shared-type imports to trace,
-because `pyproject.toml:416-425` forbids most of them: five of the seven members may never import
+because `pyproject.toml:514-523` forbids most of them: five of the seven members may never import
 each other, and atif-analytics may import only atif-models. What crosses a module boundary instead
 is a **shape agreed by two packages that cannot reference one another's symbols** — a file layout, a
 JSON key order, a column projection, a `typing.Protocol` typed to a document rather than to an
@@ -25,7 +25,7 @@ appears at exactly two import sites in the whole workspace —
 `packages/atif-cli/tests/test_converter_adapter.py:17` (the test that binds the two together in an
 annotation). So each Protocol row below has a producer of the shape and an implementer the type
 system never links to it, and the answer to "who finds out if the shape drifts" is a named test or
-nobody. Do not read a Protocol row as a dependency edge — `pyproject.toml:416-419` forbids the edge
+nobody. Do not read a Protocol row as a dependency edge — `pyproject.toml:514-517` forbids the edge
 it would imply.
 
 Every contract below names its producer, its consumers, the verbatim shape, the assumptions
@@ -99,10 +99,10 @@ Contracts are ordered by confirmed consumer count, descending.
 **Where the hand-written contract disagrees with the code, the code wins — and it does disagree in
 two places.** `docs/CONTRACT.md:61` heads its CLI section "atif-cli composes; only package importing
 the other three", while the manifest declares five sibling dependencies
-(`packages/atif-cli/pyproject.toml:33-37`) and the CLI imports all five. `docs/CONTRACT.md:16-17`
+(`packages/atif-cli/pyproject.toml:32-36`) and the CLI imports all five. `docs/CONTRACT.md:16-17`
 lists VSS/`semantic_search` and the v2 LLM-analytics pipelines as out of scope and then reverses
 itself at `docs/CONTRACT.md:17-19`; both are shipped commands
-(`packages/atif-cli/pyproject.toml:43` plus the `embed` / `search` / `analyze` commands). Read
+(`packages/atif-cli/pyproject.toml:42` plus the `embed` / `search` / `analyze` commands). Read
 `docs/CONTRACT.md:21-39` as authoritative for the layout — that is the part four packages actually
 implement — and the manifest as authoritative for who imports whom.
 
@@ -188,7 +188,7 @@ drift test against a store built at a non-default `output_dimension` before chan
 
 ## The seven import-linter architecture contracts
 
-**Producer:** `pyproject.toml:364-425`
+**Producer:** `pyproject.toml:462-523`
 
 **Consumer(s):**
 
@@ -228,34 +228,34 @@ forbidden_modules = ["atif_converter", "atif_corpus", "atif_duck", "atif_embed",
 **Assumptions consumers make:**
 
 - **atif-cli is the only composition root**, and it is absent from both the `independence` module
-  list (`pyproject.toml:419`) and the `forbidden` source list (`pyproject.toml:424`). The one module that imports
+  list (`pyproject.toml:517`) and the `forbidden` source list (`pyproject.toml:522`). The one module that imports
   two independent packages is `packages/atif-cli/src/atif_cli/converter_adapter.py:36-38`, and its
   docstring names that privilege explicitly at `packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`.
 - **atif-analytics is absent from the independence list on purpose** so it can compose atif-models,
   with the `forbidden` contract pinning its other six edges shut — the reasoning is inline at
-  `pyproject.toml:411-415`. Verified: `grep -rn 'atif_duck' packages/atif-analytics/` returns
+  `pyproject.toml:509-513`. Verified: `grep -rn 'atif_duck' packages/atif-analytics/` returns
   nothing, so the CONTRACT-V2-era design of reading atif-duck's views is not what the code does.
-- **atif-duck declares no `layers` contract.** Five members do (`pyproject.toml:367-410`); atif-duck
+- **atif-duck declares no `layers` contract.** Five members do (`pyproject.toml:465-508`); atif-duck
   has `domain/` and `infrastructure/` but no `application/`, so there is no third layer to order.
 - **Every layered member's `domain/` is the innermost layer**, which is why all five Protocols live
   in `domain/ports.py` and none in an `application/ports.py` — no such file exists in this
   workspace.
-- **The comment at `pyproject.toml:411-412` grants a permission that is not exercised.** It reads
+- **The comment at `pyproject.toml:509-510` grants a permission that is not exercised.** It reads
   "ONLY atif-cli and atif-analytics may import atif-models", but atif-cli neither declares
-  atif-models in `packages/atif-cli/pyproject.toml:33-37` nor imports it anywhere:
+  atif-models in `packages/atif-cli/pyproject.toml:32-36` nor imports it anywhere:
   `grep -rn 'atif_models' packages/atif-cli/` returns nothing. The live atif-models edge is
   atif-analytics' alone, 22 import sites led by
   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:28-29`.
 - **Every cross-package import in this workspace is INDENTED** — inside a function body or a
   `TYPE_CHECKING` block — because `PLC0415` is ignored workspace-wide to satisfy the lean-import
-  test (`pyproject.toml:73`). The four exceptions are module-scope imports in the two atif-cli
+  test (`pyproject.toml:164`). The four exceptions are module-scope imports in the two atif-cli
   modules that are themselves only ever imported inside a command body:
   `packages/atif-cli/src/atif_cli/converter_adapter.py:36-38` and
   `packages/atif-cli/src/atif_cli/duck_errors.py:26`. A line-anchored grep for `^from atif_` finds
   zero cross-package consumers, which is why every count in this file comes from an unanchored grep
   confirmed at the site.
 
-**Drift risk:** a new workspace member that is not added to `root_packages` (`pyproject.toml:365`) is silently
+**Drift risk:** a new workspace member that is not added to `root_packages` (`pyproject.toml:463`) is silently
 unchecked — import-linter reports "7 contracts, 7 kept" while the new package imports whatever it
 likes. Mitigation: adding a `packages/*` member means adding it to `root_packages` and giving it
 either a `layers` contract or a place in the `independence` list in the same commit.
@@ -546,7 +546,7 @@ class ConverterPort(Protocol):
   `_LOSS_REPORT_COLUMNS` projection at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:122-131`.
 - **Importing the adapter drags harbor.** `packages/atif-cli/src/atif_cli/converter_adapter.py:27-29` forbids importing it at
   `atif_cli.app` module scope, and `packages/atif-cli/src/atif_cli/app.py:387` obeys by importing inside the command body —
-  enforced by the fresh-interpreter lean-import test named at `pyproject.toml:73`.
+  enforced by the fresh-interpreter lean-import test named at `pyproject.toml:164`.
 
 **Drift risk:** the three `dict[str, Any]` fields mean a converter that renames a trajectory key
 type-checks perfectly and produces artifacts atif-duck's explicit projections silently null out;
@@ -749,19 +749,19 @@ into one specific, actionable error before any session is attempted.
 
 ## The `atif-sql` distribution's `==0.1.0` sibling pins
 
-**Producer:** `packages/atif-cli/pyproject.toml:33-37` and
+**Producer:** `packages/atif-cli/pyproject.toml:32-36` and
 `packages/atif-analytics/pyproject.toml:24`
 
 **Consumer(s):**
 
-- `pyproject.toml:349-354` — commitizen's `version_files`, which rewrites every pin on each bump.
-- `packages/atif-cli/pyproject.toml:60-64` — `[tool.uv.sources]`, the local-workspace resolution
+- `pyproject.toml:446-452` — commitizen's `version_files`, which rewrites every pin on each bump.
+- `packages/atif-cli/pyproject.toml:56-60` — `[tool.uv.sources]`, the local-workspace resolution
   that these pins deliberately do NOT express.
 - `packages/atif-analytics/pyproject.toml:56` — the same pairing for its single sibling dependency.
-- `pyproject.toml:308-315` — `[tool.commitizen] version = "0.1.0"`, the one version this repo
+- `pyproject.toml:399-406` — `[tool.commitizen] version = "0.1.0"`, the one version this repo
   publishes.
-- `packages/atif-cli/pyproject.toml:8-9` — the distribution is named `atif-sql` while the module
-  stays `atif_cli`.
+- `pyproject.toml:17-18` — the distribution is named `atif-sql` at the workspace root, while the
+  console script's module stays `atif_cli` in a member.
 
 **Shape:**
 
@@ -790,25 +790,26 @@ version_files = [
 - **`[tool.uv.sources]` is invisible to an external installer.** uv's build backend does not
   translate a workspace source into a version constraint, so a bare name would ship as
   `Requires-Dist: atif-duck` and resolve from PyPI to whatever the newest release of that name is,
-  owned by whoever owns it — the reasoning is inline at `packages/atif-cli/pyproject.toml:25-32`.
-- **One version covers the whole repository.** The root is a virtual uv workspace with no
-  `[project]` table, so commitizen reads its own `version` key rather than a PEP 621 field
-  (`pyproject.toml:310-312`); seven numbers for one artifact is the shape being refused.
+  owned by whoever owns it — the reasoning is inline at `packages/atif-cli/pyproject.toml:24-31`.
+- **One version covers the whole repository.** commitizen reads its own `version` key rather than
+  the PEP 621 field (`pyproject.toml:401-403`), and `version_files` propagates it to the published
+  `[project] version` and to all seven member manifests; seven numbers for one artifact is the
+  shape being refused.
 - **The `version_files` entries are per-file rather than globbed on purpose**, because
   `--check-consistency` requires a hit in every matched file and five of the seven members carry no
-  intra-workspace pin (`pyproject.toml:345-348`).
+  dev pin between members (`pyproject.toml:436-439`).
 - **The lockfile must land in the same commit as the versions it resolves.** `pre_bump_hooks` run
   `uv lock` and `git add uv.lock` after the rewrite and before the commit
-  (`pyproject.toml:331-342`), because `uv.lock` records every member's version and
+  (`pyproject.toml:422-433`), because `uv.lock` records every member's version and
   `mise run lock:check` would otherwise fail on the release commit itself.
 - **A breaking change moves 0.1.0 to 0.2.0, not 1.0.0**, because `major_version_zero = true`
-  (`pyproject.toml:325`) — reaching 1.0.0 is a decision, not a side effect of a `!` in a subject
+  (`pyproject.toml:416`) — reaching 1.0.0 is a decision, not a side effect of a `!` in a subject
   line.
 
 **Drift risk:** a hand-edited pin, or a renamed member whose pin line stops matching its
 `version_files` regex, goes stale silently until a release. Mitigation: `--check-consistency` fails
 rather than skipping a file that no longer contains the current version — the guarantee is stated at
-`pyproject.toml:343-345`.
+`pyproject.toml:434-436`.
 
 ## Other contracts
 
@@ -857,7 +858,7 @@ rather than skipping a file that no longer contains the current version — the 
   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:31` pins
   `output_dimension: Literal[256, 512, 1024, 1536] = 1024`, which is the value the static catalog
   hardcodes as `FLOAT[1024]`.
-- **The lean-import contract** — `pyproject.toml:73` and `pyproject.toml:90` record that `atif_cli.app` must not
+- **The lean-import contract** — `pyproject.toml:164` and `pyproject.toml:181` record that `atif_cli.app` must not
   import duckdb, harbor, lancedb, boto3, or polars at module scope, asserted in a fresh interpreter
   by `packages/atif-cli/tests/test_lean_import.py`; 182 deferred-import sites exist because of it.
 

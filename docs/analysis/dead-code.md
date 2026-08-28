@@ -12,7 +12,7 @@ with no consumer** — a name in an `__all__` that nothing imports.
 **Technique, and what it cannot see.** No code index covers this repo (there is no `.codegraph/`, no LSP index, no AST
 symbol graph), and no dead-code analyzer is wired into the project: `grep -n
 "vulture|dead|unused|deptry|knip"` over `pyproject.toml` and `mise.toml` returns
-one unrelated hit, ty's `unused-ignore-comment` at `pyproject.toml:292`. The
+one unrelated hit, ty's `unused-ignore-comment` at `pyproject.toml:383`. The
 finding set is therefore derived, in three passes:
 
 1. **AST enumeration.** `ast.parse` every file under `packages/*/src/**/*.py`,
@@ -48,7 +48,7 @@ Four limits of this derivation, stated because no index backs it:
 - **A textual match is not a semantic reference.** Every reference that keeps a
   symbol off these tables was read at its site rather than counted.
 - **Import position is irrelevant to the method, deliberately.** Because
-  `PLC0415` is off (`pyproject.toml:73`) to satisfy the lean-import assertion at
+  `PLC0415` is off (`pyproject.toml:164`) to satisfy the lean-import assertion at
   `packages/atif-cli/tests/test_lean_import.py:17-32`, atif-cli's cross-package
   imports sit *inside* command bodies —
   `packages/atif-cli/src/atif_cli/app.py:201`,
@@ -67,12 +67,12 @@ Four limits of this derivation, stated because no index backs it:
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`.
 
 Two enforced gates are why the list is short rather than thin. ruff runs
-`select = ["ALL"]` (`pyproject.toml:55`) at zero, so `F401`, `F811`, `F841` and
+`select = ["ALL"]` (`pyproject.toml:146`) at zero, so `F401`, `F811`, `F841` and
 `ERA001` leave no unused import, no redefinition, no unused local, and no
-commented-out code — with exactly one carve-out, `pyproject.toml:133`
+commented-out code — with exactly one carve-out, `pyproject.toml:224`
 (`"**/__init__.py" = ["F401", "E402"]`). pyright runs
-`typeCheckingMode = "strict"` (`pyproject.toml:498`) over all seven `src/` and
-`tests/` trees (`pyproject.toml:499-515`) at zero errors, which enforces
+`typeCheckingMode = "strict"` (`pyproject.toml:596`) over all seven `src/` and
+`tests/` trees (`pyproject.toml:597-613`) at zero errors, which enforces
 `reportUnusedFunction` / `reportUnusedClass` / `reportUnusedVariable` for every
 `_`-prefixed definition unused inside its own file. Neither gate can see a
 *public* symbol that no other module imports, and that gap is exactly what the
@@ -195,7 +195,7 @@ empty:
 
 ## Dead imports
 
-`__init__.py` is the only tree where `F401` is off (`pyproject.toml:133`), so it
+`__init__.py` is the only tree where `F401` is off (`pyproject.toml:224`), so it
 is the only place an import with no consumer survives lint. atif-duck is the only
 member whose `__init__.py` files re-export anything, and **all 22 re-exports are
 consumed by nothing** — in-repo or out. Each name is listed in its file's
@@ -264,10 +264,10 @@ consumer.
 Each `__init__.py` presents the facade as intentional:
 `packages/atif-duck/src/atif_duck/__init__.py:6` documents
 `register(con, corpus_root)` as the package entry point. Read against
-`packages/atif-cli/pyproject.toml:8` — one distribution named `atif-sql`, with
-the other six members shipped as `==0.1.0`-pinned internal dependencies rather
-than install targets — the facade has no addressable consumer, and the CLI is
-the public contract instead.
+`pyproject.toml:17` — one distribution named `atif-sql`, bundling all seven module
+trees in a single wheel rather than shipping any of them as an install target —
+the facade has no addressable consumer, and the CLI is the public contract
+instead.
 
 ## See also
 

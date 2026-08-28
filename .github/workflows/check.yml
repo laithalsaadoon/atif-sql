@@ -45,7 +45,7 @@ jobs:
           path: ${{ env.UV_CACHE_DIR }}
           key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
           restore-keys: uv-${{ runner.os }}-
-      # Before the gate, not inside it: a uv.lock that does not match the seven member
+      # Before the gate, not inside it: a uv.lock that does not match the root and the seven member
       # manifests resolves a dependency set nobody reviewed, and every result below would
       # then describe that unreviewed set.
       - run: mise run lock:check

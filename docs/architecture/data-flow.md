@@ -1,7 +1,7 @@
 # atif-sql · Data flow
 
 The distribution declares exactly one entry point, the console script
-`atif-sql = "atif_cli.app:main"` (`packages/atif-cli/pyproject.toml:43`), and the `main` it names
+`atif-sql = "atif_cli.app:main"` (`packages/atif-cli/pyproject.toml:42`), and the `main` it names
 installs a WARNING-and-up loguru sink and hands control to cyclopts — `packages/atif-cli/src/atif_cli/app.py:1125`.
 Every process below therefore begins as a CLI invocation; there is no HTTP, RPC, or queue surface
 to enter through.

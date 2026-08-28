@@ -1,14 +1,14 @@
 # atif-sql · Module map
 
-Seven uv workspace members live under `packages/*`, declared at `pyproject.toml:9`; the root carries
+Seven uv workspace members live under `packages/*`, declared at `pyproject.toml:100`; the root carries
 no `[project]` table because it is a virtual workspace holding only the member list, the shared dev
 dependency-group, and the shared tool config (`pyproject.toml:1`). The internal import graph is a
 star: atif-cli declares five siblings as `==`-pinned dependencies
-(`packages/atif-cli/pyproject.toml:33`), plus one further edge from atif-analytics to atif-models that
-a `forbidden` import-linter contract leaves open (`pyproject.toml:422`), with every other pair closed
-by an `independence` contract (`pyproject.toml:417`). Every cross-package import sits inside a
+(`packages/atif-cli/pyproject.toml:32`), plus one further edge from atif-analytics to atif-models that
+a `forbidden` import-linter contract leaves open (`pyproject.toml:520`), with every other pair closed
+by an `independence` contract (`pyproject.toml:515`). Every cross-package import sits inside a
 function body or a `TYPE_CHECKING` block so the CLI's fast path pulls in no duckdb, harbor, lancedb,
-boto3, or polars, which is why `PLC0415` is ignored workspace-wide (`pyproject.toml:73`). Modules
+boto3, or polars, which is why `PLC0415` is ignored workspace-wide (`pyproject.toml:164`). Modules
 below are ordered by total source LOC, descending; LOC figures are `wc -l` over the file.
 
 ## atif-analytics
@@ -23,7 +23,7 @@ appendix (`packages/atif-analytics/src/atif_analytics/application/prompts.py:100
 v2 response schemas they bind against are pure domain models whose field descriptions are themselves
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). This is
 the one member permitted to import a sibling — atif-models and nothing else
-(`pyproject.toml:422`).
+(`pyproject.toml:520`).
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py` (1021 LOC) — the task-framing
   system prompts, public constants assembled at
@@ -62,7 +62,7 @@ macros register separately, each only when its backing parquet is populated, bec
 `atif-sql analyze` run is the default state
 (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`). It is the one member with
 `domain/` and `infrastructure/` but no `application/`, a deliberate shape that is why it carries no
-layers contract among the seven (`pyproject.toml:364`).
+layers contract among the seven (`pyproject.toml:462`).
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py` (1294 LOC) — the raw readers, the 16
   core views, the 9 macros, and the Lance attach path
@@ -89,12 +89,12 @@ layers contract among the seven (`pyproject.toml:364`).
 ## atif-cli
 
 The composition root: it declares five siblings as `==`-pinned dependencies
-(`packages/atif-cli/pyproject.toml:33`) and wires every cross-package seam — the `ConverterPort`
+(`packages/atif-cli/pyproject.toml:32`) and wires every cross-package seam — the `ConverterPort`
 adapter, the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:5`).
 Ten commands hang off one cyclopts `App`: nine `@app.command` functions from `convert`
 (`packages/atif-cli/src/atif_cli/app.py:226`) to `schema` (`:1055`), plus the `cron` sub-app
 registered at `:65`, with `main` (`:1093`) exposed as the single console script named `atif-sql`
-(`packages/atif-cli/pyproject.toml:43`). Heavy imports — duckdb, harbor through atif-converter,
+(`packages/atif-cli/pyproject.toml:42`). Heavy imports — duckdb, harbor through atif-converter,
 pydantic through atif-corpus — are deferred into the command bodies that use them so `schema`,
 `--help`, and `--version` stay on a lean import graph that a fresh-interpreter test pins
 (`packages/atif-cli/src/atif_cli/app.py:22`). Failures resolve to stable exit codes, 64 for parse, 65
@@ -252,7 +252,7 @@ fails instead of yielding mutually inconsistent artifacts
 A deliberately narrow seam: a system prompt, a user prompt, and a pydantic schema in; a validated
 instance of that schema out (`packages/atif-models/src/atif_models/domain/ports.py:116`). Its only
 in-repo consumer is atif-analytics — the single edge the `forbidden` contract leaves open
-(`pyproject.toml:422`) — and the registry is the only place in the workspace where a Bedrock model id
+(`pyproject.toml:520`) — and the registry is the only place in the workspace where a Bedrock model id
 is written down, so a pipeline names a family and a size alias and lets `resolve` pick the id
 (`packages/atif-models/src/atif_models/domain/registry.py:6`, `:109`). The default adapter posts an
 OpenAI chat-completions body to `invoke_model` in strict `json_schema` mode, dispatching the blocking

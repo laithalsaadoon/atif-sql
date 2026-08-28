@@ -17,7 +17,11 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.11.0",
-    "boto3>=1.40.0",
+    # Same floor as atif-embed, which reaches the same Bedrock runtime. Two
+    # floors for one client meant the union a single distribution declares had
+    # to pick one, and the looser floor would have been a resolution nothing in
+    # the workspace tests.
+    "boto3>=1.42.91",
     "loguru>=0.7.3",
     "pydantic>=2.13.2",
     "pydantic-settings>=2.13.1",

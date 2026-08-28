@@ -24,8 +24,8 @@ depend on one of them, and nothing in this repository supports doing so.
 So there is one version number, and every member moves with it. There is no per-package
 changelog and no independent version history, because there is no independently consumed
 package to have one. `[tool.commitizen] version` in the root `pyproject.toml` is the single
-source of truth, and its `version_files` list rewrites the seven member manifests plus the
-intra-workspace pins from that one value.
+source of truth, and its `version_files` list rewrites the published `[project] version`, the
+seven member manifests, and the dev pins between them from that one value.
 
 ## The release tool is commitizen, not release-please
 
@@ -39,10 +39,10 @@ implementation that accepted the commit is the whole argument:
 - **The bump is reproducible on a laptop.** `uv run cz bump --dry-run` computes exactly what
   CI computes, from the locked commitizen in `uv.lock`. A GitHub Action's release logic cannot
   be run locally at all, so its answer can only be observed after it has been committed.
-- **`version_files` rewrites arbitrary text in arbitrary files**, which is precisely what the
-  intra-workspace pin matrix needs: the same bump moves `version = "0.2.0"` in seven manifests
-  and `"atif-duck==0.2.0"` in the two that carry pins. Keeping those in step by hand is the
-  failure this repository is most likely to ship (see the next section).
+- **`version_files` rewrites arbitrary text in arbitrary files**, which is what a version living
+  in ten places needs: one bump moves the published `[project] version`, `version = "0.2.0"` in
+  seven member manifests, and `"atif-duck==0.2.0"` in the two that carry dev pins. Keeping those
+  in step by hand is the failure this repository is most likely to ship.
 - **No new dependency.** commitizen is already in `[dependency-groups] dev`.
 
 What release-please would add is a bot-authored release PR as a review surface. That surface
@@ -52,18 +52,28 @@ gate had seen. `release.yml` gets the same review value by running `mise run che
 it is about to tag, and the human decision points live where they matter — dispatching the
 workflow, publishing the draft release, and approving the `pypi` environment.
 
-## What actually gets published, and why it is seven distributions
+## What actually gets published: one distribution
 
-**Seven distributions go to PyPI. Exactly one of them is documented as installable.**
-`atif-sql` is the CLI; `atif-analytics`, `atif-converter`, `atif-corpus`, `atif-duck`,
-`atif-embed`, and `atif-models` are its dependencies and are implementation detail. A user
-runs one install command and gets every capability.
+**One distribution goes to PyPI.** `atif-sql` is a single wheel carrying all seven module
+trees — `atif_cli`, `atif_analytics`, `atif_converter`, `atif_corpus`, `atif_duck`,
+`atif_embed`, `atif_models` — so `uvx atif-sql` claims one name, needs one Trusted Publisher,
+and resolves no sibling from an index. The packages under `packages/*` stay workspace members
+for development: that is what keeps the layer and independence contracts enforceable and each
+package's tests where they belong. Only the publishing shape is singular.
 
-A single fat wheel would be better — one PyPI name to claim, one Trusted Publisher to
-configure, and the intra-workspace pin problem below would not exist at all. **uv's build
-backend cannot produce one from this source layout.** Probed 2026-08-28 against
-`uv_build>=0.11.14,<0.12` (the range every member's `[build-system]` pins), driven through
-`uv build --force-pep517`:
+The published requirement list is the **union** of every member's third-party requirements,
+declared once in the root `[project.dependencies]`. Nothing derives it at build time, so
+`packages/atif-cli/tests/test_distribution.py` asserts it: the union equals the declaration
+exactly, no `atif-*` requirement reaches the metadata, every module tree appears in
+`[tool.hatch.build.targets.wheel] packages` with a `py.typed` beside it, and no two members
+declare the same package under different constraints. Each of those five assertions was
+verified to fail against the defect it names.
+
+### Why hatchling and not uv_build
+
+uv_build resolves every module under a single `module-root` (default `src`), and these seven
+live under `packages/*/src/`. Probed 2026-08-28 against `uv_build>=0.11.14,<0.13`, driven
+through `uv build --force-pep517`:
 
 | Attempt | Result |
 | --- | --- |
@@ -72,15 +82,12 @@ backend cannot produce one from this source layout.** Probed 2026-08-28 against
 | `module-name = ["packages.atif-cli.src.atif_cli"]` (the documented dotted form) | Builds, and the wheel is broken: the module lands at `site-packages/packages/atif-cli/src/atif_cli/`, so `import atif_cli` fails. It fails silently, which is worse than the error above. |
 | `[tool.uv.build-backend.data] purelib = "packages/atif-duck/src"` | Gathers **one** sibling tree into `<dist>.data/purelib/`, which installers unpack into site-packages. A list is rejected: `invalid type: sequence, expected path string`. One directory cannot cover six. |
 
-There is a working one-wheel path — hatchling at the repository root, with
-`[tool.hatch.build.targets.wheel] packages = [<the seven src trees>]`, probed and confirmed to
-emit a single importable `atif_sql` wheel with the console script and no source movement. It is
-not adopted, and the cost is why: the root would gain a `[project]` table (it is a *virtual*
-workspace root), the published distribution would have to declare the **union** of every
-member's third-party requirements in one hand-maintained list, and that list would be a new
-drift surface with no test behind it. Trading a pin matrix that `cz bump` rewrites
-automatically for a dependency union that nothing verifies is not an improvement. Revisit it
-only with a test that asserts the union equals the members' requirements.
+hatchling's `[tool.hatch.build.targets.wheel] packages` takes a path per module, so one wheel
+spans all seven trees with **no source movement** — which is what keeps `[tool.ruff] src`,
+`[tool.ty]`, `[tool.pyright]`, `[tool.coverage.run]`, `[tool.bandit]`, the import-linter
+contracts, and every doc citation valid. Verified 2026-08-28: the wheel carries 100 `.py`
+files, all seven top-level modules, the `atif-sql` console script, and 19 `Requires-Dist`
+entries with no `atif-*` among them.
 
 ## What the publish preflight asserts
 
@@ -97,31 +104,35 @@ distribution name and a module name are independent by design, and renaming the 
 touch `[tool.ruff] src`, `[tool.ty]`, `[tool.pyright]`, `[tool.coverage.run]`, `[tool.bandit]`,
 and the import-linter contracts for no gain.
 
-**2. Every intra-workspace requirement is pinned `==`.** `[tool.uv.sources] <pkg> = { workspace
-= true }` is a **local** source that no PyPI installer sees, and uv's build backend does not
-translate it into a version constraint — a bare name in `[project.dependencies]` becomes a bare
-`Requires-Dist` in the wheel. Three consequences, in the order a project meets them:
+**2. The wheel carries every module, and requires no sibling.** Seven module trees reach PyPI
+inside one file, so the two ways that goes wrong are a tree missing from
+`[tool.hatch.build.targets.wheel] packages` and a requirement on an unpublished sibling. Both
+install cleanly and fail on the user's machine:
 
-- **Before a first publish the install fails outright.** Measured against real PyPI on
-  2026-08-28, a wheel carrying bare names gave: `Because atif-analytics was not found in the
-  package registry and atif-cli==0.1.0 depends on atif-analytics, we can conclude that
-  atif-cli==0.1.0 cannot be used.`
-- **After a first publish it resolves the wrong thing.** A bare name binds to the newest release
-  of that name regardless of which version of `atif-sql` asked for it, so `atif-sql==0.2.0` with
-  `atif-duck==0.9.0` becomes a supported resolution that no test and no lockfile has exercised.
-  One version moves the whole workspace, which is what makes `==` the honest constraint.
-- **It is a namespace question, not only a resolution question.** A bare name is resolved from
-  the global PyPI namespace by whoever owns it. All seven names were unclaimed on PyPI and
-  TestPyPI when probed on 2026-08-28, and six of them are internal module boundaries nobody
-  would think to squat — which is exactly why the pin belongs in place before the first release
-  rather than after.
+- **A missing tree is invisible to every other gate.** Development puts all seven modules on
+  `sys.path` whether or not the wheel would carry them, so tests, type checkers, and
+  import-linter all pass on a manifest that would ship six. The preflight reads the archive
+  itself and asserts each of the seven top-level modules is inside it, with its `py.typed`
+  beside it — a marker whose absence hides a package's annotations from consumers under PEP 561,
+  which is how `atif_embed` shipped `Typing :: Typed` and no marker.
+- **A sibling requirement resolves from a namespace this project does not own.** `[tool.uv.sources]
+  <pkg> = { workspace = true }` is a **local** source no PyPI installer sees, so a member listed
+  in `[project.dependencies]` becomes a real `Requires-Dist` naming a project that was never
+  published. Measured against real PyPI on 2026-08-28, that gave: `Because atif-analytics was not
+  found in the package registry and atif-cli==0.1.0 depends on atif-analytics, we can conclude
+  that atif-cli==0.1.0 cannot be used.` After a first publish it would be worse than an error —
+  a bare name binds to whatever the newest release under that name happens to be, owned by
+  whoever registered it.
 
-`[tool.commitizen] version_files` rewrites all six pins on every bump; see below.
+`packages/atif-cli/tests/test_distribution.py` pins the manifest side of both in `mise run
+check`; the preflight pins the artifact side, because a manifest that is right and a wheel that
+is wrong are different failures.
 
-**3. `[tool.commitizen]` carries the version wiring.** The workspace root is virtual and has no
-`[project]` table, so commitizen's `version_provider = "commitizen"` reads `version` out of
-`[tool.commitizen]` itself. `release.yml` asserts the key exists, because without it `cz bump`
-has nothing to read and silently has nothing to do.
+**3. `[tool.commitizen]` carries the version wiring.** commitizen's `version_provider` defaults
+to reading `version` out of `[tool.commitizen]` itself, which stays the source of truth; the
+root's `[project] version` is what a wheel carries and moves through `version_files`. Both hold
+one string. `release.yml` asserts the commitizen key exists, because without it `cz bump` has
+nothing to read and silently has nothing to do.
 
 **4. The CLI reports the distribution's version.** cyclopts resolves a default `--version` by
 looking the calling module's name up in the installed metadata. The module is `atif_cli` and the
@@ -148,14 +159,25 @@ governs. Two properties of `[tool.commitizen]` are worth knowing before editing 
   pin.
 
 Verify the wiring without committing anything — `--version-files-only` rewrites the files and
-stops, so `git diff` shows exactly which lines the next real bump moves. Expect 14 changed lines
-across 8 files: the `[tool.commitizen] version` key, seven `version =` lines, and the six
-intra-workspace pins.
+stops, so `git diff` shows exactly which lines the next real bump moves. Measured 2026-08-28:
+15 changed lines across 8 files — the `[tool.commitizen] version` key, the published
+`[project] version`, seven member `version =` lines, and the six dev pins.
+
+`--version-files-only` does more than rewrite those files, and undoing it needs all three steps.
+Measured 2026-08-28: `pre_bump_hooks` re-resolves `uv.lock` at the new version and **stages** it,
+and `update_changelog_on_bump` writes `CHANGELOG.md`. So commit first — a dirty tree here is
+work a restore will take with it — and clean up deliberately rather than with `git restore -p`,
+which is interactive and silently does nothing if you answer `n`.
 
 ```bash
+git status --short                      # must be empty; commit anything here FIRST
 uv run cz bump --version-files-only --check-consistency --yes
-git diff --stat
-git restore -p .   # -p, so a concurrent edit in one of these files is not swept away
+git diff --stat                          # expect 15 lines across 8 files
+
+git checkout -- .                        # the version rewrites
+git restore --staged --worktree uv.lock  # the staged re-lock
+rm -f CHANGELOG.md                       # written even in this mode
+git status --short                       # must be empty again
 ```
 
 ### The lockfile moves with the distribution name
@@ -222,7 +244,7 @@ change the shape of a release.
    ```
 4. **Review the draft and press "Publish release".** That press is what starts `publish.yml` —
    see below for why it has to be a human and not the workflow.
-5. **Approve the `pypi` environment.** `publish.yml` builds all fourteen artifacts, verifies
+5. **Approve the `pypi` environment.** `publish.yml` builds the sdist and the wheel, verifies
    them, installs them, and then waits. A reviewer approves once and all seven upload legs
    proceed.
 
@@ -239,28 +261,25 @@ exist. It also separates two decisions that deserve separating: "these are the r
 is reversible; "these bytes are on PyPI" is not, because a version can be yanked but never
 replaced or reused.
 
-## First publish: seven pending publishers, no manual upload
+## First publish: one pending publisher, no manual upload
 
 Unlike npm, PyPI can bootstrap a project that does not exist. A **pending publisher** is
 registered before the project, and the first successful publish creates the project and
 converts the pending publisher into a normal one with nothing further to configure.
 
 At <https://pypi.org/manage/account/publishing/> — the **account** page, not a project page,
-because the projects do not exist yet — add a GitHub pending publisher for each of:
-
-```
-atif-sql   atif-analytics   atif-converter   atif-corpus
-atif-duck  atif-embed       atif-models
-```
-
-with identical values on all seven:
+because the project does not exist yet — add one GitHub pending publisher:
 
 | Field | Value |
 | --- | --- |
+| PyPI project name | `atif-sql` |
 | Owner | `theagenticguy` |
 | Repository name | `atif-sql` |
 | Workflow name | `publish.yml` |
 | Environment name | `pypi` |
+
+One, because one distribution. The six module boundaries under `packages/*` are not published
+and need no registration.
 
 Two properties of that form decide whether the first release works:
 
@@ -268,18 +287,16 @@ Two properties of that form decide whether the first release works:
   publish to the reviewer-gated environment. Omitted, any workflow run in this repository
   could publish — and PyPI emails the project owners to point that out.
 - **A pending publisher does not reserve the name.** It stays valid only until somebody else
-  registers that project, at which point it is silently invalidated.
+  registers that project, at which point it is silently invalidated. `atif-sql` was unclaimed on
+  PyPI and TestPyPI when probed on 2026-08-28.
 
-`publish.yml` publishes with **one matrix leg per project**, and the first release is the
-reason. PyPI mints one macaroon per OIDC exchange, carrying a `ProjectID` caveat listing the
-projects attached to the matched publisher, and warehouse reifies at most **one** pending
-publisher per exchange (read 2026-08-28 in `warehouse/oidc/views.py`). A single upload of all
-fourteen files would therefore create one project and take 403s for the other six. A leg per
-project means a mint per project, each reifying its own pending publisher, and the first
-release completes in one run. After that a single mint would cover all seven; the matrix stays
-because it also scopes each token to one project and names the failing project in a failure.
+`publish.yml` has a single publish job, and the count matters for a reason worth keeping: PyPI
+mints one macaroon per OIDC exchange, carrying a `ProjectID` caveat listing the projects
+attached to the matched publisher, and warehouse reifies at most **one** pending publisher per
+exchange (read 2026-08-28 in `warehouse/oidc/views.py`). A repository publishing N projects
+therefore needs N exchanges on its first release. N is 1 here.
 
-Until the pending publishers exist, `publish.yml` fails with a 403 and a PyPI response naming
+Until the pending publisher exists, `publish.yml` fails with a 403 and a PyPI response naming
 the publisher it could not find. That pair on a first release means "the bootstrap has not
 happened yet", not "the workflow is wrong". The same pair afterwards means the publisher does
 not match — check the workflow filename, the environment name, and the repository owner's
@@ -287,7 +304,7 @@ case.
 
 ## No TestPyPI rehearsal
 
-A TestPyPI pass would double the trusted-publisher surface to fourteen registrations, for a
+A TestPyPI pass would double the trusted-publisher surface, for a
 rehearsal that cannot rehearse the thing that matters.
 
 - What it would catch — invalid metadata, a malformed sdist or wheel — `publish.yml` already
@@ -307,7 +324,7 @@ the fat-wheel restructure above. Neither is on the table.
 
 | Setting | Where | Why |
 | --- | --- | --- |
-| Environment `pypi` with **required reviewers** | Settings → Environments | The gate on the irreversible step. Without reviewers the environment exists, the OIDC claim matches, and the gate is decorative. Its name must match the `Environment name` on all seven trusted publishers. |
+| Environment `pypi` with **required reviewers** | Settings → Environments | The gate on the irreversible step. Without reviewers the environment exists, the OIDC claim matches, and the gate is decorative. Its name must match the `Environment name` on the trusted publisher. |
 | **Private vulnerability reporting** enabled | Settings → Advanced Security | `SECURITY.md` and `.github/ISSUE_TEMPLATE/config.yml` both route reports to `/security/advisories/new`, which 404s while this is off. |
 | **Require review from Code Owners** on `main` | Branch protection or ruleset | `.github/CODEOWNERS` only *requests* review until this is on; with it off the file is a notification list. |
 | `default_workflow_permissions` = `read` | Settings → Actions | Every workflow here declares its own per-job permissions, so the default needs no write. |

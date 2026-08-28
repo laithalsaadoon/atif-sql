@@ -11,9 +11,9 @@ citation on this page carries its full path, so no reference resolves through a 
 antecedent.
 
 1. **The suppression config, read as the debt register someone already wrote.** `select =
-   ["ALL"]` with exactly 12 ignores (`pyproject.toml:62-93`), four pyright rules switched
-   off (`pyproject.toml:570-581`), ty at `all = "error"` with no rule disabled
-   (`pyproject.toml:279-280`), and per-site
+   ["ALL"]` with exactly 12 ignores (`pyproject.toml:153-184`), four pyright rules switched
+   off (`pyproject.toml:668-679`), ty at `all = "error"` with no rule disabled
+   (`pyproject.toml:370-371`), and per-site
    `# noqa` / `# pyright: ignore` counts taken by grep. Almost every config entry carries
    its own measured count and its cost-of-removal analysis inline, which is a better debt
    record than a comment marker and is quoted here rather than re-derived.
@@ -41,21 +41,21 @@ rises.
 | --- | --- | --- | --- | --- |
 | 1 | The entire Claude Code → ATIF conversion path runs through one PRIVATE upstream method, `ClaudeCode._convert_events_to_trajectory`, verified against harbor 0.22.0 only — so the manifest carries a minor-version ceiling and the unit tests are the drift alarm. Nothing upstream promises the method exists in 0.23. | `version pin` | L | `packages/atif-converter/pyproject.toml:19-23` |
 | 2 | Seven upstream conversion losses are catalogued as `FidelityGap` enum members rather than fixed. Gap 3 flattens the `parentUuid` tree by timestamp sort, losing branch and rewind structure; gap 7 drops the event `uuid`, making step-to-raw-record identity unrecoverable from the trajectory — recovered out of band through a parallel `edges.jsonl` sidecar the corpus layout mandates. | `wrong abstraction` | L | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79`, `docs/CONTRACT.md:26-28` |
-| 3 | 63 of the 113 runtime distributions reach this project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`, `aiohttp` — for exactly one private method call. A CLI that converts JSONL ships a web server and a database client. 57% of the roster, 155 MiB. | `version pin` | L | `RELEASING.md:193-200` |
-| 4 | 415 pyright findings sit behind three disabled Unknown-propagation rules, and the config names the fix it has not built: a `TypedDict` model of the `~/.claude` JSONL record and the ATIF trajectory would close 144 of them. Until that model exists, every JSON-shaped value in the hottest modules is `dict[str, Any]` narrowed by `isinstance`, with the type checker's opinion switched off. The two heaviest concentrations are the converter's enrichment module at 59 findings and the analytics corpus reader at 33. | `wrong abstraction` | L | `pyproject.toml:543-573` |
-| 5 | 15 SQL statements are built by string interpolation through a hand-rolled quote-doubling escape, because DuckDB rejects prepared parameters as table-function arguments. ruff's `# noqa: S608` silences ruff only — bandit reports the same 15 as B608 and those findings upload to code scanning, so the suppression is not portable across the two scanners that both implement the rule. | `deprecated pattern` | L | `pyproject.toml:639-641`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:172`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:108` |
+| 3 | 63 of the 113 runtime distributions reach this project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`, `aiohttp` — for exactly one private method call. A CLI that converts JSONL ships a web server and a database client. 57% of the roster, 155 MiB. | `version pin` | L | `RELEASING.md:215-222` |
+| 4 | 415 pyright findings sit behind three disabled Unknown-propagation rules, and the config names the fix it has not built: a `TypedDict` model of the `~/.claude` JSONL record and the ATIF trajectory would close 144 of them. Until that model exists, every JSON-shaped value in the hottest modules is `dict[str, Any]` narrowed by `isinstance`, with the type checker's opinion switched off. The two heaviest concentrations are the converter's enrichment module at 59 findings and the analytics corpus reader at 33. | `wrong abstraction` | L | `pyproject.toml:641-671` |
+| 5 | 15 SQL statements are built by string interpolation through a hand-rolled quote-doubling escape, because DuckDB rejects prepared parameters as table-function arguments. ruff's `# noqa: S608` silences ruff only — bandit reports the same 15 as B608 and those findings upload to code scanning, so the suppression is not portable across the two scanners that both implement the rule. | `deprecated pattern` | L | `pyproject.toml:737-739`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:172`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:108` |
 | 6 | No test reads a real `~/.claude` corpus. The whole integration tier is two tests over two synthetic 4-event sessions, and parity oracles against the predecessor implementation are explicitly not part of this repo. The seven fidelity gaps are policy about real-world JSONL shapes that nothing real-world exercises. | `missing tests` | L | `packages/atif-cli/tests/test_integration.py:3-9`, `packages/atif-cli/tests/test_integration.py:24-34`, `AGENTS.md:92-94` |
-| 7 | `hdbscan 0.8.44` has never published an aarch64 wheel, so a first install on Graviton, an ARM CI runner, or a `linux/arm64` container compiles five Cython extensions and needs a C toolchain. musl is not merely slow but impossible: `lancedb 0.37.1` publishes no sdist at all, so there is nothing to build from. | `version pin` | L | `RELEASING.md:181-191` |
-| 8 | The four size ratchets and the complexity ratchet are set at the measured worst function in the tree — `max-statements = 119` for `_friction_async`, `max-complexity = 38` for `enrich_trajectory`, `max-args = 19` for the `search` command. The ratchet stops growth and permanently blesses the current outliers; nothing in the config plans their reduction. | `wrong abstraction` | L | `pyproject.toml:167-190`, `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:240`, `packages/atif-converter/src/atif_converter/domain/enrichment.py:198` |
-| 9 | `TC001`/`TC002`/`TC003` are ignored on the strength of a manual probe: moving 58 imports under `TYPE_CHECKING` broke `typing.get_type_hints` on 159 first-party functions and classes. The 182-site `PLC0415` ignore beside it has a regression test proving its property in a fresh interpreter; the `get_type_hints` property has none, so the argument that justifies the ignore is not locked. | `missing tests` | M | `pyproject.toml:79-92`, `packages/atif-cli/tests/test_lean_import.py:35` |
+| 7 | `hdbscan 0.8.44` has never published an aarch64 wheel, so a first install on Graviton, an ARM CI runner, or a `linux/arm64` container compiles five Cython extensions and needs a C toolchain. musl is not merely slow but impossible: `lancedb 0.37.1` publishes no sdist at all, so there is nothing to build from. | `version pin` | L | `RELEASING.md:203-213` |
+| 8 | The four size ratchets and the complexity ratchet are set at the measured worst function in the tree — `max-statements = 119` for `_friction_async`, `max-complexity = 38` for `enrich_trajectory`, `max-args = 19` for the `search` command. The ratchet stops growth and permanently blesses the current outliers; nothing in the config plans their reduction. | `wrong abstraction` | L | `pyproject.toml:258-281`, `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:240`, `packages/atif-converter/src/atif_converter/domain/enrichment.py:198` |
+| 9 | `TC001`/`TC002`/`TC003` are ignored on the strength of a manual probe: moving 58 imports under `TYPE_CHECKING` broke `typing.get_type_hints` on 159 first-party functions and classes. The 182-site `PLC0415` ignore beside it has a regression test proving its property in a fresh interpreter; the `get_type_hints` property has none, so the argument that justifies the ignore is not locked. | `missing tests` | M | `pyproject.toml:170-183`, `packages/atif-cli/tests/test_lean_import.py:35` |
 | 10 | Every one of the nine security scanners has its findings exit code swallowed at eight sites, by a stated contract: findings do not fail the job, only a scanner that produced no usable report does. Gating is delegated entirely to GitHub code-scanning alerts and branch protection, so nothing inside the repo fails on a new vulnerability. | `error handling` | M | `mise.toml:217-223`, `mise.toml:366`, `mise.toml:482` |
 | 11 | The provider/dimension guard exists as two deliberate 83-line twins because the independence contract forbids either package importing the other. The drift pin reads the atif-duck twin as SOURCE TEXT, parses it with `ast`, and asserts substrings — including a raw `source.index("raise EmbeddingProviderMismatch")` that silently changes meaning if the raise site is renamed or a second raise appears. The two docstrings have already diverged; the pin covers the recovery string and the interpolation, not the rule. | `duplicated logic` | M | `packages/atif-embed/tests/test_guard_twin_pin.py:3-13`, `packages/atif-embed/tests/test_guard_twin_pin.py:93-95`, `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:5-16` |
 | 12 | The clustering path is the least-tested code in the tree and it is also the least portable: the structural clustering module at 22% (23 of 30 lines unexecuted), the Lance reader at 31%, the cluster use case at 51% — against an 89.98% whole-tree combined figure. This is exactly the UMAP/HDBSCAN code behind the aarch64 wheel gap. | `missing tests` | M | `packages/atif-analytics/src/atif_analytics/domain/structure/cluster.py:88`, `packages/atif-analytics/src/atif_analytics/infrastructure/lance_reader.py:38-49`, `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py:50` |
 | 13 | Both binding contract documents disclaim describing the code. CONTRACT-V2 states outright that when it disagrees with the code, the code wins and the file is design intent "not a description of current behavior"; CONTRACT v1 calls its own scope section historical. A binding document that pre-emptively surrenders authority cannot be used to detect drift, which is the only thing a contract document is for. *judgment-call* — the disclaimers are honest, and honesty about staleness is still staleness. | `dead code adjacent` | M | `docs/CONTRACT-V2.md:3-8`, `docs/CONTRACT.md:5-8` |
-| 14 | Two version constraints are unexplained or inconsistent across manifests where every other pin in the repo justifies itself: `lancedb>=0.30,<0.38` is declared twice with no comment on either side, and `boto3` is floored at `>=1.42.91` in one member and `>=1.40.0` in another for the same Bedrock client work. | `version pin` | S | `packages/atif-analytics/pyproject.toml:27`, `packages/atif-embed/pyproject.toml:20-22`, `packages/atif-models/pyproject.toml:20` |
+| 14 | One version constraint is unexplained where every other pin in the repo justifies itself: `lancedb>=0.30,<0.38` is declared twice, in two members, with no comment on either side. A single distribution declares one constraint per package, so `test_distribution.py` now fails on two members that disagree — but it cannot ask why a constraint exists, which is what a comment is for. | `version pin` | S | `packages/atif-analytics/pyproject.toml:27`, `packages/atif-embed/pyproject.toml:20-22` |
 | 15 | `FakeConverter` — a scriptable test double — ships inside the installable `atif-corpus` wheel under `infrastructure/`, and it is the converter the end-to-end materialize suite runs against. A fake that both mutates and reads corpus state stands in for the real harbor adapter in exactly the tests that would catch a state-transition bug. | `wrong abstraction` | S | `packages/atif-corpus/src/atif_corpus/infrastructure/fake_converter.py:3-9`, `packages/atif-corpus/tests/test_materialize.py:25` |
 | 16 | Three independently declared `DomainError(Exception)` bases with the same name and no shared ancestor, so a caller composing two members cannot write one `except` clause and any symbol-name search cross-attributes all three. | `duplicated logic` | S | `packages/atif-converter/src/atif_converter/domain/errors.py:14`, `packages/atif-embed/src/atif_embed/domain/errors.py:14`, `packages/atif-models/src/atif_models/domain/ports.py:39` |
-| 17 | The 89% coverage floor is not part of the declared definition of done. `mise run check` depends on nine gates and `test:cov` is not among them, so a local green run can drop coverage below the floor and only the CI job notices. | `missing tests` | S | `mise.toml:197-212`, `pyproject.toml:462`, `.github/workflows/check.yml:78` |
+| 17 | The 89% coverage floor is not part of the declared definition of done. `mise run check` depends on nine gates and `test:cov` is not among them, so a local green run can drop coverage below the floor and only the CI job notices. | `missing tests` | S | `mise.toml:197-212`, `pyproject.toml:560`, `.github/workflows/check.yml:78` |
 
 ## Explicit markers
 
@@ -74,13 +74,13 @@ because the search was narrow.
   lancedb kwarg family at
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:274` and an osv-scanner
   flag at `mise.toml:362`.
-- The closest thing to a marker is `RELEASING.md:193`, which names the harbor dependency
+- The closest thing to a marker is `RELEASING.md:215`, which names the harbor dependency
   subtree "the standing follow-up" in prose — a declined-scope note in the release record
   rather than a comment in code. It is register row 3.
 
-The absence is enforced, not incidental. `select = ["ALL"]` at `pyproject.toml:55` leaves
+The absence is enforced, not incidental. `select = ["ALL"]` at `pyproject.toml:146` leaves
 flake8-fixme and flake8-todos on, and neither appears among the 12 ignores at
-`pyproject.toml:62-93`.
+`pyproject.toml:153-184`.
 Probed 2026-08-28 by dropping one `# TODO: ...` comment into `packages/atif-duck/src/`:
 `ruff check` exits 2 with `TD002` (missing author), `TD003` (missing issue link), and
 `FIX002` (line contains TODO). A marker cannot reach `main` past `mise run lint`, so the
@@ -107,10 +107,10 @@ codebase owes than reading its comments, and none of it appears in any tracker.
 
 Shows up in:
 
-- `pyproject.toml:62-93` — the 12 ignores, each with its site count.
-- `pyproject.toml:543-582` — 415 findings traced to origin, plus the 23-warning stub gap.
-- `pyproject.toml:167-190` — the five ratchets set at the measured worst.
-- `pyproject.toml:279-280` — `[tool.ty.rules] all = "error"` with nothing disabled beneath
+- `pyproject.toml:153-184` — the 12 ignores, each with its site count.
+- `pyproject.toml:641-680` — 415 findings traced to origin, plus the 23-warning stub gap.
+- `pyproject.toml:258-281` — the five ratchets set at the measured worst.
+- `pyproject.toml:370-371` — `[tool.ty.rules] all = "error"` with nothing disabled beneath
   it, which is what the pattern looks like when it holds: a suppression here would need the
   same measured argument every entry above carries.
 
@@ -142,7 +142,7 @@ Shows up in:
 - `packages/atif-converter/pyproject.toml:19-23` — the ceiling and the reason.
 - `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79` — the seven gaps.
 - `docs/CONTRACT.md:26-28` — `edges.jsonl`, the sidecar that exists because of gaps 3 and 7.
-- `RELEASING.md:193-200` — 63 of 113 packages, 155 MiB, for one method.
+- `RELEASING.md:215-222` — 63 of 113 packages, 155 MiB, for one method.
 
 Cost: L — either vendor the conversion the method performs and drop harbor entirely, or get
 a public entry point upstreamed. Both are real projects.
@@ -195,7 +195,7 @@ Shows up in:
 - `mise.toml:366` and `mise.toml:482` — two of the eight swallow sites, one of them
   bandit's, whose 15 B608 findings therefore reach code scanning permanently.
 - `mise.toml:197-212` — the nine gates, without `test:cov`.
-- `pyproject.toml:462` — the floor that only `.github/workflows/check.yml:78` enforces.
+- `pyproject.toml:560` — the floor that only `.github/workflows/check.yml:78` enforces.
 
 Cost: M — splitting each scanner into "run and upload" plus "assert the finding delta
 against a baseline" is mechanical; agreeing on the baseline is the work.
