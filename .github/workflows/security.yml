@@ -56,7 +56,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # `cache: false`, for the same reason publish.yml sets it: a cached tool directory is a
+      # tool nobody verified. mise-action caches `~/.local/share/mise`, and three of these
+      # scanners are pipx-backed Python console scripts (semgrep, pip-audit, pyright) whose
+      # shebang holds an absolute path into a specific interpreter install. A cache that carries
+      # the scanner's directory but not that interpreter makes mise consider the tool installed
+      # and the binary fail to exec — observed 2026-08-28 as
+      # `installs/semgrep/1.172.0/bin/semgrep couldn't exec process: No such file or directory`,
+      # reproducibly, with mise.lock unchanged from a run that passed.
+      #
+      # The SARIF verification in `mise run security` caught it, which is the whole point of
+      # failing on a missing report rather than on findings. Paying a cold install per run is
+      # cheaper than a tier that can report success for a scan that never executed.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: false
       - run: mise run security
         env:
           # zizmor's audits of whether a pinned SHA is still reachable, and whether a pinned
