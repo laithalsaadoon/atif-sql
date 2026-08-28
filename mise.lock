@@ -62,6 +62,18 @@ checksum = "sha256:87b71207a657818adcd1aa65073ad854e516f5dfd91c0a66c333064c7312f
 url = "https://github.com/anchore/grype/releases/download/v0.111.1/grype_0.111.1_darwin_arm64.tar.gz"
 url_api = "https://api.github.com/repos/anchore/grype/releases/assets/402722903"
 
+[[tools.node]]
+version = "24.19.0"
+backend = "core:node"
+
+[tools.node."platforms.linux-x64"]
+checksum = "sha256:f625d97cd707df4ff96254916fbc5ff014f09c09effe5a1e0ca8f6d41a8789d4"
+url = "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.gz"
+
+[tools.node."platforms.macos-arm64"]
+checksum = "sha256:8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+url = "https://nodejs.org/dist/v24.19.0/node-v24.19.0-darwin-arm64.tar.gz"
+
 [[tools.osv-scanner]]
 version = "2.5.0"
 backend = "aqua:google/osv-scanner"
@@ -89,6 +101,22 @@ backend = "pipx:pip-audit"
 [[tools."pipx:pyright"]]
 version = "1.1.411"
 backend = "pipx:pyright"
+
+[[tools.pnpm]]
+version = "11.21.0"
+backend = "aqua:pnpm/pnpm"
+
+[tools.pnpm."platforms.linux-x64"]
+checksum = "sha256:aadc489ce4473c2af0fec06a5c19e113b5793d404eac49853c8153bf4b0d8263"
+url = "https://github.com/pnpm/pnpm/releases/download/v11.21.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/507585503"
+provenance = "github-attestations"
+
+[tools.pnpm."platforms.macos-arm64"]
+checksum = "sha256:860a96978a79ca5132bdc247375f94150a3c98edbecbee36e9f8e0c9e2f7f056"
+url = "https://github.com/pnpm/pnpm/releases/download/v11.21.0/pnpm-darwin-arm64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/507585526"
+provenance = "github-attestations"
 
 [[tools.python]]
 version = "3.13.12"
