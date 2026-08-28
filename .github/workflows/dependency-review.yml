@@ -1,0 +1,72 @@
+# The one dependency scanner that GATES, and the reason it can.
+#
+# security.yml REPORTS: its scanners read the whole locked closure against an advisory
+# database that moves on its own schedule, so a red mark there is as likely to be caused by
+# Tuesday's CVE publication as by the change under review — gating on it would block a
+# docs-only pull request for a dependency nobody touched. This job reads the dependency DIFF
+# between the base ref and the head ref, so a finding is always about something this pull
+# request adds, upgrades, or changes the license of. That is what makes failing correct here
+# and wrong there.
+#
+# Mark this job required in branch protection. It is the enforcement point for two policies
+# the repository states elsewhere but cannot otherwise hold:
+#   - no new HIGH or CRITICAL vulnerable dependency enters the lockfile;
+#   - no strong-copyleft dependency enters an Apache-2.0 distribution.
+#
+# No secret and no cloud credential. The action reads GitHub's dependency graph over the
+# default job token and calls nothing else; the three atif-sql commands that reach Amazon
+# Bedrock are absent from every workflow in this repository.
+name: dependency-review
+on:
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  review:
+    name: dependency diff review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read the dependency graph for the base and head refs
+      # A pull request from a fork gets a read-only job token regardless of what is written
+      # here, and dependency-review-action 5.0.0 degrades a 403 on that write to
+      # `core.warning` (src/comment-pr.ts) rather than failing — so the license and
+      # vulnerability verdict below still gates a fork's pull request, it just reports in the
+      # job summary instead of a comment.
+      pull-requests: write # post the `comment-summary-in-pr` verdict
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          # `high`, not `moderate`: a moderate advisory against a transitive dependency of an
+          # analytics CLI is a thing to triage, not a thing to block a merge on, and a gate
+          # that blocks on triage-grade findings gets routed around. HIGH and CRITICAL are
+          # the two severities this project treats as "stop".
+          fail-on-severity: high
+          # `on-failure`, not `always`: a comment on every green pull request trains reviewers
+          # to skim past the one that is not green.
+          comment-summary-in-pr: on-failure
+          # Strong copyleft cannot enter an Apache-2.0 distribution. LGPL is deliberately
+          # absent (weak copyleft, linkable) and so is MPL-2.0, which
+          # `mise run security:licenses` already allows by name for certifi, pathspec, and
+          # tqdm.
+          #
+          # These are the deprecated short SPDX ids on purpose. Probed 2026-08-28 against
+          # dependency-review-action 5.0.0's own resolver chain (spdx-expression-parse 4.0.0
+          # + @onebeyond/spdx-license-satisfies 1.0.1): all five parse as valid, and
+          # `satisfiesAny` matches the modern forms through them —
+          # `GPL-2.0-only`, `GPL-2.0-or-later`, `GPL-3.0-only`, `GPL-3.0-or-later`,
+          # `AGPL-1.0-only`, `AGPL-1.0-or-later`, `AGPL-3.0-only`, and `AGPL-3.0-or-later`
+          # all return true against this list, while `MIT`, `Apache-2.0`, `LGPL-3.0-only`,
+          # and `MPL-2.0` return false. Listing both the short and the `-only`/`-or-later`
+          # spellings would add no coverage.
+          #
+          # One known false positive from the same probe: a dual-licensed `MIT OR
+          # GPL-3.0-only` dependency matches, because `satisfiesAny` is satisfied by either
+          # arm of the OR. If that lands, add the package to `allow-dependencies-licenses`
+          # with the arm this project takes — do not widen the deny list.
+          deny-licenses: GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0, SSPL-1.0

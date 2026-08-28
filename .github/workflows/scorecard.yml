@@ -1,0 +1,91 @@
+# OpenSSF Scorecard — the supply-chain posture of the repository itself, which no other
+# scanner here measures.
+#
+# Every other workflow reads the code or the dependency closure. Scorecard reads the PROJECT:
+# whether branch protection is on, whether Actions are pinned to a SHA, whether workflow
+# tokens are least-privilege, whether a dependency-update bot exists, whether releases are
+# signed, whether a fuzzing or SAST tool runs at all. Those are properties of the repository
+# configuration, so a green `mise run check` says nothing about them and a consumer deciding
+# whether to depend on this package has no other way to see them.
+#
+# REPORTS rather than gates, like security.yml: a Scorecard check can regress because GitHub
+# changed a default or because the heuristic moved, neither of which is a defect in the commit
+# that happens to be on main at the time. The findings land in the Security tab and the
+# published score is the public signal.
+#
+# `publish_results: true` sends the score to the OpenSSF REST API, which is what makes the
+# score readable by a consumer and a badge renderable. It only works from the default branch,
+# and all three triggers below run there: a push to main is on main, and both
+# `branch_protection_rule` and `schedule` run the default branch's workflow with
+# `github.ref` set to it. No trigger here fires on a pull request, so no fork can reach it.
+#
+# No secret. The default job token is enough for a public repository. Branch-Protection is
+# the one check that reads more than a public token can see and reports "no data" without a
+# fine-grained PAT (`repo_token:`); a PAT is not worth storing for one check's detail when
+# branch protection is verifiable in the settings UI.
+name: scorecard
+on:
+  push:
+    branches: [main]
+  # Scorecard's own Branch-Protection check keys off this event, so the score refreshes when
+  # a protection rule changes rather than waiting for the next push.
+  branch_protection_rule:
+  # Scorecard's Maintained check reads recent activity, so the score decays if nothing ever
+  # re-runs it. Offset from security.yml (31 6) and codeql.yml (47 6) to keep the three off
+  # one runner-queue spike.
+  schedule:
+    - cron: "13 7 * * 2"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  analysis:
+    name: scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # read the workflow files Pinned-Dependencies and Token-Permissions score
+      security-events: write # upload results.sarif to code scanning
+      # `publish_results: true` authenticates to the OpenSSF API with an OIDC token rather
+      # than a stored credential. Without this the publish step fails and the score never
+      # becomes public.
+      id-token: write # mint the OIDC token `publish_results` authenticates with
+    steps:
+      # Scorecard's Pinned-Dependencies and Token-Permissions checks parse the workflow files
+      # off disk, so this is a real checkout and not a formality. `persist-credentials: false`
+      # for the reason it is set in every other workflow here — nothing pushes, and a token
+      # left in .git/config is readable by every later step, which is itself one of the
+      # patterns Scorecard scores.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      # The raw SARIF beside the code scanning alerts. Code scanning keeps the findings but
+      # normalises them; this is the document Scorecard actually emitted, which is what a
+      # score dispute is settled from. Short retention because the next weekly run supersedes
+      # it — unlike the 90-day SBOM in security.yml, nothing answers a CVE question from here.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 7
+
+      # Same codeql-action version as codeql.yml's init/analyze and security.yml's upload —
+      # cdf488f5 (v4.37.9). The sub-actions are unsupported across mixed versions, so moving
+      # one means moving all four.
+      #
+      # `category: scorecard` keeps these alerts in their own analysis set. Without it this
+      # upload and security.yml's would overwrite each other's results for the same ref,
+      # because code scanning keys an analysis on (ref, category).
+      - uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: results.sarif
+          category: scorecard

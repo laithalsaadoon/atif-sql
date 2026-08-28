@@ -1,0 +1,73 @@
+# The docs site: build the machine-readable surface, gate it, deploy it to GitHub Pages.
+#
+# The gate is `mise run docs:gate` — the same task a laptop runs — so nothing here can drift
+# from it. The build is credential-free: it reaches the npm registry at install time and
+# nothing else. No job in this workflow calls Bedrock; `atif-sql analyze`, `embed`, and
+# `search` bill per call and are absent by construction.
+#
+# ATIF_SQL_DOCS_COMMIT pins every citation permalink in the generated tree, each a line anchor
+# into a source file. It is set from the SHA under review rather than left to repo.ts's
+# `git rev-parse HEAD` fallback, which on a pull_request checkout names the ephemeral merge
+# commit that no fork of this repository can resolve.
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and gate the docs site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the tree the site is built from
+    steps:
+      # `persist-credentials: false`: nothing in this job pushes, and a token left in
+      # .git/config is readable by every step that follows.
+      #
+      # `fetch-depth: 0`: site/src/lib/citation-links.ts runs `git ls-tree` at the permalink
+      # commit and FAILS the build on a citation naming a path absent there. Depth 1 carries
+      # the tree for the checked-out SHA only, which suffices while that SHA is the pin — 0
+      # keeps a manually pinned older SHA resolvable too.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - run: mise run docs:install
+
+      - name: gate the site
+        env:
+          ATIF_SQL_DOCS_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: mise run docs:gate
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: site/dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write # publish the artifact
+      id-token: write # the OIDC token the Pages deployment authenticates with
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

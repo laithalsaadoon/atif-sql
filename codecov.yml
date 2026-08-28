@@ -1,0 +1,63 @@
+# Codecov, reading the coverage.xml that `mise run test:cov` writes.
+#
+# The FLOOR is not here. It is `fail_under` in `[tool.coverage.report]` (pyproject.toml), where
+# `mise run test:cov` enforces it on a laptop and in check.yml's coverage job with the same
+# number and no network. Codecov is the delta view on top of that floor: which lines a pull
+# request changed, and which of those the suite reaches. Two numbers in two places measuring
+# one thing is how a floor starts disagreeing with itself, so this file states a RELATIVE
+# policy and defers the absolute one.
+#
+# Measured 2026-08-28 on the 816-test suite: 89.53% (4595/5033 statements, 1132/1364
+# branches), against `fail_under = 89`. That leaves 0.53 percentage points of headroom, which
+# is what sizes `project.threshold` below.
+#
+# The measured SET is also defined once, in `[tool.coverage.run] source` — the seven import
+# packages, with tests and conftest omitted. coverage.xml therefore contains nothing else, so
+# there is no `ignore:` list here to drift out of step with it.
+codecov:
+  # A failed suite produces a partial or absent coverage.xml, and a status computed from one
+  # says the coverage moved when what actually happened is that the tests stopped running.
+  require_ci_to_pass: true
+
+coverage:
+  precision: 2
+  # A floor is a floor: truncate toward the failing side so a displayed 89.00 is never a
+  # rounded-up 88.995.
+  round: down
+  # Colour range only. The low end is the enforced floor, so anything Codecov renders red is
+  # something `mise run test:cov` already refuses.
+  range: "89...95"
+  status:
+    project:
+      default:
+        # `auto` = the base commit's coverage, so this answers "did this pull request make it
+        # worse" rather than re-asserting the absolute number pyproject.toml owns.
+        target: auto
+        # 0.5 percentage points, chosen to be smaller than the 0.53 points of headroom between
+        # the measured 89.53% and the enforced 89% floor. Any regression this tolerates is one
+        # `fail_under` also tolerates, so the two can never disagree about the same commit: a
+        # drop large enough to matter fails the hard floor in check.yml's coverage job, and a
+        # drop below that informs here without blocking a refactor that moves lines around.
+        threshold: 0.5%
+    patch:
+      default:
+        # New code held to the standard the existing code already meets — `auto` reads the base
+        # commit's project coverage as the target rather than a number someone picked.
+        target: auto
+        # Wider than the project threshold on purpose: a patch is a small denominator, so one
+        # unreachable error branch in a twelve-line diff swings the percentage far harder than
+        # the same branch swings the project. 5 points absorbs that without absorbing an
+        # untested feature.
+        threshold: 5%
+
+comment:
+  layout: "condensed_header, diff, files"
+  behavior: default
+  # No comment on a pull request that changed no covered line. A bot comment that says nothing
+  # is a bot comment reviewers learn to collapse.
+  require_changes: true
+
+github_checks:
+  # Inline annotations on the uncovered lines of the diff, which is the only place the
+  # information is cheaper to act on than to look up.
+  annotations: true

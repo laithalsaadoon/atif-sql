@@ -1,0 +1,40 @@
+[project]
+name = "atif-duck"
+version = "0.1.0"
+description = "DuckDB views and macros over the materialized ATIF corpus."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Laith Al-Saadoon" }]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = [
+    "duckdb>=1.5.2,<2",
+    "loguru>=0.7.3",
+    # DuckDB's Python client imports pytz to materialize TIMESTAMPTZ values
+    # (the analytics views carry tz-aware ts/classified_at/detected_at
+    # columns); without it every fetch of those columns raises.
+    "pytz>=2024.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/theagenticguy/atif-sql"
+Repository = "https://github.com/theagenticguy/atif-sql"
+Issues = "https://github.com/theagenticguy/atif-sql/issues"
+Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atif_duck"
+namespace = true

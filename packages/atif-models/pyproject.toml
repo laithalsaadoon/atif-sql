@@ -1,0 +1,39 @@
+[project]
+name = "atif-models"
+version = "0.1.0"
+description = "Model alias registry + structured-output LLM client for atif-sql (CONTRACT-V2: no other package hardcodes a model id)."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Laith Al-Saadoon" }]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = [
+    "anyio>=4.11.0",
+    "boto3>=1.40.0",
+    "loguru>=0.7.3",
+    "pydantic>=2.13.2",
+    "pydantic-settings>=2.13.1",
+    "tenacity>=9.1.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/theagenticguy/atif-sql"
+Repository = "https://github.com/theagenticguy/atif-sql"
+Issues = "https://github.com/theagenticguy/atif-sql/issues"
+Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atif_models"
+namespace = true

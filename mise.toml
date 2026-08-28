@@ -1,0 +1,672 @@
+# mise-en-place configuration for the atif-sql workspace.
+#
+# mise is the stable command surface for humans, agents, and CI. `mise run check` is the
+# definition of done, and CI runs that same task against the binaries mise.lock pins — one
+# toolchain declaration, one command definition, so nothing in a workflow can drift from
+# what a laptop runs.
+#
+# Python 3.13, not 3.14: harbor==0.22.0 floors at Requires-Python >=3.12 (probed 2026-08-22
+# via `uv pip show` on a fresh install), and 3.13 is the safety pick while the harbor
+# dependency chain (litellm, supabase, ...) settles on 3.14.
+#
+# No task here reaches Bedrock. `atif-sql analyze`, `atif-sql embed`, and `atif-sql search`
+# spend real money per call, so they are absent from every gate, every hook, and every
+# workflow: a credential-free gate cannot bill anyone, and a gate that can bill someone
+# will.
+
+# Verified against mise 2026.8.1: `[settings] lockfile_platforms` and `mise lock --bump`
+# both behave as documented there.
+min_version = "2026.8.1"
+
+[settings]
+python.uv_venv_auto = "create|source"
+# mise.lock pins each tool's concrete version, checksum, and download URL, so a `latest`
+# below is not "whatever today brings" — a clone resolves what the lock says, and moving a
+# scanner is a reviewable diff rather than a silent change between two runs. Both platforms
+# are locked because CI is linux-x64 and the maintainer's laptop is macos-arm64; a lock
+# missing a platform sends that platform back to resolving `latest` live.
+lockfile = true
+lockfile_platforms = ["linux-x64", "macos-arm64"]
+
+[tools]
+python = "3.13"
+uv = "latest"
+# --- scanners ---------------------------------------------------------------
+# lefthook is deliberately NOT here: it is already a pinned entry in
+# `[dependency-groups] dev` and therefore hash-pinned in uv.lock, which is the same
+# reproducibility property mise.lock provides. Declaring it in both would create exactly
+# the version skew a pin exists to prevent, and `uv run lefthook` bootstraps from a bare
+# clone because `uv run` syncs the project first. `mise run hooks:install` is the entry
+# point either way. Moving it to mise means first removing it from `[dependency-groups]`.
+"aqua:betterleaks/betterleaks" = "latest"  # secret scanner: staged diff (hook) + git history (CI)
+osv-scanner = "latest"                     # vulnerability + license scan over uv.lock
+semgrep = "latest"                         # SAST: cross-file taint analysis ruff cannot do
+syft = "latest"                            # SBOM generator (CycloneDX + SPDX); grype scans its output
+grype = "latest"                           # vulnerability scan over the syft SBOM
+trivy = "latest"                           # filesystem vuln + misconfig + license scan
+"aqua:zizmorcore/zizmor" = "latest"        # GitHub Actions workflow SAST (security)
+"aqua:rhysd/actionlint" = "latest"         # GitHub Actions workflow correctness (syntax, expressions)
+# actionlint shells out to shellcheck for every `run:` block and SILENTLY skips that half
+# of its analysis when the binary is absent, so the pin is what makes `lint:workflows` mean
+# the same thing on every machine.
+shellcheck = "latest"
+# PyPI-ecosystem scanners, reached through mise's pipx backend so mise.lock records the
+# resolved version like every other tool. bandit is the exception and says why at
+# `security:bandit`.
+"pipx:pip-audit" = "latest"                # PyPA's own auditor over the exported lockfile
+"pipx:pyright" = "latest"                  # second type checker, strict; see typecheck:pyright
+# --- docs site (site/) ------------------------------------------------------
+# pnpm is declared ABOVE node deliberately. mise prepends each tool's directory to PATH in
+# declaration order, and node's own bin holds a `pnpm` shim wherever `corepack enable` has
+# run — so with node first, every pnpm call goes through corepack and this pin is inert.
+# This version and `packageManager` in site/package.json must agree.
+pnpm = "11.21.0"
+node = "24"
+
+[env]
+PYTHONDONTWRITEBYTECODE = "1"
+UV_LINK_MODE = "copy"
+
+# ---------------------------------------------------------------------------
+# Install / sync
+# ---------------------------------------------------------------------------
+
+[tasks.install]
+description = "Install every workspace member (editable) + dev deps + git hooks"
+depends = ["hooks:install"]
+run = "uv sync --all-packages"
+
+[tasks."install:ci"]
+description = "Reproducible install for CI — fails on lockfile drift, installs no hooks"
+# `--locked` refuses to update uv.lock, so a stale lock fails here rather than being
+# silently repaired into a build nobody can reproduce. No hooks: a runner has no committer.
+run = "uv sync --locked --all-packages"
+
+[tasks.upgrade]
+description = "Upgrade every dependency to the latest compatible version"
+run = "uv lock --upgrade && uv sync --all-packages"
+
+[tasks."lock:check"]
+description = "CI freshness gate: fail if uv.lock is stale"
+run = "uv lock --check"
+
+[tasks."tools:bump"]
+description = "Re-resolve every `latest` tool in mise.lock, leaving mise.toml alone"
+# Review the mise.lock diff — it is the record of which binaries this repo now runs. It
+# does NOT move the two `==` pins in `security:bandit`, which mise cannot own.
+run = "mise lock --bump"
+
+# ---------------------------------------------------------------------------
+# Git hooks (lefthook)
+# ---------------------------------------------------------------------------
+
+[tasks."hooks:install"]
+description = "Install lefthook git hooks (pre-commit + commit-msg + pre-push)"
+run = "uv run lefthook install"
+
+[tasks."hooks:uninstall"]
+description = "Uninstall lefthook git hooks"
+run = "uv run lefthook uninstall"
+
+# ---------------------------------------------------------------------------
+# Quality gates (run in parallel inside `mise run check`)
+# `sources = [...]` makes each task skip when the tree hasn't moved by mtime.
+#
+# Every list carries `packages/*/pyproject.toml` as well as the root one. A member manifest
+# decides a dependency, a `==` pin, and the import-linter contracts, so a change there can
+# turn a gate red with no `.py` touched — and an oracle that cannot see the file serves a
+# cached PASS for a tree that no longer earns it. A skipped gate prints
+# `sources up-to-date, skipping` and exits 0, which reads identically to work that ran.
+# ---------------------------------------------------------------------------
+
+[tasks.lint]
+description = "Lint with ruff"
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+run = "uv run ruff check ."
+
+[tasks.fmt]
+description = "Check formatting"
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+run = "uv run ruff format --check ."
+
+[tasks."fmt:write"]
+description = "Apply formatting"
+run = "uv run ruff format ."
+
+[tasks.typecheck]
+description = "Type-check with ty (strict, over every member's src/ + tests/ + scripts/)"
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+run = "uv run ty check"
+
+[tasks."typecheck:pyright"]
+description = "Second type checker: pyright in strict mode over the same trees ty reads"
+# Gate 4 of 9 in `check`. ty is pre-1.0 (0.0.x), so a rule it has not yet implemented is a
+# hole no strictness setting of its own can close — pyright strict is the independent read on
+# that hole, and the overlap is the point rather than the waste.
+#
+# Enforced at ZERO errors and zero warnings. Every strict rule is on except four, and
+# `[tool.pyright]` in pyproject.toml records the measurement behind each exclusion:
+# reportUnknown{Member,Variable,Argument}Type and reportMissingTypeStubs. Those four are off
+# because their findings originate in distributions that ship no type information (pyarrow,
+# boto3, botocore, scipy, sklearn, hdbscan, umap, graspologic_native) or at an
+# `isinstance` narrowing of an explicit `Any` read out of a decoded JSON document — never in a
+# missing or wrong first-party annotation. reportUnknownParameterType was 92% first-party, so
+# it stays ON.
+#
+# Two things move this count without a code change, and neither is an improvement:
+#   the VENV — an unresolved import degrades to Unknown and multiplies downstream, so a venv
+#   holding packages absent from uv.lock reads differently from the locked truth. Re-measure
+#   with `pyright --outputjson` after `uv sync --locked --all-packages`.
+#   `[tool.pyright]` in pyproject.toml — deleting that table does not loosen a rule visibly, it
+#   drops `typeCheckingMode = "strict"` to pyright's `standard` default and turns the whole
+#   reportUnknown* family off. A count that stays at zero after the table goes missing is not
+#   evidence of anything; re-measure the table's presence, not the number.
+run = "pyright"
+
+[tasks."lint:imports"]
+description = "Enforce layer DAGs + converter/corpus/duck independence"
+sources = ["packages/*/src/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+run = "uv run lint-imports"
+
+[tasks."lint:workflows"]
+description = "actionlint over .github/workflows: expression syntax, runner labels, shellcheck"
+# A LINT, not a scan: actionlint audits workflow CORRECTNESS (an invalid `runs-on`, a typo
+# in a `${{ }}` expression, a broken `run:` script) and emits no SARIF, so it gates directly
+# like ruff does. zizmor is the security half and reports through `.sarif/` —
+# both, never either, because a workflow can be perfectly valid and still leak a token.
+sources = [".github/workflows/*.yml"]
+run = "actionlint"
+
+[tasks."lint:hooks"]
+description = "Validate lefthook.yml against lefthook's own schema"
+# An UNKNOWN key in lefthook.yml is not an error at run time — probed 2026-08-28 against
+# lefthook 2.1.11, `lefthook run pre-commit` accepts a config carrying a key the schema
+# rejects and silently ignores it. So a hook file can read as if it guarantees an ordering, a
+# glob, or a stage-fixed behaviour and guarantee nothing, and the hooks still install and
+# still pass. `lefthook validate` is the only thing that says so; it belongs in the gate for
+# the same reason `lint:workflows` does — the alternative is discovering it from a commit that
+# should have been blocked.
+sources = ["lefthook.yml"]
+run = "uv run lefthook validate"
+
+[tasks.test]
+description = "Run the full pytest suite across all members"
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+run = "uv run pytest --no-header -q"
+
+[tasks."test:cov"]
+description = "The suite under branch coverage; writes coverage.xml and enforces the floor"
+# Separate from `test` because the floor is a second assertion: `test` answers "does it
+# work", this answers "is it still measured". coverage.py's config (including `fail_under`)
+# lives in pyproject.toml, so this task and Codecov read one definition.
+run = "uv run pytest --no-header -q --cov --cov-report=term-missing --cov-report=xml"
+
+[tasks.check]
+description = "All gates: lint + fmt + typecheck (ty + pyright) + imports + workflows + hooks + vex drift + test"
+depends = [
+    "lint",
+    "fmt",
+    "typecheck",
+    "typecheck:pyright",
+    "lint:imports",
+    "lint:workflows",
+    "lint:hooks",
+    # The VEX drift gate is here rather than in `security` on purpose: `security` is report-only
+    # and this must FAIL. A generated suppression surface nothing verifies is a suppression
+    # surface that outlives its reason.
+    "security:vex:check",
+    "test",
+]
+
+# ---------------------------------------------------------------------------
+# Security
+#
+# The contract in one line: FINDINGS do not fail these tasks, a scanner that produced no
+# usable report does.
+#
+# Every scanner's own findings exit code is swallowed (`|| true`, `--exit-code 0`), because
+# a non-zero exit kills the CI step before `upload-sarif` runs and throws away the finding
+# detail that was the reason to scan. Gating on findings happens through GitHub code
+# scanning alerts and branch protection instead.
+#
+# That swallow collapses two results which must never read alike — "scanned, found nothing"
+# and "crashed before writing anything" — so each scan task does two things around its
+# scanner and FAILS if either refuses:
+#
+#   rm -f <report>   `.sarif/` is gitignored, so it survives between local runs. Without
+#                    this, a scanner that crashes leaves a PREVIOUS run's report standing in
+#                    for a scan that never happened and the task goes green.
+#   python3 scripts/verify_sarif.py <report>   the report parses, carries a run, and that run
+#                    carries results[] and a tool name. ONE definition for every caller: a
+#                    check that can drift from the thing it checks is the defect it exists to
+#                    prevent. `[ -s file ]` is NOT that check — a truncated SARIF is
+#                    non-empty and `{"runs":[]}` is valid JSON carrying no scan.
+#
+# `python3`, not `uv run python`: the verifier is stdlib-only precisely so it works before
+# `uv sync` and survives a broken environment, which is the case it exists to report.
+#
+# The ONE scanner that gates on findings is lefthook's pre-commit staged-secret scan, where
+# blocking is the only useful outcome and there is no report to lose.
+#
+# INSTALLED TREES are excluded from every filesystem walk below; DECLARED MANIFESTS are not.
+# One rule, and it decides every exclusion here. An installed tree is not the shipped
+# artifact — uv.lock, the seven `packages/*/src` trees, and the committed lockfiles are — so
+# walking it conflates "what a developer happens to have installed" with "what this project
+# distributes", and it attributes a third party's vendored files to this repository.
+#
+# Both halves of that are measured, 2026-08-28:
+#   `.venv/`             a venv holding superseded residue (igraph 1.0.0, leidenalg 0.12.0,
+#                        both GPL) reported GPL runtime dependencies for a project whose
+#                        locked closure contains none.
+#   `site/.astro/`       trivy's walk is not atomic, so a generated tree that is being written
+#                        while it walks makes it exit FATAL with `stat
+#                        site/.astro/collections/docs.schema.json: no such file or directory`
+#                        and write no report at all. The verifier below then correctly failed
+#                        `mise run security` — a build cache is not a scan subject, and racing
+#                        one turns a report-only task into a flake.
+#   `site/node_modules/` 17 of trivy's 18 HIGH findings came from `bun.lock` files belonging
+#                        to a transitively installed package's OWN examples
+#                        (`starlight-base-path/examples/simple/bun.lock`) — nothing this
+#                        repository declares, ships, or can fix. The same tree also gives syft
+#                        exactly 10 extra `pkg:github` components, harvested from third-party
+#                        packages' vendored `.github/workflows`, which misattribute their CI
+#                        supply chain to this one. Measured as the DELTA rather than a total:
+#                        this repo's own action count grows, the 10 phantoms do not belong
+#                        either way.
+# `site/pnpm-lock.yaml` stays IN scope: a lockfile this repository commits is a manifest, not
+# an installed tree. Do not remove these excludes as an oversight.
+#
+# Network: osv-scanner, semgrep, grype, trivy, and pip-audit all fetch an advisory database
+# or a rule pack, so none of them runs offline. None is billable and none touches AWS.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# OpenVEX ledger
+#
+# `security/atif-sql.openvex.json` is the ONE record of why a vulnerability finding is
+# suppressed; every scanner's suppression surface is derived from it. Three scanners disagree
+# about how to read a VEX document, so a hand-kept ignore list per scanner is how a suppression
+# outlives the reasoning that justified it.
+#
+# THE VERSIONED PROPERTY IS THE POINT. A VEX statement scopes to product versions through
+# PURLs, so a suppression names the exact version whose reachability was argued and stops
+# applying when the dependency moves. A blanket `[[IgnoredVulns]]` id does not — it keeps
+# suppressing after an upgrade changes the argument out from under it, silently. Since
+# osv-scanner 2.5.0's config cannot express version scoping (see the generated header),
+# scripts/vex_to_osv_config.py enforces it as an ASSERTION against uv.lock instead, and a bump
+# that moves a suppressed package turns `mise run check` red.
+#
+# Who reads the ledger, probed 2026-08-28 against the pinned versions:
+#   osv-scanner 2.5.0  NO `--vex` flag anywhere. Reads the generated `osv-scanner.toml`.
+#   grype 0.111.1      `--vex` native. Negative-controlled: a malformed document exits 1
+#                      (`failed to create VEX processor`) and a missing one exits 1, so the
+#                      flag genuinely parses the file. It does NOT validate it — a
+#                      `"status": "bogus_status"` ledger exits 0 and suppresses nothing, which
+#                      is why the generator checks the enum.
+#   trivy 0.70.0       `--vex` native, marked [EXPERIMENTAL] in its own help. Same negative
+#                      controls: malformed exits 1, missing exits FATAL.
+#   bandit / semgrep   No VEX support; they suppress inline (`# nosec`, `# nosemgrep`). An
+#                      inline suppression must CITE a ledger statement id rather than carry its
+#                      own prose, so there stays one record referenced from many places.
+#   CodeQL             Dismissed in the GitHub Security tab, not by config. The dismissal
+#                      comment cites a ledger statement id; see codeql.yml.
+# ---------------------------------------------------------------------------
+
+[tasks."security:vex"]
+description = "Regenerate osv-scanner.toml from the OpenVEX ledger"
+# NOT in `security`'s depends, deliberately. `osv-scanner.toml` is COMMITTED and drift-gated, so
+# regenerating it as part of the scan would let a scan run against a suppression surface no gate
+# has ever seen — the scan would define its own exemptions and then pass. Editing
+# `security/atif-sql.openvex.json` means running this task and committing BOTH files.
+run = "python3 scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml"
+
+[tasks."security:vex:check"]
+description = "Drift gate: osv-scanner.toml must match the ledger, and the renderer must work"
+# In `check`'s depends, because a generated file nothing verifies is a file that drifts. Two
+# assertions, and the second exists because the live ledger ships EMPTY:
+#
+#   --check   re-renders the live ledger in memory and diffs it against the committed
+#             osv-scanner.toml, printing a unified diff and failing on any difference. This also
+#             re-runs every ledger validation, so a stale PURL version fails here even when the
+#             rendered TOML happens not to change.
+#   examples/ renders the worked example to a temp path and asserts both advisory ids reach the
+#             output. With no live statements, `--check` alone would exercise only the
+#             empty-ledger branch and the suppression-emitting path could rot unnoticed.
+sources = ["security/**/*.json", "osv-scanner.toml", "scripts/vex_to_osv_config.py", "uv.lock"]
+#
+# The example renders into `mktemp -d`, never into `.sarif/`: security.yml uploads that whole
+# directory to code scanning, and a `.toml` sitting in it would be handed to `upload-sarif` as a
+# report.
+run = """
+set -eu
+python3 scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml --check
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+python3 scripts/vex_to_osv_config.py \
+  security/examples/atif-sql.openvex.example.json "$scratch/vex-example.toml"
+for id in GHSA-EXAMPLE-0000-0000 CVE-2026-00000; do
+  grep -q "id = \\"$id\\"" "$scratch/vex-example.toml" || {
+    echo "security:vex:check: the renderer dropped $id from the worked example — the" >&2
+    echo "  suppression-emitting path is broken while the live ledger is empty" >&2
+    exit 1
+  }
+done
+echo "security:vex:check: worked example renders both advisory ids"
+"""
+
+[tasks."security:osv"]
+description = "Vulnerability scan of uv.lock via osv-scanner (SARIF, report-only)"
+# Probed 2026-08-28: osv-scanner 2.5.0 reads `uv.lock` natively via `--lockfile=uv.lock`
+# ("Scanned .../uv.lock file and found 144 packages"), so no requirements export is needed
+# and the scanned set is exactly the resolved set. `--output-file` rather than `--output`,
+# which 2.5.0 deprecates.
+#
+# `--config osv-scanner.toml` is passed EXPLICITLY rather than relying on osv-scanner's
+# discovery of a config beside the scanned file: an explicit path makes the suppression surface
+# visible in the command, and a typo'd or deleted config fails loudly instead of degrading to
+# "no suppressions" — which would look identical to "no suppressions were needed". That file is
+# generated from the OpenVEX ledger; see `security:vex`.
+run = """
+mkdir -p .sarif
+rm -f .sarif/osv.sarif
+osv-scanner scan source --lockfile=uv.lock --config=osv-scanner.toml \
+  --format=sarif --output-file=.sarif/osv.sarif || true
+python3 scripts/verify_sarif.py .sarif/osv.sarif security:osv
+"""
+
+[tasks."security:licenses"]
+description = "Dependency license report over uv.lock via osv-scanner's allowlist mode"
+# Apache-2.0 ships here, so a copyleft runtime dependency is a real defect. This REPORTS
+# rather than gates, and the measurement is why: probed 2026-08-28 against osv-scanner
+# 2.5.0, 17 of the 144 locked packages fall outside any allowlist for reasons that are data
+# quality, not policy. 16 resolve to the literal string `non-standard` because deps.dev
+# could not map their PyPI classifier to an SPDX id (argcomplete, colorama, fastuuid,
+# hdbscan, hyperframe, jinja2, lancedb, numba, polars, prompt-toolkit, python-dateutil,
+# scipy, shellingham, tiktoken, tokenizers, umap-learn — every one of them permissive), and
+# `non-standard` is itself rejected as an allowlist entry, so no allowlist can clear them.
+# The 17th is llvmlite, whose real expression `BSD-2-Clause AND Apache-2.0 WITH
+# LLVM-exception` cannot be allowlisted because `LLVM-exception` is not a standalone SPDX
+# id. `UNKNOWN` IS accepted and covers the seven workspace members, which have no
+# registry metadata.
+#
+# The license GATE is therefore ONE place: `.github/workflows/dependency-review.yml`'s
+# `deny-licenses` over the pull request's dependency DIFF, which reads GitHub's own license
+# resolution rather than deps.dev's. `security:trivy` is NOT a second gate — measured
+# 2026-08-28, its license scanner needs an installed tree and reports `Licenses: -` on every
+# target here; see the note on that task. MPL-2.0 is in the allowlist deliberately, not as a
+# concession: certifi, pathspec, and tqdm are weak/file-level copyleft and are fine in a
+# distributed Apache-2.0 project.
+#
+# JSON, not the table, and then verified — because this task is the one place the swallow
+# could hide a scan that did not happen. osv-scanner resolves a PyPI package to an SPDX id
+# through deps.dev, a network service. OBSERVED 2026-08-28: a run printed
+# `Scanned .../uv.lock file and found 144 packages` and then an EMPTY license table and exit
+# 1, and the immediately following run printed the full 17-row histogram — the package count
+# is read from the local lockfile and proves nothing about the remote lookup, so an
+# intermittent deps.dev failure read as "no license data, all clear". `license_summary` is
+# the property that discriminates, and scripts/verify_licenses.py is what asserts it and
+# prints the histogram and the violations a human wants to see.
+run = """
+mkdir -p .sbom
+rm -f .sbom/licenses.json
+osv-scanner scan source --lockfile=uv.lock \
+  --format=json --output-file=.sbom/licenses.json --licenses=\
+Apache-2.0,MIT,MIT-0,BSD-2-Clause,BSD-3-Clause,ISC,PSF-2.0,Python-2.0,0BSD,Unlicense,\
+MPL-2.0,CC0-1.0,Zlib,CNRI-Python,UNKNOWN || true
+python3 scripts/verify_licenses.py .sbom/licenses.json security:licenses
+"""
+
+[tasks."security:pip-audit"]
+description = "PyPA pip-audit over the exported lockfile (SARIF via converter, report-only)"
+# Complementary to `security:osv` rather than duplicative: pip-audit queries PyPI's own
+# advisory service by default and osv-scanner queries OSV, and the two databases differ in
+# which advisories they carry and how fast a PyPI-specific one lands.
+#
+# Probed 2026-08-28 with pip-audit 2.10.1: `--locked` reads a PEP 751 `pylock.toml` and does
+# NOT understand `uv.lock` ("no lockfiles found in ."), so uv exports one first — the export
+# is derived from uv.lock, so the audited set is still the resolved set. `--no-emit-project`
+# drops the seven workspace members, which no advisory service knows.
+#
+# pip-audit 2.10.1 emits columns/json/cyclonedx/markdown and no SARIF, so
+# scripts/pip_audit_to_sarif.py renders it and the report goes through the same verifier as
+# every other scanner.
+run = """
+mkdir -p .sarif .sbom/pylock
+rm -f .sarif/pip-audit.sarif .sbom/pylock/pylock.toml
+uv export --all-packages --no-emit-project --format pylock.toml -o .sbom/pylock/pylock.toml -q
+pip-audit --locked .sbom/pylock --format json --output .sbom/pylock/pip-audit.json \
+  --progress-spinner off || true
+python3 scripts/pip_audit_to_sarif.py .sbom/pylock/pip-audit.json .sarif/pip-audit.sarif uv.lock
+python3 scripts/verify_sarif.py .sarif/pip-audit.sarif security:pip-audit
+"""
+
+[tasks."security:semgrep"]
+description = "SAST via semgrep p/auto + p/owasp-top-ten + p/python (SARIF, report-only)"
+# `p/python` is the pack that earns its place next to the two generic ones: it carries the
+# Python-specific rules (subprocess, deserialization, SQL string building) the language-
+# agnostic packs do not. semgrep is here for what ruff structurally cannot do — cross-file
+# taint analysis; the single-file security patterns are already ruff's `S` ruleset.
+#
+# The parse check in the verifier exists for semgrep specifically: when the RPC that renders
+# SARIF returns nothing its formatter emits the literal string `<ERROR: no SARIF output>`,
+# a non-empty file that is not JSON.
+run = """
+mkdir -p .sarif
+rm -f .sarif/semgrep.sarif
+semgrep scan \
+  --config p/auto \
+  --config p/owasp-top-ten \
+  --config p/python \
+  --exclude .venv \
+  --sarif --output=.sarif/semgrep.sarif \
+  --metrics=off || true
+python3 scripts/verify_sarif.py .sarif/semgrep.sarif security:semgrep
+"""
+
+[tasks."security:bandit"]
+description = "SAST via bandit over the member src/ trees (SARIF, report-only)"
+# ruff's `S` ruleset IS flake8-bandit, so this is a second implementation of largely the
+# same rules and not novel coverage. It is kept deliberately for two things it does add: an
+# independent implementation disagrees with ruff's port wherever that port is incomplete,
+# and bandit emits SARIF, so its findings reach GitHub code scanning while ruff's reach only
+# a terminal. Cross-file taint analysis remains semgrep's job.
+#
+# Reached through `uvx --with`, not through `[tools]`: bandit's SARIF formatter is a separate
+# distribution (`bandit-sarif-formatter`) and mise's pipx backend cannot attach a sibling
+# package — probed 2026-08-28, neither the `uvx_args` nor the `pipx_args` tool option
+# reaches `uv tool install --with`, and bandit's `-f` choices stay
+# {csv,custom,html,json,screen,txt,xml,yaml} without it. Both versions are `==` pinned here
+# so the resolution is reproducible; `mise run tools:bump` does not move them, so bumping
+# bandit is an edit to this file and therefore a reviewable diff.
+#
+# `-c pyproject.toml` is required: bandit does not auto-discover pyproject.toml, and
+# `[tool.bandit]` there is what excludes the tests trees (`assert` is what a test is made
+# of, exactly as ruff's per-file-ignores already say for S101).
+run = """
+mkdir -p .sarif
+rm -f .sarif/bandit.sarif
+uvx --quiet --from 'bandit==1.9.4' --with 'bandit-sarif-formatter==1.1.1' \
+  bandit -c pyproject.toml -r packages -f sarif -o .sarif/bandit.sarif -q || true
+python3 scripts/verify_sarif.py .sarif/bandit.sarif security:bandit
+"""
+
+[tasks."security:leaks"]
+description = "Secrets sweep over git history via betterleaks (SARIF, report-only)"
+# `--exit-code=0` means betterleaks reports success whether it found secrets, found none, or
+# never produced a usable report — so "the sweep found nothing" and "the sweep did not
+# happen" arrive as the same exit status. betterleaks has exited 0 having written a
+# TRUNCATED SARIF while printing neither its `scanned N bytes` nor its `no leaks found`
+# line, which is the worst version of a defect: a silent no-op that usually works. So the
+# report is verified rather than assumed, and retried once before the task fails. This is
+# the only scan that retries, because its failure is intermittent.
+run = """
+mkdir -p .sarif
+rm -f .sarif/betterleaks.sarif
+betterleaks git . -f sarif -r .sarif/betterleaks.sarif --exit-code=0
+if ! python3 scripts/verify_sarif.py .sarif/betterleaks.sarif security:leaks; then
+  echo "security:leaks: betterleaks exited 0 but its SARIF is unusable; retrying once" >&2
+  rm -f .sarif/betterleaks.sarif
+  betterleaks git . -f sarif -r .sarif/betterleaks.sarif --exit-code=0
+  python3 scripts/verify_sarif.py .sarif/betterleaks.sarif "security:leaks (retry)"
+fi
+"""
+
+[tasks."security:sbom"]
+description = "CycloneDX + SPDX SBOM via syft, then grype scans the CycloneDX one (SARIF)"
+# ONE syft pass emits BOTH documents, so the two formats cannot disagree about the same
+# dependency set — an SBOM produced by a second walk is a second measurement. grype then
+# scans the CycloneDX artifact rather than re-walking the tree, which keeps the uploaded
+# artifact and the scanned set identical by construction.
+#
+# `dir:.` with `.venv` excluded, not `dir:.venv`: the shipped artifact is described by
+# uv.lock and the seven `packages/*/src` trees, and syft reads uv.lock as a PyPI catalog
+# without needing anything installed.
+#
+# syft keeps its own exit code, so a failed SBOM stops the task before grype runs. The SBOM
+# needs no separate content check: grype refuses an SBOM it cannot parse, its refusal is
+# swallowed like a finding, and the deleted-then-verified grype.sarif is what surfaces it.
+#
+# Measured composition 2026-08-28: 144 `pkg:pypi` — the whole locked closure, read from
+# uv.lock, matching osv-scanner's own count of it exactly — plus 520 `pkg:npm` from the docs
+# site's committed `site/pnpm-lock.yaml` and one `pkg:github` per action SHA-pin in
+# `.github/workflows`. grype is the only scanner in this task list that reads the Python
+# closure AND the site's lockfile in one pass, which is why its zero says something the
+# per-ecosystem scanners cannot say together.
+run = """
+mkdir -p .sarif .sbom
+rm -f .sbom/sbom.cyclonedx.json .sbom/sbom.spdx.json .sarif/grype.sarif
+syft scan dir:. --source-name atif-sql \
+  --exclude './.venv/**' --exclude './.sbom/**' --exclude './dist/**' \
+  --exclude './site/node_modules/**' --exclude './site/.astro/**' \
+  --exclude './site/dist/**' \
+  -o cyclonedx-json=.sbom/sbom.cyclonedx.json \
+  -o spdx-json=.sbom/sbom.spdx.json
+grype sbom:.sbom/sbom.cyclonedx.json --vex security/atif-sql.openvex.json \
+  -o sarif --file .sarif/grype.sarif || true
+python3 scripts/verify_sarif.py .sarif/grype.sarif security:sbom
+"""
+
+[tasks."security:trivy"]
+description = "Filesystem vuln + misconfig + license scan via trivy (SARIF, report-only)"
+# `--exit-code 0` is trivy's own findings swallow, so its exit status says nothing about
+# whether a report landed; the delete and the verifier are what do.
+#
+# What trivy covers here, measured 2026-08-28 against trivy 0.70.0, because two things it is
+# commonly relied on for it demonstrably does NOT do on this workspace:
+#
+#   uv.lock is UNREADABLE to it. `WARN [uv] Failed to parse uv lockfile err="failed to parse
+#   uv.lock: uv lockfile must contain 1 root package"` — this is a uv VIRTUAL workspace, whose
+#   root pyproject.toml carries no `[project]` table and therefore no root package. So trivy
+#   contributes nothing to the Python closure's vulnerability coverage. That coverage is
+#   osv-scanner (uv.lock directly), pip-audit (the pylock export), and grype (the syft SBOM
+#   built from uv.lock) — three independent readings of the same 144 packages.
+#
+#   Its `license` scanner needs an INSTALLED tree. It reads license text off disk, so with
+#   `.venv` and `site/node_modules` excluded it reports `Licenses: -` (not scanned) for every
+#   target. `trivy sbom` does not close the gap either: probed against the syft CycloneDX, the
+#   license scanner is accepted and still reports `-`. The license GATE is therefore
+#   `.github/workflows/dependency-review.yml`'s `deny-licenses` over the pull request's
+#   dependency DIFF, and `mise run security:licenses` is the report beside it. Do not describe
+#   this task as enforcing license policy.
+#
+# What is left is real and worth keeping: the filesystem walk over committed manifests
+# (`site/pnpm-lock.yaml`) and the misconfig scanner, which is the standing net for the day a
+# Dockerfile, a compose file, or any IaC lands in this repository. Both find zero today.
+run = """
+mkdir -p .sarif
+rm -f .sarif/trivy.sarif
+trivy fs . --scanners vuln,misconfig,license --severity HIGH,CRITICAL \
+  --skip-dirs .venv --skip-dirs .sbom --skip-dirs dist \
+  --skip-dirs site/node_modules --skip-dirs site/.astro --skip-dirs site/dist \
+  --vex security/atif-sql.openvex.json \
+  --format sarif --output .sarif/trivy.sarif --exit-code 0
+python3 scripts/verify_sarif.py .sarif/trivy.sarif security:trivy
+"""
+
+[tasks."security:workflows"]
+description = "GitHub Actions workflow SAST via zizmor (SARIF, report-only)"
+# The scanner that audits the workflows ships in the same change as the workflows. zizmor
+# reads them as an attack surface — template injection through `${{ }}`, an unpinned action,
+# a credential persisted into a checkout, an over-broad `permissions` — which is orthogonal
+# to `lint:workflows`, whose subject is whether they are valid at all.
+#
+# `--persona=auditor` is the widest rule set. Some rules want the GitHub API (whether a
+# pinned SHA is still on a branch, for instance) and degrade to a warning without a token,
+# which is why the workflow that runs this passes GITHUB_TOKEN and a laptop does not have to.
+run = """
+mkdir -p .sarif
+rm -f .sarif/zizmor.sarif
+zizmor --persona=auditor --format=sarif .github/workflows > .sarif/zizmor.sarif || true
+python3 scripts/verify_sarif.py .sarif/zizmor.sarif security:workflows
+"""
+
+[tasks.security]
+description = "Every scanner: osv + pip-audit + semgrep + bandit + leaks + sbom/grype + trivy + zizmor + licenses"
+# Genuinely independent — none builds anything or reads another's output (sbom/grype chain
+# internally within their one task), so `depends` is a parallel fan-out rather than an
+# ordering.
+depends = [
+    "security:osv",
+    "security:licenses",
+    "security:pip-audit",
+    "security:semgrep",
+    "security:bandit",
+    "security:leaks",
+    "security:sbom",
+    "security:trivy",
+    "security:workflows",
+]
+
+# ---------------------------------------------------------------------------
+# CLI passthrough
+# ---------------------------------------------------------------------------
+
+[tasks.cli]
+description = "Run the atif-sql CLI in this venv"
+hide = true
+run = "uv run atif-sql"
+
+# ---------------------------------------------------------------------------
+# Docs site (site/) — its own pnpm workspace and its own gate.
+#
+# site/ publishes the generated docs/ tree plus two authored pages as an Astro + Starlight
+# site carrying the surface an agent fetches: a raw Markdown twin per page, the llms.txt trio,
+# head discovery links, JSON-LD, and build-time Mermaid. `docs:gate` is its definition of done.
+#
+# NOT in `check`'s depends. `check` is Python-only and offline; requiring node and pnpm plus a
+# ~15s site build for every `mise run check` would make the Python gate depend on a JavaScript
+# toolchain it otherwise never needs. CI runs docs:gate in its own workflow.
+#
+# Credential-free like every gate here: nothing in it reaches Bedrock.
+# ---------------------------------------------------------------------------
+
+[tasks."docs:install"]
+description = "Install the docs site's node dependencies from its lockfile"
+dir = "site"
+run = "pnpm install --frozen-lockfile"
+
+[tasks."docs:braces"]
+description = "Scan the docs tree for a bare brace the raw-twin MDX parser would reject"
+# A bare `{` outside a fence reaches the twin builder's MDX parser as a JSX expression and
+# fails the build with a message naming neither the page nor the field. A REST path written as
+# a heading is the usual source.
+dir = "site"
+run = "pnpm run gate:braces:tree"
+
+[tasks."docs:build"]
+description = "Build the docs site into site/dist"
+dir = "site"
+# Every citation in the tree becomes a line anchor under this SHA, and an anchor against a
+# moving ref points at whatever later occupies that line. citation-links.ts runs `git ls-tree`
+# at this commit and fails the build on a citation naming a path absent there, so the pin is
+# load-bearing rather than cosmetic. Set explicitly here rather than left to repo.ts's own
+# `git rev-parse HEAD` fallback so the value a build used is visible in the task that ran it.
+run = "ATIF_SQL_DOCS_COMMIT=$(git rev-parse HEAD) pnpm run build"
+
+[tasks."docs:gate"]
+description = "Docs site definition of done: build + astro check + the dist probes"
+depends = ["docs:build"]
+dir = "site"
+# The probes read site/dist rather than the inputs, and derive every count from the build —
+# a hardcoded page or diagram count would pass a build that emitted neither.
+run = "pnpm run check && pnpm run test"

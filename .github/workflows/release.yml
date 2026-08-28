@@ -1,0 +1,238 @@
+# Cuts a release: bump the version, write the changelog, tag, and open a DRAFT GitHub
+# release. It publishes nothing. `publish.yml` does that, and it starts when a human presses
+# "Publish release" on the draft this workflow leaves behind.
+#
+# Why the two are separate, and why the draft is load-bearing:
+#
+#  1. Deciding "these are the release notes" and deciding "these bytes go to PyPI, forever"
+#     are two decisions with two blast radii. A tag is movable and a draft release is
+#     deletable; a PyPI upload is neither — a version can be yanked but never replaced.
+#  2. GitHub starts no workflow run from an event raised by the default `GITHUB_TOKEN`. A
+#     release created and published by this workflow would raise `release: published` and
+#     `publish.yml` would never fire. Leaving the release as a DRAFT turns that constraint
+#     into the design: the human who reviews the notes and presses Publish is the actor whose
+#     event starts the publish, so no long-lived PAT or App token has to exist to work around
+#     it.
+#
+# `workflow_dispatch` only, never on push: cutting a release is a decision, and every `feat:`
+# landing on `main` is not one.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute the next version and print the changelog section without committing, tagging, or pushing"
+        type: boolean
+        default: true
+      increment:
+        description: "Override the increment commitizen derives from the commit subjects"
+        type: choice
+        default: auto
+        options: [auto, PATCH, MINOR, MAJOR]
+
+# Least privilege at the top, granted per job below.
+permissions: {}
+
+# Two concurrent releases would both compute the same next version from the same commits and
+# race to tag it. `cancel-in-progress: false` because the loser of that race must fail on the
+# tag rather than be killed halfway through a multi-file version rewrite.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: cut the release
+    runs-on: ubuntu-latest
+    permissions:
+      # Pushes the bump commit and the tag, and creates the draft release. `id-token: write`
+      # is deliberately absent: nothing here talks to PyPI, so this job cannot mint a
+      # publishing credential even if a step tried.
+      contents: write # push the bump commit, the tag, and the draft release
+    steps:
+      # A release is cut from `main` or not at all. Dispatching this workflow from a feature
+      # branch would tag a tree that never passed review, and the tag is what `publish.yml`
+      # builds from.
+      - name: Refuse to release from anything but main
+        if: github.ref != 'refs/heads/main'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          echo "::error::A release is cut from main. This run targets $REF."
+          exit 1
+
+      # Full history AND tags: commitizen derives the increment from the commit subjects since
+      # the last tag, and a shallow clone would find no tag and treat every commit in the
+      # repository as unreleased.
+      #
+      # `persist-credentials: true` — the exception to this repository's default, because this
+      # is the one job that pushes. The token it leaves in .git/config is the same
+      # `GITHUB_TOKEN` scoped to `contents: write` above, this job uploads no artifact for it to
+      # leak into, and every step after the checkout is either a first-party mise task or `git`
+      # itself. Writing the token into a remote URL instead would put the same secret in the
+      # same file with none of that reasoning attached, which is why the audit is silenced here
+      # rather than worked around.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: # zizmor: ignore[artipacked] the one job that pushes needs the credential it checks out with
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - run: echo "UV_CACHE_DIR=$(uv cache dir)" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: mise run install:ci
+
+      # `[tool.commitizen] version` is what `cz bump` reads and rewrites — the workspace root
+      # carries no `[project]` table, so there is no PEP 621 version for commitizen's default
+      # provider to find. Asserting it here rather than letting `cz bump` fail later puts the
+      # check before `mise run check`, so the answer arrives in seconds instead of after the
+      # full gate, and names the file to edit rather than reporting `[NO_VERSION_SPECIFIED]`.
+      #
+      # The OUTPUT is the assertion, not the exit status: `cz version --project` prints "No
+      # project information in this project." and still exits 0 when the key is absent.
+      - name: Assert the version-bump wiring exists
+        run: |
+          set -euo pipefail
+          current="$(uv run cz version --project)"
+          case "$current" in
+            [0-9]*) echo "current version: $current" ;;
+            *)
+              echo "::error::[tool.commitizen] in pyproject.toml carries no 'version' key, so cz cannot bump. RELEASING.md has the exact block to add, including the version_files entries that keep the seven member manifests and their intra-workspace pins in step."
+              exit 1
+              ;;
+          esac
+
+      # The gate, on the tree about to be tagged. `publish.yml` runs it again on the tag,
+      # which is not redundant: this run proves the commit is releasable BEFORE a version
+      # number is spent on it, and that one proves the tag's bytes are the ones that were
+      # tested.
+      - run: mise run check
+
+      # Deriving the version before mutating anything makes the dry run and the real run
+      # compute the same number from the same code path. `cz bump --get-next` exits non-zero
+      # when no commit since the last tag bumps anything, which is the correct outcome: a
+      # release with no changes would spend a version on nothing.
+      #
+      # `--yes` is not optional here even though nothing is being confirmed: without it
+      # `--get-next` opens a prompt_toolkit prompt and dies on a non-TTY with a bare `EOFError`
+      # and no indication of what it wanted (probed 2026-08-28, commitizen 4.18.0).
+      - id: next
+        name: Compute the next version
+        env:
+          INCREMENT: ${{ inputs.increment }}
+        run: |
+          set -euo pipefail
+          args=(--get-next --yes)
+          if [ "$INCREMENT" != "auto" ]; then
+            args+=(--increment "$INCREMENT")
+          fi
+          if ! version="$(uv run cz bump "${args[@]}" | tail -n 1)"; then
+            echo "::error::commitizen found no version-bumping commit since the last tag. Land a feat:/fix: commit, or dispatch again with an explicit increment."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "next version: $version"
+
+      # The changelog section for a version that does not exist yet, rendered from the commit
+      # subjects. On a dry run this is the whole product of the workflow.
+      #
+      # `--incremental` scopes the render to commits after the last section already in
+      # CHANGELOG.md, so the preview is the new entry rather than the entire history. Before
+      # the first release there is no CHANGELOG.md and the two are the same output.
+      - name: Preview the changelog section
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            printf '## Release preview\n\n'
+            printf 'Next version: **v%s**\n\n' "$VERSION"
+            echo '```markdown'
+            uv run cz changelog --dry-run --incremental --unreleased-version "v$VERSION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Every mutating step below is `if: ${{ !inputs.dry_run }}`, so a dry run ends here having
+      # produced only the job summary above.
+      - name: Stop here on a dry run
+        if: inputs.dry_run
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          echo "Dry run. Computed v$VERSION and rendered its changelog section."
+          echo "Nothing was committed, tagged, or pushed."
+
+      # The bot identity, so `git log` attributes the bump commit to the workflow rather than
+      # to whichever human dispatched it. The commit is bookkeeping; the human's decision is
+      # recorded by the dispatch and by publishing the draft.
+      - name: Configure the committer
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # `--check-consistency` is what makes the multi-file rewrite safe: it fails when the
+      # current version is absent from any file listed in `version_files`, which is exactly
+      # the state a hand-edited member manifest or a renamed intra-workspace pin leaves
+      # behind. Without it a stale pin passes silently and ships as a broken dependency
+      # constraint.
+      #
+      # `--annotated-tag` so the tag carries an author and a date. `publish.yml` builds from
+      # the tag, and a lightweight tag records nothing about who cut it.
+      - name: Bump, write the changelog, and tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          INCREMENT: ${{ inputs.increment }}
+        run: |
+          set -euo pipefail
+          args=(--yes --changelog --check-consistency --annotated-tag)
+          if [ "$INCREMENT" != "auto" ]; then
+            args+=(--increment "$INCREMENT")
+          fi
+          uv run cz bump "${args[@]}"
+
+      # The release notes are the changelog section for this version, read back from the file
+      # cz just wrote, so the GitHub release and CHANGELOG.md cannot disagree.
+      - name: Extract the release notes
+        if: ${{ !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: uv run cz changelog --dry-run "$VERSION" > release-notes.md
+
+      # `--follow-tags` pushes the annotated tag with the commit, in one ref update, so a tag
+      # can never exist without the commit it names.
+      #
+      # This push is refused with `GH006: Protected branch update failed` when a ruleset on
+      # `main` requires a pull request, because `GITHUB_TOKEN` pushes as `github-actions[bot]`
+      # and a ruleset bypass list cannot name it (bypass actors are roles, teams, GitHub Apps,
+      # and Dependabot). RELEASING.md carries the setting and the local fallback.
+      - name: Push the bump commit and the tag
+        if: ${{ !inputs.dry_run }}
+        run: git push --follow-tags
+
+      # DRAFT, on purpose — see the header. The draft is the review surface for the notes, and
+      # a human pressing Publish is what raises the `release: published` event `publish.yml`
+      # waits for.
+      #
+      # `--verify-tag` refuses to create a release for a tag that does not exist, which is the
+      # failure a drifted `[tool.commitizen] tag_format` produces: cz would tag `0.2.0` while
+      # this step asks for `v0.2.0`, and without the flag GitHub would helpfully create the
+      # missing tag at the default branch's head.
+      - name: Open the draft release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" \
+            --draft \
+            --verify-tag \
+            --title "v$VERSION" \
+            --notes-file release-notes.md
+          echo "Draft release v$VERSION is open. Review the notes, then press Publish release: that event starts publish.yml, which waits on the 'pypi' environment's reviewers before anything reaches PyPI." >> "$GITHUB_STEP_SUMMARY"

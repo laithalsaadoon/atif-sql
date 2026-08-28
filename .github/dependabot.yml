@@ -1,0 +1,163 @@
+# Dependabot version updates for the two dependency sets this repository actually has: the
+# uv-resolved Python closure, and the actions its own workflows pin.
+#
+# `# yaml-language-server:` gives an editor and `check-jsonschema` the same schema GitHub
+# validates against. That schema lags GitHub in three known places (it caps `cooldown.include`
+# at 100 items where GitHub documents 150, allows `semver-patch-days: 0` where GitHub's
+# minimum is 1, and models `pull-request-branch-name` with `separator` only) — none of which
+# this file uses, so a red squiggle here is a real error rather than schema drift.
+# yaml-language-server: $schema=https://json.schemastore.org/dependabot-2.0.json
+version: 2
+updates:
+  # --- the Python closure --------------------------------------------------
+  - package-ecosystem: "uv"
+    # `uv`, NOT `pip`. They are different ecosystems in dependabot-core, and only one of them
+    # reads this repository's lockfile: `uv/lib/dependabot/uv/file_fetcher.rb` declares
+    # `ECOSYSTEM_SPECIFIC_FILES = %w(uv.lock)`, while `python/lib/dependabot/python/
+    # file_fetcher.rb` (the `pip` value, which GitHub's docs also route poetry and pipenv
+    # through) knows only Pipfile.lock, poetry.lock, and pdm.lock. Choosing `pip` here would
+    # bump the seven member manifests and leave uv.lock describing the previous resolution —
+    # which `mise run lock:check` then fails on every pull request Dependabot opens.
+    #
+    # ONE entry at the root, not one per member. The uv fetcher expands the workspace itself:
+    # `workspace_fetcher.rb` reads `[tool.uv.workspace] members`, glob-expands `packages/*`,
+    # and follows `[tool.uv.sources] { workspace = true }`. The members carry no lockfile of
+    # their own, so a `directories:` glob over them would find nothing to resolve.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      # Monday, so a bump has the working week to be reviewed rather than sitting over a
+      # weekend. Ahead of the Tuesday cron in every scheduled scanner workflow, so a weekly
+      # sweep reads a tree Dependabot has already proposed moving.
+      day: "monday"
+      time: "07:00"
+      timezone: "Etc/UTC"
+    # A supply-chain soak: a version is not proposed until it has been public for a week, which
+    # is the window in which a compromised or yanked release is caught by someone other than
+    # us. Stated rather than inherited — GitHub applies a 3-day default with no `cooldown`
+    # block at all, so writing the number means the next reader learns the delay is deliberate
+    # and a change to GitHub's default cannot move it silently.
+    #
+    # Seven, not fewer, because this repository's own SAST says so: semgrep's `p/auto` pack
+    # carries `package_managers.dependabot.dependabot-missing-cooldown`, whose rule body is
+    # `metavariable-comparison: int($DAYS) < 7` at severity MEDIUM, and it audits every
+    # `package-ecosystem` entry separately. Measured 2026-08-28 through
+    # `mise run security:semgrep`: a smaller value raises that finding on this file and seven
+    # clears it. On a weekly schedule the extra days cost one review cycle of latency for a
+    # routine bump and nothing else.
+    #
+    # That rule matches by `pattern-regex`, which reads the raw bytes of this file including
+    # these comments — so do NOT write the key and a number below seven together in prose here,
+    # or the documentation of the policy becomes a finding against the policy.
+    cooldown:
+      default-days: 7
+    groups:
+      # Minor and patch across the whole closure in ONE pull request. Reviewing 40 individual
+      # patch bumps is not 40 reviews, it is one review done 40 times badly — and every one of
+      # them costs a full `mise run check` plus a `mise run security` on the runner. A major
+      # bump is deliberately NOT in this group: it lands as its own pull request, because a
+      # major is the one that needs a human reading a changelog.
+      #
+      # `dependency-type` is absent on purpose — GitHub documents it as supported inside
+      # `groups` for bundler, composer, mix, maven, npm, and pip only, not for `uv`, so
+      # splitting dev from production here would silently do nothing.
+      python-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # `chore`, not `deps`. Verified 2026-08-28 against this repository's `[tool.commitizen]`:
+    # `chore(deps): ...` passes `cz check` and a bare `deps: ...` is REJECTED, and lefthook's
+    # commit-msg hook runs that same check on every commit including a bot's. `include: scope`
+    # is what produces the `(deps)` / `(deps-dev)` scope — dependabot-core's
+    # `pr_name_prefixer.rb` appends `(#{scope})` to the prefix and then the colon, so the
+    # rendered subject is `chore(deps): Bump ...`.
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    # Five is the default and is stated because it is a real constraint here: every open pull
+    # request fans out to every `pull_request`-triggered workflow, and the suite in check.yml
+    # alone is a full 816-test run. Security updates are exempt from this limit and do not
+    # count toward it, so a CVE fix is never queued behind a routine bump.
+    open-pull-requests-limit: 5
+    ignore:
+      # harbor's ceiling is not a version preference, it is the boundary of what has been
+      # verified. `packages/atif-converter/pyproject.toml` pins `harbor>=0.22.0,<0.23` because
+      # atif-converter calls the PRIVATE `ClaudeCode._convert_events_to_trajectory`, verified
+      # against 0.22.0 only, and the seven known conversion gaps are encoded by hand in
+      # `atif_converter/domain/fidelity.py`. Moving past the ceiling therefore takes two things
+      # no bot can do: re-running the atif-converter unit tests as a deliberate drift alarm,
+      # and re-auditing fidelity.py against the new upstream behaviour.
+      #
+      # Patch updates stay in scope, and that is the point rather than an oversight: 0.22.x is
+      # inside the verified range, and a Dependabot pull request runs `mise run check`, so the
+      # drift tests fire on the bump and a private-API change announces itself. Only minor and
+      # major cross the ceiling, and only those are silenced. Measured 2026-08-28: harbor's
+      # latest release IS 0.22.0, so this entry currently suppresses nothing and exists for the
+      # day that changes.
+      - dependency-name: "harbor"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # numpy's ceiling belongs to numba, not to us. Measured 2026-08-28: the locked numba
+      # 0.67.0 declares `Requires-Dist: numpy<2.6,>=1.22`, and
+      # `packages/atif-analytics/pyproject.toml` restates that as `numpy>=2.4.4,<2.6` because
+      # uv resolves all packages symmetrically — with no ceiling on numpy, `uv lock --upgrade`
+      # takes the highest numpy and back-solves numba to 0.53.1, which breaks umap-learn and
+      # hdbscan.
+      #
+      # A pull request that widens the ceiling to `<2.7` reproduces exactly that: it can only
+      # resolve by downgrading numba. Raising the ceiling is a COORDINATED bump — numba first,
+      # then numpy — and Dependabot proposes one dependency at a time, so a minor or major
+      # numpy pull request here is guaranteed churn. Patch updates inside the ceiling
+      # (2.5.2 → 2.5.3) still flow, which is where numpy's security fixes land. Measured
+      # 2026-08-28: numpy's latest release is 2.5.2, inside the ceiling, so this entry also
+      # currently suppresses nothing.
+      - dependency-name: "numpy"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+  # --- the actions the workflows pin --------------------------------------
+  - package-ecosystem: "github-actions"
+    # `/` for github-actions specifically: GitHub reads `.github/workflows/` plus a root
+    # `action.yml`/`action.yaml` from this one value. It is not the directory being scanned.
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Etc/UTC"
+    # Same seven-day soak, and it matters more here than for PyPI: a compromised action runs
+    # with the workflow's token, and the published-then-pulled tag is the shape that compromise
+    # has taken. The semgrep rule above audits every `package-ecosystem` entry, so this block
+    # is required to clear it, not a copy for symmetry.
+    cooldown:
+      default-days: 7
+    groups:
+      # Every action in one pull request. The workflows share a small set of distinct actions —
+      # checkout, mise-action, cache, codeql-action, upload-artifact — so per-action pull
+      # requests would be pure noise.
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # `ci`, not `deps` — the same commitizen constraint as above, with the type that matches
+    # what the change actually is. Verified 2026-08-28: `ci(deps): ...` passes `cz check`.
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    open-pull-requests-limit: 5
+    # No ignore entries. Every action here is already SHA-pinned with the version in a trailing
+    # comment, so Dependabot rewrites both together and the diff is readable — which is the
+    # arrangement that makes pinning maintainable instead of a thing that rots.
+    #
+    # The four github/codeql-action sub-actions (codeql.yml's init and analyze, security.yml's
+    # and scorecard.yml's upload-sarif) MUST stay on one version — mixing them is unsupported
+    # and fails at analyze time. Dependabot moves them in a single grouped pull request; if a
+    # review ever shows it moving only some of them, split the group rather than un-pinning.

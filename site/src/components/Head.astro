@@ -1,0 +1,84 @@
+---
+/**
+ * Starlight's `<head>`, extended with the two things it does not emit: the block that points a
+ * machine reader at this page's raw Markdown route and at the site's machine surfaces, and the JSON-LD
+ * graph that says the same thing to a structured-data consumer.
+ *
+ * Starlight already emits base-correct `rel="canonical"` and `rel="sitemap"`, so the discovery block
+ * adds only the delta. Each relation carries its warrant in `discoveryLinks` — two follow a convention
+ * several vendors ship, one is this site's own invention and says so.
+ *
+ * Deliberately absent:
+ *
+ *  * `rel="describedby"`, which is the wrong relationship and has no adopters, not even llmstxt.org.
+ *  * Any visually-hidden block addressed to an agent. Content served to machines and hidden from every
+ *    human is cloaking wearing an accessibility class name, and `tests/agent-surface.test.ts` asserts
+ *    its absence.
+ *  * Raster icon links and social-card metas. The site ships no `favicon.ico`, no PNG rasters and no
+ *    card generator, and a `<link>` or an `og:image` naming a file the build never wrote is a 404 in
+ *    the head — worse than the absent tag, because a consumer follows it.
+ *
+ * Every URL is built with `new URL()`, never by concatenating strings. `Astro.site` EXCLUDES the base
+ * — for this site it is `https://theagenticguy.github.io`, without `/atif-sql` — so resolving a path
+ * against it directly drops the segment and yields a 404 that only appears in production.
+ * `import.meta.env.BASE_URL` is the accessor that includes it.
+ */
+import Default from "@astrojs/starlight/components/Head.astro"
+
+import { discoveryLinks } from "../lib/agent-surface.js"
+import { jsonLdGraph, jsonLdText, type SiteDescription } from "../lib/jsonld.js"
+
+const { site } = Astro
+if (site === undefined) {
+  throw new Error(
+    "`site` is unset in astro.config.ts, so no absolute machine-surface URL can be built"
+  )
+}
+
+const base = import.meta.env.BASE_URL
+const context = { site, base }
+
+const { entry, siteTitle } = Astro.locals.starlightRoute
+
+const links = discoveryLinks(entry.id, context)
+
+/**
+ * The site node, identical on every page so consumers merge on `@id` rather than duplicating.
+ *
+ * `searchEndpoint` is absent on purpose: Starlight's search is Pagefind, which runs entirely in the
+ * browser, so no GET returns results and a `SearchAction` would be a machine-readable claim that 404s
+ * on the first consumer to follow it.
+ */
+const siteDescription: SiteDescription = {
+  name: siteTitle,
+  description:
+    "ATIF-native analytics over Claude Code agent trajectories: sessions converted to ATIF, " +
+    "materialized as a corpus, queried through DuckDB views.",
+  inLanguage: "en"
+}
+
+const graph = jsonLdGraph(
+  {
+    entryId: entry.id,
+    title: entry.data.title,
+    ...(entry.data.description === undefined ? {} : { description: entry.data.description })
+  },
+  siteDescription,
+  context
+)
+---
+
+{/* The default is delegated to, never replaced: replacing it drops the canonical link and the
+    sitemap reference, and both are silent losses. */}
+<Default {...Astro.props}><slot /></Default>
+
+{
+  links.map((link) => (
+    <link rel={link.rel} type={link.type} href={link.href} title={link.title} />
+  ))
+}
+
+{/* `set:html`, never `{...}` interpolation, which would HTML-escape the JSON into `&quot;` entities
+    that no `application/ld+json` parser accepts. `jsonLdText` escapes `<`, `>` and `&` to their JSON
+    `\u` forms, so a `</script>` sequence inside a title cannot close the block early. */}
+<script type="application/ld+json" set:html={jsonLdText(graph)} is:inline />

@@ -1,0 +1,47 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mise/
+dist/
+build/
+*.egg-info/
+.DS_Store
+.env
+.env.local
+.erpaval/
+.sarif/
+.sbom/
+planning/
+repomix-output.xml
+docs/.repomix/
+docs/parity/
+.import_linter_cache/
+.codegraph/
+experiments/**/out/
+scripts/.run/
+
+# Node dependencies for the docs site under site/, which is its own pnpm workspace.
+node_modules/
+
+# Astro's generated type and content cache.
+site/.astro/
+
+# The Starlight content collection is GENERATED on every build: site/scripts/sync-ccu.mjs
+# writes the docs/ tree into it and site/scripts/authored-pages.mjs writes the site's own
+# pages beside them. The authored sources live in site/authored/. Committing a copy would let
+# a reader edit a page the next build silently overwrites.
+site/src/content/docs/
+
+# Agent work logs from the docs fan-out. Each packet carries the Work log and Validation that
+# produced one document, which is provenance rather than documentation — the tree under docs/
+# is the artifact. lychee.toml's exclusion comment asserts this path is ignored.
+docs/.packets/
+
+# Session handoff notes and salvaged scratch. Working state for whoever picks this up next,
+# not part of the release.
+.handoff/

@@ -1,0 +1,93 @@
+# CodeQL, kept in its own workflow because it is the one scanner that does not fit
+# `mise run security`: its analysis runs inside the action rather than behind a CLI a
+# developer can invoke, so there is no local task it could drift from. Every other scanner is
+# a mise task for exactly that reason, and pretending this one is too would be a lie in the
+# task list.
+#
+# The codeql-action sub-actions MUST all pin the SAME version — init and analyze here, plus
+# the upload-sarif in security.yml and in scorecard.yml — because mixing versions is
+# unsupported and fails at analyze time. All four are cdf488f5 (v4.37.9). Changing one means
+# changing all four.
+#
+# A finding that is real gets fixed. A finding that is not applicable gets a dismissal in the
+# Security tab — and CodeQL is the one scanner whose suppression lives in the GitHub UI rather
+# than in a config file, which is exactly why the JUSTIFICATION must not live there too. The
+# dismissal comment CITES a statement id in `security/atif-sql.openvex.json`; the reachability
+# argument itself belongs in that ledger, where `mise run security:vex:check` asserts the
+# statement still names the version this project ships. A dismissal without a ledger entry is
+# incomplete: it is a suppression whose reason lives in a UI field nothing gates, nothing
+# reviews in a diff, and nothing invalidates when the code moves underneath it.
+#
+# `security-extended` below trades precision for recall, so it deliberately surfaces findings
+# the default suite does not. Each one resolves exactly two ways: a fix, or a ledger statement
+# plus a dismissal citing its id. "Looks like a false positive" is neither.
+#
+# The ledger currently ships with `statements: []` — measured 2026-08-28, osv-scanner,
+# pip-audit, grype, and trivy all reported zero vulnerabilities, so nothing needs suppressing
+# yet. The machinery exists so that the first finding is triaged into a record instead of into a
+# comment box.
+name: codeql
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, for the same reason security.yml has a schedule: the query suite moves even when
+  # the code does not, and a finding that lands on a quiet week should not wait for a push.
+  schedule:
+    - cron: "47 6 * * 2"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  analyze:
+    name: codeql analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the source the extractor reads
+      security-events: write # upload the CodeQL analysis to code scanning
+      actions: read # read workflow run metadata to attribute an analysis to its trigger
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          # One language: every line of first-party source in this workspace is Python.
+          languages: python
+          # No build: the Python extractor reads source directly. This job deliberately does
+          # NOT run `uv sync`, which keeps it fast and keeps dependency code out of the
+          # analysis — the dependency set is osv-scanner's, pip-audit's, and grype's subject,
+          # not CodeQL's.
+          build-mode: none
+          # `security-extended` over the default suite, because the point of this workflow is
+          # maximum coverage. It trades precision for recall, so it surfaces findings the
+          # default suite does not — triage each one to a fix or to a dismissal that states
+          # why the path is unreachable.
+          queries: security-extended
+          config: |
+            paths-ignore:
+              # A ~400k-token generated repomix pack. Not first-party source, not edited by
+              # hand, and large enough to dominate the extraction budget.
+              - "docs/.repomix/**"
+              - "repomix-output.xml"
+              # Build output and the resolved environment. Absent from a clean checkout, but a
+              # dirty workspace would otherwise get every finding twice — once in the source
+              # that produced it and once in the installed copy — and every third-party
+              # package's findings besides.
+              - "**/dist/**"
+              - "build/**"
+              - ".venv/**"
+              # Numbered experiment protocols and their outputs. No experiment is wired into a
+              # gate (`mise run check` and pytest's testpaths both skip the directory), so a
+              # finding here reports on code nothing owns.
+              - "experiments/**"
+              # This workflow's own scan products.
+              - ".sarif/**"
+              - ".sbom/**"
+
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: /language:python

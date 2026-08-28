@@ -1,0 +1,53 @@
+# Editor defaults derived from the formatters this repo already runs, so an
+# editor and `mise run fmt` cannot disagree. Every value below is read off the
+# root `pyproject.toml`:
+#
+#   [tool.ruff]        line-length  = 100        -> max_line_length
+#   [tool.ruff.format] indent-style = "space"    -> indent_style
+#   [tool.ruff.format] line-ending  = "lf"       -> end_of_line
+#
+# `[tool.ruff.format] quote-style = "double"` has no EditorConfig equivalent;
+# ruff owns quoting and `mise run fmt` is the gate that enforces it.
+#
+# EditorConfig is advisory: it shapes what an editor writes, never what CI
+# accepts. `mise run check` remains the definition of done.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# ruff formats Python at 4-space indent and reports at line-length 100.
+# `max_line_length` is a soft guide for the editor's ruler: `E501` is in
+# `[tool.ruff.lint] ignore`, so a long line fails no gate — the formatter wraps
+# what it can and leaves the rest.
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+# The type-marker files that make each member PEP 561 typed are empty by
+# contract; a final newline is the only byte they may carry.
+[py.typed]
+insert_final_newline = true
+
+[*.{toml,yml,yaml,json}]
+indent_size = 2
+
+# Two trailing spaces are a hard line break in Markdown, so stripping them
+# silently rewrites the rendered document.
+[*.md]
+trim_trailing_whitespace = false
+
+[*.sh]
+indent_size = 2
+
+# uv writes and owns `uv.lock`; an editor must not touch it. `uv lock --check`
+# (the `lock:check` mise task, and lefthook's `uv-lock-sync` pre-commit job)
+# fails on a hand-edited lockfile.
+[uv.lock]
+insert_final_newline = unset
+trim_trailing_whitespace = unset

@@ -1,0 +1,119 @@
+# A feature request in this repository almost always lands in one of two shapes:
+# a new DuckDB view or macro, or a new CLI command. Each carries obligations the
+# drift tests enforce, so the form names them up front — a proposal that has
+# already accounted for them is one review round shorter, and a proposal that
+# cannot meet them is better known before anyone writes code.
+name: Feature request
+description: Propose a new view, macro, command, or capability.
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the question you cannot answer today, not the SQL you would
+        like to write. The catalog already carries 28 views and 22 macros —
+        `atif-sql schema` lists all of them in under 50 ms, and `atif-sql
+        examples` shows a runnable query for each.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which package would own it
+      description: >-
+        The import-linter contracts in `pyproject.toml` are not advisory:
+        converter, corpus, duck, models, and embed may never import each other,
+        `atif-cli` is the only composition root, and `atif-analytics` may import
+        `atif-models` and nothing else among the seven. A proposal that needs two
+        leaf packages to see each other needs a different design, and saying so
+        here is the fastest way to find that out.
+      options:
+        - "atif-converter — Claude Code to ATIF conversion, fidelity policy"
+        - "atif-corpus — discovery, watermarks, quiescence, artifact writes"
+        - "atif-duck — DuckDB views and macros"
+        - "atif-models — model alias registry, structured-output client"
+        - "atif-analytics — classify / trajectory / conflicts / friction / cluster / terms / community"
+        - "atif-embed — Bedrock embeddings, LanceDB store, backfill"
+        - "atif-cli — command surface"
+        - "Docs, CI, or release tooling"
+        - "Unsure / spans several"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The question you cannot answer today
+      description: >-
+        What you wanted to learn from a corpus of trajectories, and what you
+        tried. Name the views or macros you looked at and why they fell short.
+      placeholder: |
+        I want to know which tool a session retries most before succeeding.
+        `tool_rank` gives frequency but not the retry chain, and `friction`
+        aggregates to the session rather than the tool.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed surface
+      description: >-
+        The shape you would add: a view name and its columns, a macro name and
+        its parameters, or a CLI command and its flags. A sketch is fine.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: catalog_obligations
+    attributes:
+      label: "If this adds a view or macro, the drift tests require all of these"
+      description: >-
+        `atif-sql examples` is DERIVED from the catalog rather than hand-written,
+        and every derived example is executed against a fixture corpus by
+        `packages/atif-duck/tests/test_examples.py`. That is why a new object
+        cannot be added to the DDL alone — the tests fail until the catalog knows
+        about it. Tick what you have thought through; leave the rest for review.
+      options:
+        - label: "A `DESCRIPTIONS` entry in `atif_duck/domain/catalog.py`"
+        - label: "An `ARG_EXEMPLARS` entry for every new parameter name"
+        - label: "`TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`"
+        - label: "The derived example executes against the fixture corpus — or the object has a documented `EXCLUSIONS` entry saying why it cannot"
+        - label: "Not applicable — this is not a new view or macro"
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Which tier would it live in
+      description: >-
+        `core` reads the materialized corpus and needs nothing else. `analytics`
+        needs `atif-sql analyze` to have run. `vss` needs embeddings, which means
+        Bedrock credentials and therefore a cost per call.
+      options:
+        - "core — reads the materialized corpus only"
+        - "analytics — depends on `atif-sql analyze`"
+        - "vss — depends on embeddings and therefore on Bedrock"
+        - "Not a catalog object"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you would do instead if this is declined
+      description: >-
+        A composition of existing views, a downstream query in your own code, or
+        nothing. This is the most useful field on the form: it sets the bar the
+        proposal has to clear.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before you submit
+      options:
+        - label: "I ran `atif-sql schema` and `atif-sql examples` and the capability is genuinely absent."
+          required: true
+        - label: I searched existing issues and this is not already proposed.
+          required: true

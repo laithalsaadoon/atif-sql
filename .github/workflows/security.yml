@@ -1,0 +1,84 @@
+# Dependency, SAST, secret, license, and workflow scanning — kept out of check.yml so the
+# gate stays one job with one meaning.
+#
+# The contract in one line: FINDINGS do not fail this job, a scanner that produced no usable
+# report does.
+#
+# Every scanner's own findings exit code is swallowed in mise.toml, because a scanner that
+# exits non-zero kills the step before the upload runs and throws away the finding detail
+# that was the reason to scan — gating on findings happens through GitHub code scanning
+# alerts and branch protection instead. What mise.toml does NOT swallow is a missing report:
+# each scan deletes its SARIF first and then verifies it through scripts/verify_sarif.py, so
+# a scanner that crashed, wrote a truncated file, or left a previous run's file on disk fails
+# `mise run security` rather than reading as a clean sweep. That is why the upload below is
+# `if: always()`: when one scanner's report is unusable the task exits non-zero, and every
+# other report still belongs in code scanning.
+#
+# The scanner that gates on findings is lefthook's pre-commit staged-secret job, where
+# blocking is the only useful outcome and there is no report to lose.
+#
+# Suppressions are not per-scanner. `security/atif-sql.openvex.json` is the single OpenVEX
+# ledger recording WHY a finding does not apply; grype and trivy read it through `--vex`,
+# osv-scanner reads the `osv-scanner.toml` generated from it, and CodeQL dismissals cite a
+# statement id. The drift gate that keeps the generated file honest lives in `mise run check`,
+# NOT here — a report-only job must not be the thing that verifies its own exemptions.
+#
+# Weekly schedule as well as per-push: a lockfile that was clean when it merged does not stay
+# clean, because the vulnerability database moves and the code does not.
+#
+# No secret and no cloud credential. Every scanner here reads the repository and a public
+# advisory database; none of them calls Amazon Bedrock, and the three atif-sql commands that
+# do are absent from every task this job runs.
+name: security
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "31 6 * * 2"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  scan:
+    name: scanners
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # full-history checkout for the betterleaks sweep
+      security-events: write # upload every scanner's SARIF to code scanning
+    steps:
+      # Full history: betterleaks sweeps every commit, and a shallow clone would scan a
+      # single revision while reporting success. `persist-credentials: false` because no
+      # scanner needs to push and a token in .git/config is readable by everything downstream.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - run: mise run security
+        env:
+          # zizmor's audits of whether a pinned SHA is still reachable, and whether a pinned
+          # action has a known vulnerability, query the GitHub API and degrade to a warning
+          # without a token. The default read-only job token is enough and is not a secret.
+          GH_TOKEN: ${{ github.token }}
+      # One upload for the whole directory — each SARIF names its own tool, so code scanning
+      # separates them without a step per scanner.
+      - uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        if: always()
+        with:
+          sarif_file: .sarif
+      # Both SBOM documents from the one syft pass in `security:sbom` — CycloneDX (the one
+      # grype scanned, so the artifact and the scan describe one dependency set) and SPDX
+      # (what a downstream consumer's tooling is more likely to ingest). 90 days matches the
+      # advisory-response window this exists to serve: when a CVE drops, "did we ship that?"
+      # is answered from here without a rebuild.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: sbom
+          path: |
+            .sbom/sbom.cyclonedx.json
+            .sbom/sbom.spdx.json
+          retention-days: 90

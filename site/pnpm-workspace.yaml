@@ -1,0 +1,16 @@
+# This directory is its OWN pnpm workspace root, so `pnpm-lock.yaml` stays inside `site/` and the
+# Python workspace one level up never sees a node lockfile.
+
+# `allowBuilds` is a map of package to boolean, and an unlisted package that declares a lifecycle
+# script makes `pnpm install` exit non-zero with ERR_PNPM_IGNORED_BUILDS rather than warn. esbuild is
+# allowed because Vite loads it as a native module: its install script resolves the platform binary
+# from the optional `@esbuild/*` dependency and links `bin/esbuild`, which is what `astro build`
+# spawns.
+allowBuilds:
+  esbuild: true
+
+# `minimumReleaseAge` holds a fresh release out of the resolution set entirely rather than falling
+# back to an older one, so a pinned version younger than the cooldown has no installable candidate
+# and the install fails outright. This exclusion names the pin that `package.json` asks for.
+minimumReleaseAgeExclude:
+  - '@astrojs/starlight@0.41.10'

@@ -1,0 +1,32 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://github.com/theagenticguy/atif-sql/security/examples/atif-sql.openvex.example.json",
+  "author": "atif-sql maintainers",
+  "role": "document creator",
+  "timestamp": "2026-08-28T17:06:14Z",
+  "version": 1,
+  "tooling": "worked example; NOT a live suppression — exercises scripts/vex_to_osv_config.py",
+  "statements": [
+    {
+      "@id": "https://github.com/theagenticguy/atif-sql/security/examples#example-0001",
+      "vulnerability": {
+        "name": "GHSA-EXAMPLE-0000-0000",
+        "@id": "https://github.com/advisories/GHSA-EXAMPLE-0000-0000",
+        "aliases": ["CVE-2026-00000"],
+        "description": "EXAMPLE ONLY, not a real advisory. Stands in for a template-injection issue in Jinja2 reachable only when an attacker controls the template source."
+      },
+      "timestamp": "2026-08-28T17:06:14Z",
+      "products": [
+        {
+          "@id": "pkg:pypi/jinja2@3.1.6",
+          "identifiers": {
+            "purl": "pkg:pypi/jinja2@3.1.6"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "EXAMPLE ONLY — this statement is a template and names a fabricated advisory id, so it must never be copied into security/atif-sql.openvex.json unchanged. It exists to show the shape and the required DEPTH of argument: name the single reachability path, the measurement that closes it, the date, and the condition that would reopen it. A real statement at this depth would read: jinja2 reaches this workspace on exactly one path, harbor -> jinja2, and atif-sql never renders a template — `atif-sql` has no template surface at all, and the only jinja2 import in the closure is harbor's own prompt rendering, which atif-converter does not call because it enters harbor through `ClaudeCode._convert_events_to_trajectory` and nothing below it touches `Environment` or `Template`. Measured 2026-08-28: a module-load probe over the full 816-test suite recorded zero imports of `jinja2.Environment`, positive-controlled against a forced import first; and the advisory's vulnerable code path requires an attacker-supplied template string, which no atif-sql entry point accepts because every input is a Claude Code transcript already on local disk. Revisit if a future analyze/report pipeline renders templates from corpus content, which is what would put attacker-influenced text into a template source."
+    }
+  ]
+}

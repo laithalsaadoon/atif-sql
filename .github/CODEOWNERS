@@ -1,0 +1,16 @@
+# Code owners for atif-sql.
+#
+# One owner, every path. There is no GitHub team behind this repository, so
+# naming one would produce a review request that can never be satisfied — GitHub
+# silently drops an unresolvable CODEOWNERS entry and the path ends up with no
+# owner at all, which is worse than the obvious rule below.
+#
+# CODEOWNERS only REQUESTS review. It becomes a gate when the branch protection
+# rule on `main` turns on "Require review from Code Owners"; without that setting
+# this file is a notification list. `RELEASING.md` lists the repository settings
+# the release flow depends on, including that one.
+#
+# Last matching pattern wins, so this single line owning everything must stay
+# last if any narrower rule is ever added above it.
+
+* @theagenticguy

@@ -1,0 +1,163 @@
+# Link checking for every Markdown file in the tree. Driven by
+# `.github/workflows/links.yml` (weekly + on every pull request) with
+# `fail: true`, so a dead link is a failure rather than a note.
+#
+# Gating on this is a deliberate choice for THIS repo, and it is only defensible
+# because of what the corpus is: the generated documentation tree under `docs/`
+# cites source with permalinks into this repository's own tree, so the majority
+# of links are self-referential and deterministic — a broken one is a defect in
+# the commit under review, not weather. The genuinely non-deterministic hosts are
+# excluded by name below, each with the reason it cannot be checked from CI.
+#
+# Keys verified against lychee v0.24.2, the version `lycheeVersion` pins in
+# links.yml (probed 2026-08-28). lychee rejects an unknown key, so a version bump
+# that renames one fails loudly rather than silently ignoring this file.
+
+# ---------------------------------------------------------------------------
+# Scope
+# ---------------------------------------------------------------------------
+
+# Markdown only. Python docstrings and SQL-in-Python carry URLs too, but a URL
+# inside a code string is not a link a reader can click, and `include_verbatim`
+# below already refuses to follow the ones inside fenced blocks.
+extensions = ["md"]
+
+# A URL inside a fenced code block or inline code span is an example, not a
+# link. `atif-sql` documentation is full of them (DuckDB `read_json` paths,
+# Bedrock model ARNs, sample corpus URLs).
+include_verbatim = false
+
+# Nothing in this repository links to an email address, and a mailto: probe
+# resolves MX records rather than a document — a different question with a
+# different failure mode.
+include_mail = false
+
+exclude_path = [
+  # Generated packing artifacts: a repomix bundle inlines every source file,
+  # so link-checking it re-checks the whole tree through a second path and
+  # reports each finding twice.
+  "^docs/\\.repomix/",
+  "^repomix-output\\.xml$",
+  # Agent work packets and retired parity verdicts. Both are gitignored, so
+  # they exist only in a working tree and cannot be a CI finding — excluding
+  # them keeps a local `lychee` run agreeing with the CI run.
+  "^docs/\\.packets/",
+  "^docs/parity/",
+  "^\\.erpaval/",
+  # Experiment outputs are gitignored (`experiments/**/out/`) and no gate owns
+  # them — `mise run check` and pytest's `testpaths` both skip the directory.
+  "^experiments/.*/out/",
+  ".venv/",
+]
+
+# ---------------------------------------------------------------------------
+# Exclusions: what genuinely cannot be checked from CI
+# ---------------------------------------------------------------------------
+exclude = [
+  # Localhost and private ranges. A URL naming a developer's own machine is
+  # documentation of a local workflow; from a runner it either refuses the
+  # connection or, worse, reaches some unrelated service on the runner. Covered
+  # structurally by `exclude_all_private` below as well; named here because a
+  # hostname-form loopback is not an IP-range match.
+  "^https?://localhost",
+  "^https?://127\\.0\\.0\\.1",
+  "^https?://0\\.0\\.0\\.0",
+  "^https?://\\[::1\\]",
+
+  # The seven PyPI project pages do not exist until the first release publishes
+  # them (`.github/workflows/publish.yml`). Until then a 404 here reports the
+  # release schedule, not a broken link. Remove this entry once v0.2.0 is on
+  # PyPI — at that point these become the most valuable links in the README.
+  "^https://pypi\\.org/project/atif-",
+
+  # Codecov's badge and report URLs 404 until a coverage report has been
+  # uploaded, and Codecov rate-limits unauthenticated badge fetches. Checking a
+  # dashboard's availability says nothing about this repository's documentation.
+  "^https://(app\\.)?codecov\\.io/",
+
+  # api.scorecard.dev serves the badge only after the `scorecard` workflow has
+  # published a result, and scorecard.dev's viewer is a client-rendered SPA that
+  # answers 200 for any path — so it can neither fail usefully nor succeed
+  # meaningfully.
+  "^https://(api\\.)?scorecard\\.dev/",
+
+  # Shields.io is a badge renderer, not a document: it answers 200 with an
+  # "invalid" SVG for a package that does not exist, so a check here is
+  # guaranteed to pass and proves nothing. The badge TARGETS are what matter and
+  # they are checked (or excluded above, with a reason).
+  "^https://img\\.shields\\.io/",
+
+  # GitHub's write paths require an authenticated session by construction: an
+  # unauthenticated GET redirects to the login page, which answers 200 and would
+  # mask a genuinely wrong path. `new` covers the security-advisory intake link
+  # in `.github/ISSUE_TEMPLATE/config.yml`.
+  "^https://github\\.com/[^/]+/[^/]+/(edit|new|compare|settings)/",
+  "^https://github\\.com/[^/]+/[^/]+/security/advisories/new",
+]
+
+# Loopback, link-local, and RFC1918 ranges in one switch. A runner that can
+# reach 10.0.0.0/8 reaches GitHub's own infrastructure, which is a worse outcome
+# than a skipped link.
+exclude_all_private = true
+
+# ---------------------------------------------------------------------------
+# Rate limiting: the generated docs tree is mostly one host
+# ---------------------------------------------------------------------------
+#
+# `docs/` cites source with permalinks into github.com, so a full run sends
+# hundreds of requests to a single host. Three mechanisms keep that from becoming
+# a rate-limited flake, and they compose:
+#
+#  1. links.yml passes `GITHUB_TOKEN` (the lychee-action `token` input), which
+#     moves github.com links onto the authenticated GitHub API — 5,000
+#     requests/hour instead of 60.
+#  2. `[hosts."github.com"]` below throttles the host regardless of the global
+#     concurrency, so a burst cannot trip secondary rate limiting.
+#  3. `cache` means the second run of the week re-checks almost nothing.
+#
+# Throttling rather than excluding the permalinks is the deliberate call: a
+# citation pointing at a file somebody moved is precisely the rot this job exists
+# to catch, and excluding github.com would blind it to the majority of the tree.
+max_concurrency = 8
+max_retries = 1
+retry_wait_time = 2
+timeout = 20
+
+[hosts."github.com"]
+concurrency = 2
+request_interval = "200ms"
+
+[hosts."raw.githubusercontent.com"]
+concurrency = 2
+request_interval = "200ms"
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+# Two days spans the weekly run and any pull-request run beside it, and
+# `.lycheecache` is restored by `actions/cache` in links.yml. 5xx responses are
+# excluded from the cache: a server that was briefly down must be re-asked, not
+# remembered as dead for two days.
+cache = true
+max_cache_age = "2d"
+cache_exclude_status = "500.."
+
+# ---------------------------------------------------------------------------
+# What counts as alive
+# ---------------------------------------------------------------------------
+# 403 and 429 mean a host dislikes robots, which is a fact about the host. 401
+# means the resource exists and is gated, which is also not a broken link.
+accept = ["200..=299", "401", "403", "429"]
+
+# HEAD first, GET on refusal: some documentation hosts (readthedocs mirrors,
+# S3-fronted assets) answer 405 to HEAD.
+method = ["head", "get"]
+
+# `include_fragments` is deliberately UNSET. Anchor checking is valuable against
+# Markdown, but the dominant link shape in `docs/` is a GitHub permalink with a
+# line anchor (`...#L120-L140`), and GitHub renders line anchors client-side —
+# so a fragment check against a blob page reports GitHub's renderer, not the
+# link. Enabling it would produce a wall of false failures on exactly the links
+# this job most wants to trust.
+
+user_agent = "atif-sql-link-check (+https://github.com/theagenticguy/atif-sql)"

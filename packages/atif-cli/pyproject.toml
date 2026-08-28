@@ -1,0 +1,69 @@
+[project]
+# The installable name IS the typed command. This is the one distribution a user
+# installs (`uv tool install atif-sql`); the other six members are internal module
+# boundaries that ship as its pinned dependencies. The DIRECTORY and MODULE stay
+# `atif_cli` — a distribution name and a module name are independent, and renaming
+# the module would churn [tool.ruff] src, [tool.ty], [tool.pyright],
+# [tool.coverage.run], and the import-linter contracts for no gain.
+name = "atif-sql"
+version = "0.1.0"
+description = "ATIF-native analytics over Claude Code agent trajectories: convert, materialize, and query agent sessions with DuckDB."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Laith Al-Saadoon" }]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = [
+    # Pinned `==`, and these pins are the only thing an external installer can see:
+    # the `[tool.uv.sources]` entries below are LOCAL sources, and uv's build backend
+    # does not translate them into version constraints. A bare name here becomes
+    # `Requires-Dist: atif-duck` in the wheel — resolved from the global PyPI
+    # namespace to whatever the newest release of that name is, by whoever owns it.
+    # One version moves the whole workspace, so `==` is the honest constraint, and
+    # `[tool.commitizen] version_files` rewrites every one of these on each bump.
+    "atif-analytics==0.1.0",
+    "atif-converter==0.1.0",
+    "atif-corpus==0.1.0",
+    "atif-duck==0.1.0",
+    "atif-embed==0.1.0",
+    "cyclopts>=4.10.2",
+    # Imported directly by duck_errors.py to classify a DuckDB failure into the
+    # parse/catalog/runtime exit-code taxonomy. Reaching it transitively through
+    # atif-duck would make this package's exit codes depend on a sibling's
+    # dependency choice.
+    "duckdb>=1.5.2,<2",
+    "loguru>=0.7.3",
+]
+
+[project.scripts]
+atif-sql = "atif_cli.app:main"
+
+[project.urls]
+Homepage = "https://github.com/theagenticguy/atif-sql"
+Repository = "https://github.com/theagenticguy/atif-sql"
+Issues = "https://github.com/theagenticguy/atif-sql/issues"
+Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atif_cli"
+namespace = true
+
+[tool.uv.sources]
+atif-analytics = { workspace = true }
+atif-converter = { workspace = true }
+atif-corpus = { workspace = true }
+atif-duck = { workspace = true }
+atif-embed = { workspace = true }

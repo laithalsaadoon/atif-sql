@@ -1,0 +1,43 @@
+[project]
+name = "atif-embed"
+version = "0.1.0"
+description = "Embedding provider (Cohere Embed v4 on Bedrock) + LanceDB vector store + embed backfill over the ATIF corpus."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Laith Al-Saadoon" }]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Database",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = [
+    "boto3>=1.42.91",
+    "duckdb>=1.5.2,<2",
+    "lancedb>=0.30,<0.38",
+    "loguru>=0.7.3",
+    "polars>=1.40.0",
+    "pyarrow>=23.0.1",
+    "pydantic>=2.13.2",
+    "pydantic-settings>=2.13.1",
+    "tenacity>=9.1.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/theagenticguy/atif-sql"
+Repository = "https://github.com/theagenticguy/atif-sql"
+Issues = "https://github.com/theagenticguy/atif-sql/issues"
+Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atif_embed"
+namespace = true

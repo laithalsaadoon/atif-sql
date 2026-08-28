@@ -1,0 +1,38 @@
+# Blank issues are off: every issue arrives through one of the two forms, so the
+# triage fields (command, version, Python, OS, corpus state) are always present.
+# A blank-issue escape hatch would make them optional in practice.
+blank_issues_enabled: false
+
+contact_links:
+  # First, and deliberately above everything else. A vulnerability filed on this
+  # public tracker is disclosed the moment it is submitted, and no amount of
+  # wording in a form body prevents that as reliably as offering the correct
+  # destination in the same list.
+  #
+  # This link requires GitHub's private vulnerability reporting to be ENABLED on
+  # the repository (Settings -> Advanced Security -> Private vulnerability
+  # reporting). With it off, the URL 404s and the second link below is the only
+  # working path — which is why both are listed.
+  - name: Report a security vulnerability (private)
+    url: https://github.com/theagenticguy/atif-sql/security/advisories/new
+    about: >-
+      Opens a private security advisory visible only to the maintainer. Use this
+      for anything exploitable, not the public issue tracker.
+
+  - name: Security policy
+    url: https://github.com/theagenticguy/atif-sql/blob/main/SECURITY.md
+    about: >-
+      Supported versions, what counts as a vulnerability in a tool that reads
+      local transcripts, and the disclosure timeline.
+
+  - name: Contributing guide
+    url: https://github.com/theagenticguy/atif-sql/blob/main/CONTRIBUTING.md
+    about: >-
+      Setup, the five gates `mise run check` runs, the import-linter contracts,
+      and the Conventional Commit rule the commit-msg hook enforces.
+
+  - name: Ask a question
+    url: https://github.com/theagenticguy/atif-sql/discussions
+    about: >-
+      "How do I query X" and "is this the right view" belong here. If the answer
+      turns out to be "the view is wrong", that becomes a bug report.

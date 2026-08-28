@@ -1,0 +1,139 @@
+# Git hooks via lefthook, installed by `mise run install` (or `mise run hooks:install`).
+#
+# Every job goes through `mise exec` / `mise run`, so the tool that runs is the version this
+# repo pins: ruff and commitizen from the uv venv reached through the mise-pinned `uv`,
+# betterleaks from mise.lock. Never a bare `ruff` or `betterleaks`, whose resolution depends
+# on whatever the committer's shell happens to have on PATH — a hook that lints with a
+# different ruff than CI is a hook that passes work CI will refuse.
+#
+# The split:
+#   commit-msg  Conventional Commits, so the history stays machine-readable.
+#   pre-commit  fast and FILE-SCOPED — formatters that rewrite the staged set, plus the one
+#               scanner that gates rather than reports.
+#   pre-push    the whole-repo gates a per-file pass structurally cannot run.
+#
+# `mise run test` IS in pre-push, unlike the reference this is ported from. Measured
+# 2026-08-28: 816 tests in 131s, one tier, no containers and no network. That is inside the
+# window where catching a break locally beats a CI round trip, and the parallel jobs run
+# underneath it for free. Revisit if the suite grows an integration tier or passes ~5
+# minutes.
+#
+# No hook reaches Bedrock. `atif-sql analyze` / `embed` / `search` bill per call, so they are
+# absent here by construction — a hook that spends money on every push is a hook people
+# disable.
+#
+# Bypass with `--no-verify` in a genuine emergency; CI still refuses.
+
+min_version: 2.1.6
+assert_lefthook_installed: true
+glob_matcher: doublestar
+
+output:
+  - meta
+  - summary
+  - failure
+  - execution_info
+
+commit-msg:
+  jobs:
+    - name: commitizen
+      # commitizen already owns this gate and `[tool.commitizen]` already carries the
+      # escape set (`allowed_prefixes` = Merge / Revert / Pull request / fixup! / squash!),
+      # so a grep here would be a second, drifting copy of a rule that already has a home.
+      # Verified 2026-08-28 against this config: `chore(deps): ...` and `ci(deps): ...` pass
+      # and a bare `deps: ...` is REJECTED — which is why `.github/dependabot.yml` sets its
+      # `commit-message.prefix` to `chore` and `ci` rather than `deps`. A bot must be able to
+      # pass the hook its own config guarantees it will hit.
+      run: "mise exec -- uv run cz check --allow-abort --commit-msg-file {1}"
+      interactive: false
+      fail_text: "Commit message is not conventional — see https://www.conventionalcommits.org."
+
+pre-commit:
+  parallel: true
+  jobs:
+    # ORDER IS THE POINT, and a `group` with `piped: true` is what enforces it: `ruff check
+    # --fix` can rewrite a line the formatter then re-wraps, so running them the other way
+    # round leaves the second rewrite unstaged. `piped` runs the group's jobs in order and
+    # stops at the first failure, while the group as a whole still runs alongside the two
+    # independent jobs below under the `parallel: true` above.
+    #
+    # A `priority:` key does NOT do this. Probed 2026-08-28 against lefthook 2.1.11:
+    # `lefthook validate` rejects `priority` inside `jobs` ("No values are allowed because the
+    # schema is set to 'false'") while `lefthook run pre-commit` accepts the config and ignores
+    # the key — so a `priority` here reads as an ordering guarantee and delivers none.
+    # `mise run lint:hooks` is the gate that catches that, and it exists because this happened.
+    - name: ruff
+      group:
+        piped: true
+        jobs:
+          - name: ruff-format
+            run: "mise exec -- uv run ruff format {staged_files}"
+            glob: "**/*.py"
+            stage_fixed: true
+            fail_text: "ruff format failed — check the error above."
+
+          - name: ruff-lint
+            run: "mise exec -- uv run ruff check --fix {staged_files}"
+            glob: "**/*.py"
+            stage_fixed: true
+            fail_text: "ruff check failed — fix the lint errors above, then re-stage."
+
+    - name: leak-staged
+      # Scans only the staged diff, which is what makes it fast enough for every commit; the
+      # full-history sweep is `mise run security:leaks` in CI. This is the ONE scanner that
+      # GATES rather than reports: a staged secret must never become a commit, and unlike the
+      # CI scans there is no SARIF upload here whose finding detail a non-zero exit would
+      # discard. `--redact` keeps the secret out of the terminal scrollback and out of any
+      # log the hook's output lands in.
+      run: "mise exec -- betterleaks git --staged --no-banner --redact"
+      fail_text: "A secret is staged. Remove it, rotate it, then re-stage."
+
+    - name: uv-lock-sync
+      # Cheap and file-scoped: a member's dependency edit that never reached uv.lock produces
+      # a clone that resolves something else entirely, and `mise run lock:check` in CI would
+      # only find it after the push.
+      run: "mise exec -- uv lock --check"
+      glob: "{pyproject.toml,packages/*/pyproject.toml,uv.lock}"
+      fail_text: "uv.lock is stale — run `uv lock` then re-stage."
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: lint
+      run: mise run lint
+
+    - name: typecheck
+      # ty only. pyright's strict baseline is non-zero on purpose (see
+      # `mise run typecheck:pyright`), so gating a push on it would gate on work nobody has
+      # done yet.
+      run: mise run typecheck
+      skip:
+        - merge
+        - rebase
+
+    - name: lint-imports
+      # The layer DAGs and the converter/corpus/duck/models/embed independence contract. A
+      # per-file hook cannot see an import graph, which is why this is here and not above.
+      run: mise run lint:imports
+      skip:
+        - merge
+        - rebase
+
+    - name: lint-workflows
+      # actionlint over .github/workflows. A broken workflow only fails on GitHub, where the
+      # feedback costs a push and a wait, so it is worth 200ms here.
+      run: mise run lint:workflows
+
+    - name: lint-hooks
+      # `lefthook validate` over this file. lefthook ignores a key its schema rejects rather
+      # than refusing to run, so a hook that no longer does what it says keeps passing until
+      # something asks. This is that something, and it is here rather than in pre-commit
+      # because a config edit is not file-scoped work.
+      run: mise run lint:hooks
+
+    - name: test
+      run: mise run test
+      skip:
+        - merge
+        - rebase
+      fail_text: "pytest failed — run `mise run test` locally before pushing."

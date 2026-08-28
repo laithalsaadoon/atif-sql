@@ -1,0 +1,367 @@
+# Publishes the tagged distributions to PyPI over Trusted Publishing. No API token exists
+# anywhere in this repository — the only credential is a 15-minute macaroon PyPI mints in
+# exchange for this workflow's OIDC identity (probed 2026-08-28 in warehouse's
+# `warehouse/oidc/views.py`: `Expiration(expires_at=not_before + 900)`).
+#
+# Triggered by `release: [published]`, never by a push. The chain is deliberate and each link
+# is a decision by a different mechanism:
+#
+#   release.yml (dispatched by a human)  ->  tag + DRAFT release
+#   a human presses "Publish release"    ->  this workflow starts
+#   the `pypi` environment's reviewers   ->  bytes reach PyPI
+#
+# The draft step is not ceremony. GitHub starts no workflow run from an event raised by the
+# default `GITHUB_TOKEN`, so a release that release.yml published itself would never reach
+# this workflow. Requiring a human to press Publish turns that constraint into the gate.
+#
+# `workflow_dispatch` is the retry path. A publish fails for reasons that have nothing to do
+# with the bytes — an unconfigured trusted publisher, a PyPI outage, a runner without a tool —
+# and without a retry the only way forward would be to spend another version number.
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish, e.g. v0.2.0"
+        required: true
+        type: string
+
+# Least privilege at the top, granted per job below. `id-token: write` in particular reaches
+# only the publish job: the build job must not be able to mint a publishing credential.
+permissions: {}
+
+# Never cancel a publish in flight. A cancelled run between two matrix legs leaves some
+# projects at the new version and some at the old, which is the one state this repository's
+# lockstep versioning cannot express.
+concurrency:
+  group: publish-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  # Building and publishing are separate jobs because the action that publishes says so: its
+  # documented non-goal is building, and it expects the distributions to arrive from "a
+  # separate GitHub Actions CI/CD job running before the one where they call this action and
+  # having restricted privileges". The restricted privilege here is the absence of
+  # `id-token: write`.
+  build:
+    name: build and verify the distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The TAG, not the branch. `main` has moved on by the time a maintainer publishes the
+      # draft, and the bytes that reach PyPI have to be the bytes that were released.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          persist-credentials: false
+
+      # No cache in this job, and that is the point. `mise run check` and coverage read a uv
+      # wheel cache in check.yml because a poisoned entry there costs a wrong test result; here
+      # it would cost a wrong ARTIFACT. GitHub scopes a cache to a branch and lets a
+      # pull-request run write one the default branch can read, so a release build that
+      # restored a cache would let a fork's run choose bytes that get signed and published.
+      # This job pays the full cold-resolve instead, once per release.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: false
+      - run: mise run install:ci
+
+      # The gate, on the tag. release.yml ran it before spending the version number; this run
+      # proves the tagged tree is the one that passed. A PyPI version cannot be replaced, so
+      # this is the last moment a failing test is free.
+      - run: mise run check
+
+      # `--all-packages` builds every workspace member: 7 sdists and 7 wheels, verified
+      # against uv 0.12.1 (`uv build --help` lists `--all-packages`; the flag emitted exactly
+      # 14 artifacts on 2026-08-28). The virtual workspace root carries no `[project]` table,
+      # so it contributes nothing and needs no exclusion.
+      - run: uv build --all-packages --out-dir dist
+
+      # The preflight that turns the one way a first publish ships broken into a failure here.
+      #
+      # `[tool.uv.sources] <pkg> = { workspace = true }` is a LOCAL source. No PyPI installer
+      # sees it, and uv's build backend does not translate it into a version constraint — a
+      # member that lists a sibling in `[project.dependencies]` without a version produces
+      # `Requires-Dist: atif-duck`, a bare name resolved from the global PyPI namespace to
+      # whatever the newest release of that name happens to be, by whoever owns it. `twine
+      # check` passes on that metadata because it is structurally valid; the defect is
+      # semantic, which is exactly the class of failure a shape check cannot see.
+      #
+      # So this asserts MEANING: the seven distribution names are the expected seven, every
+      # one is at the tag's version, and every intra-workspace requirement is pinned `==` to
+      # that same version. A lockstep release is only lockstep if an external installer can
+      # see it.
+      - name: Verify the distributions are publishable
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+          import zipfile
+
+          EXPECTED = {
+              "atif-sql",
+              "atif-analytics",
+              "atif-converter",
+              "atif-corpus",
+              "atif-duck",
+              "atif-embed",
+              "atif-models",
+          }
+          version = os.environ["RELEASE_TAG"].removeprefix("v")
+          dist = pathlib.Path("dist")
+          wheels = sorted(dist.glob("*.whl"))
+          sdists = sorted(dist.glob("*.tar.gz"))
+          problems: list[str] = []
+
+
+          def normalize(name: str) -> str:
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+
+          seen: set[str] = set()
+          for wheel in wheels:
+              with zipfile.ZipFile(wheel) as archive:
+                  entry = next(
+                      n for n in archive.namelist() if n.endswith(".dist-info/METADATA")
+                  )
+                  metadata = archive.read(entry).decode()
+              fields = {}
+              requires = []
+              for line in metadata.splitlines():
+                  if not line or line[0].isspace():
+                      continue
+                  if line.startswith("Requires-Dist:"):
+                      requires.append(line.split(":", 1)[1].strip())
+                  elif ":" in line:
+                      key, _, value = line.partition(":")
+                      fields.setdefault(key.strip(), value.strip())
+              name = normalize(fields.get("Name", wheel.name))
+              seen.add(name)
+              if fields.get("Version") != version:
+                  problems.append(
+                      f"{wheel.name}: Version is {fields.get('Version')!r}, tag says {version!r}"
+                  )
+              for requirement in requires:
+                  dependency = normalize(re.split(r"[\s\[<>=!~;(]", requirement, maxsplit=1)[0])
+                  if dependency not in EXPECTED:
+                      continue
+                  if f"=={version}" not in requirement:
+                      problems.append(
+                          f"{wheel.name}: intra-workspace requirement {requirement!r} is not "
+                          f"pinned to =={version}"
+                      )
+
+          missing = EXPECTED - seen
+          if missing:
+              problems.append(f"no wheel built for: {', '.join(sorted(missing))}")
+          unexpected = seen - EXPECTED
+          if unexpected:
+              problems.append(f"unexpected distribution(s) built: {', '.join(sorted(unexpected))}")
+          if len(wheels) != len(EXPECTED) or len(sdists) != len(EXPECTED):
+              problems.append(
+                  f"expected {len(EXPECTED)} wheels and {len(EXPECTED)} sdists, "
+                  f"found {len(wheels)} and {len(sdists)}"
+              )
+
+          if problems:
+              for problem in problems:
+                  print(f"::error::{problem}")
+              print(
+                  "::error::RELEASING.md carries the exact pyproject.toml text this needs: the "
+                  "atif-cli distribution renames to atif-sql (the console script users type), and "
+                  "every sibling in a member's [project.dependencies] takes an =={version} pin that "
+                  "[tool.commitizen] version_files rewrites on each bump."
+              )
+              sys.exit(1)
+          print(f"7 sdists and 7 wheels at {version}, every intra-workspace pin =={version}")
+          PY
+
+      # Metadata validity, which is a different question from the one above: `twine check`
+      # reads the long description and the core metadata fields and says nothing about what a
+      # requirement MEANS. Both run because both fail differently.
+      - run: uvx --quiet twine check dist/*
+
+      # The artifact as a user receives it: `uv tool install atif-sql` is the documented install
+      # path, resolving the six siblings from `--find-links` and the 113-package third-party
+      # closure from PyPI. `schema` then drives the installed console script over the static
+      # DuckDB catalog, which needs no corpus and no credential.
+      #
+      # `mise run check` cannot replace this. Check resolves the members through uv's workspace
+      # links, where every module is on disk whether or not a manifest names it — the shape this
+      # step exercises is the one PyPI serves.
+      #
+      # The executables are invoked through `uv tool dir --bin` rather than through PATH: `uv
+      # tool install` writes them to a directory a runner shell has no reason to have on PATH,
+      # and a `command not found` swallowed by a shell would read as a passing step.
+      #
+      # `--version` is COMPARED to the tag rather than merely run. cyclopts resolves a default
+      # `--version` by looking the calling module's name up in the installed metadata, and a
+      # distribution name and a module name are independent: the module is `atif_cli`, the
+      # distribution is `atif-sql`, and `importlib.metadata.version("atif_cli")` raises
+      # `PackageNotFoundError`, which cyclopts reports as `0.0.0`. A CLI shipped answering
+      # `0.0.0` passes every other check in this job.
+      - name: Install the built distributions and drive the CLI
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          uv tool install --reinstall --find-links dist atif-sql
+          bin="$(uv tool dir --bin)"
+          expected="${RELEASE_TAG#v}"
+          reported="$("$bin/atif-sql" --version)"
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::the installed CLI reports version '$reported', tag says '$expected'. cyclopts needs an explicit version= on the App: RELEASING.md has the line."
+            exit 1
+          fi
+          "$bin/atif-sql" schema > /dev/null
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
+
+  # One leg per project, and the matrix is what makes a FIRST publish work in a single run.
+  #
+  # PyPI mints one macaroon per OIDC exchange, carrying a `ProjectID` caveat listing the
+  # projects attached to the matched publisher. On a first release those projects are "pending"
+  # publishers, and warehouse reifies at most ONE per exchange — so a single upload of all
+  # fourteen files would create one project and take 403s for the other six. A leg per project
+  # means a mint per project, each reifying its own pending publisher. After the first release
+  # a single mint would cover all seven, and the matrix stays because it also scopes each token
+  # to one project and names the project in a failure.
+  #
+  # WHAT A MAINTAINER CONFIGURES ON PYPI, BEFORE THE FIRST RUN
+  # ---------------------------------------------------------
+  # At <https://pypi.org/manage/account/publishing/> (the ACCOUNT-level "Publishing" page, not
+  # a project page — the projects do not exist yet), add a GitHub "pending publisher" for each
+  # of these seven names:
+  #
+  #     atif-sql   atif-analytics   atif-converter   atif-corpus
+  #     atif-duck  atif-embed       atif-models
+  #
+  # with identical values on every one:
+  #
+  #     Owner:              theagenticguy
+  #     Repository name:    atif-sql
+  #     Workflow name:      publish.yml        <- this file's name, not its `name:` field
+  #     Environment name:   pypi               <- must match `environment.name` below
+  #
+  # Two properties of that form decide whether a release succeeds:
+  #
+  #   * The environment name is optional to PyPI and mandatory here. It is the claim that ties
+  #     a publish to the reviewer-gated environment; omitted, any workflow run in this
+  #     repository could publish, and PyPI emails the owners to say so.
+  #   * A pending publisher does NOT reserve the name. It is valid only until somebody else
+  #     registers that project, at which point it is silently invalidated. All seven names were
+  #     unclaimed on PyPI and TestPyPI when probed on 2026-08-28; six of them are internal
+  #     module boundaries nobody would think to squat, which is precisely why an unpinned bare
+  #     `Requires-Dist` on them is a supply-chain question and not only a resolution question.
+  #
+  # On the first successful upload each pending publisher becomes a normal one and needs no
+  # further configuration. Until then this job fails with a 403 and a PyPI response naming the
+  # publisher it could not find — that pair means "the bootstrap has not happened yet", not
+  # "the workflow is wrong".
+  #
+  # NO TESTPYPI REHEARSAL, deliberately
+  # -----------------------------------
+  # A TestPyPI pass would double the trusted-publisher surface to fourteen registrations for a
+  # dress rehearsal that cannot rehearse the thing that matters. What it would catch — invalid
+  # metadata, a malformed sdist or wheel — the build job already catches offline and
+  # deterministically, with `twine check` plus an actual install-and-run of the artifacts. What
+  # it cannot catch is a resolution against PyPI's index, because TestPyPI's index holds
+  # different packages: an install test there resolves a different graph than a user's. The
+  # remaining failure mode a rehearsal would find is a misconfigured publisher, and TestPyPI
+  # would only prove that TestPyPI's publisher is configured. The cost is a standing chance
+  # that a drifted TestPyPI registration fails a real release for a reason unrelated to it.
+  publish:
+    name: publish ${{ matrix.project }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      # One project failing must not cancel the other six. A partial publish is recoverable
+      # through `workflow_dispatch`; a cancelled one hides which legs got through.
+      fail-fast: false
+      matrix:
+        project:
+          - atif-sql
+          - atif-analytics
+          - atif-converter
+          - atif-corpus
+          - atif-duck
+          - atif-embed
+          - atif-models
+    # The human decision, and the reason it sits HERE rather than earlier: publishing the draft
+    # release says "these are the release notes", which is reversible. This says "these bytes
+    # are on PyPI", which is not — a version can be yanked but never replaced or reused. The
+    # environment must be created with REQUIRED REVIEWERS (Settings -> Environments -> pypi ->
+    # Required reviewers) or the gate is decorative, and its name must match the `Environment
+    # name` on every one of the seven trusted publishers.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/${{ matrix.project }}/
+    permissions:
+      # The OIDC token PyPI exchanges for a short-lived publishing credential, and the reason
+      # no `PYPI_API_TOKEN` secret exists. It also signs the PEP 740 attestations below: the
+      # publish and the attestation are tied to one identity.
+      id-token: write # exchanged with PyPI for a 15-minute publishing macaroon, and signs the attestations
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+
+      # The action uploads everything in `packages-dir`, and a token scoped to one project
+      # rejects a file belonging to another. Staging one project's sdist and wheel keeps each
+      # leg's upload inside its own token's caveat.
+      #
+      # The project name reaches the shell through the environment rather than through `${{ }}`
+      # interpolation: an expression expanded into a `run:` block is executed by the shell, and
+      # keeping matrix values out of the script text is what makes that impossible.
+      - name: Stage this project's distributions
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          set -euo pipefail
+          prefix="${PROJECT//-/_}"
+          mkdir -p to-publish
+          # Wheel and sdist filenames normalize the distribution name with underscores.
+          find dist -maxdepth 1 -name "${prefix}-*" -exec cp {} to-publish/ \;
+          count="$(find to-publish -maxdepth 1 -type f | wc -l)"
+          if [ "$count" -ne 2 ]; then
+            echo "::error::expected one sdist and one wheel for ${PROJECT}, staged ${count}"
+            ls -la dist
+            exit 1
+          fi
+          ls -la to-publish
+
+      # `attestations: true` is the current path for build provenance on PyPI, and
+      # `actions/attest-build-provenance` is not: this action generates PEP 740 digital
+      # attestations with Sigstore, signed by the same OIDC identity that authenticates the
+      # upload, and PyPI displays and verifies them per file. It is the action's default for
+      # Trusted Publishing flows (probed 2026-08-28 against the pinned SHA's action.yml:
+      # `attestations` default `'true'`) and is written out because a default that silently
+      # flipped would silently drop the provenance. Attestations require Trusted Publishing —
+      # an API token cannot produce them, which is a second reason there is no token here.
+      #
+      # `skip-existing: true` so a partially-failed release is completable: re-dispatching this
+      # workflow re-runs all seven legs, and the ones that already uploaded would otherwise
+      # take a 400. PyPI refuses to overwrite an existing filename either way, so this cannot
+      # replace bytes — it can only mask "this version was already published", which a tag
+      # already prevents from meaning two different trees.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: to-publish
+          attestations: true
+          skip-existing: true
+          print-hash: true

@@ -1,0 +1,57 @@
+[project]
+name = "atif-analytics"
+version = "0.1.0"
+description = "LLM and structural analytics pipelines over the materialized ATIF corpus: session classification, sentiment trajectory, stance conflicts, user friction, perceived errors, clustering, c-TF-IDF terms, and community detection."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Laith Al-Saadoon" }]
+requires-python = ">=3.13"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = [
+    "anyio>=4.11.0",
+    # Pinned `==` for the same reason atif-sql pins its five: `[tool.uv.sources]` is
+    # a LOCAL source an external installer never sees, so a bare name would ship as
+    # `Requires-Dist: atif-models` and resolve to whatever the newest release of
+    # that name is. `[tool.commitizen] version_files` rewrites this line on a bump.
+    "atif-models==0.1.0",
+    "graspologic-native>=1.3.1,<2",
+    "hdbscan>=0.8.44",
+    "lancedb>=0.30,<0.38",
+    "loguru>=0.7.3",
+    # ceiling tracks numba's own cap: numba 0.67.0 requires numpy<2.6, and
+    # without a ceiling `uv --upgrade` backsolves numba to 0.53.1, which
+    # breaks umap/hdbscan.
+    "numpy>=2.4.4,<2.6",
+    "polars>=1.40.0",
+    "pyarrow>=23.0.1",
+    "pydantic>=2.13.2",
+    "pydantic-settings>=2.13.1",
+    "scikit-learn>=1.5",
+    "scipy>=1.16",
+    "umap-learn>=0.5.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/theagenticguy/atif-sql"
+Repository = "https://github.com/theagenticguy/atif-sql"
+Issues = "https://github.com/theagenticguy/atif-sql/issues"
+Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.11.14,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "atif_analytics"
+namespace = true
+
+[tool.uv.sources]
+atif-models = { workspace = true }

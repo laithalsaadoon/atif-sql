@@ -1,0 +1,88 @@
+# The definition of done, and the coverage measurement beside it.
+#
+# `mise run check` = ruff check + ruff format --check + ty + import-linter + actionlint +
+# lefthook validate + pytest. Credential-free by construction: the three commands that bill —
+# `atif-sql analyze`, `atif-sql embed`, `atif-sql search` — reach Amazon Bedrock and are
+# deliberately absent from every task this job runs, so the pipeline needs no secrets and
+# cannot spend money. Adding one here would make every pull request from every fork a
+# billable event.
+#
+# The toolchain is declared once, in mise.toml, and pinned by checksum in mise.lock. There
+# is no python-version and no uv-version here: mise-action installs both from those two
+# files, and because a mise.lock is present it installs what the lock says. The command is
+# the same task definition a laptop runs, which is the whole point — nothing about this job
+# can drift from `mise run check`.
+name: check
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  check:
+    name: quality gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the tree the gates run over
+    steps:
+      # `persist-credentials: false`: nothing in this job pushes, and a token left in
+      # .git/config is readable by every subsequent step including third-party code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      # Ask uv where its cache is rather than hardcoding a path: a wrong path caches nothing
+      # and says nothing about it. Runs after mise-action, which is what puts uv on PATH.
+      - run: echo "UV_CACHE_DIR=$(uv cache dir)" >> "$GITHUB_ENV"
+      # uv's wheel cache, keyed on the lockfile. mise-action caches mise's own tools; this
+      # cache is separate, and without it every run rebuilds the numba/scipy/pyarrow set.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      # Before the gate, not inside it: a uv.lock that does not match the seven member
+      # manifests resolves a dependency set nobody reviewed, and every result below would
+      # then describe that unreviewed set.
+      - run: mise run lock:check
+      - run: mise run install:ci
+      - run: mise run check
+
+  # Coverage is its own job rather than a step after `check`, because `mise run check`
+  # already runs the suite and `mise run test:cov` runs it again — sequentially that is two
+  # full suites on the critical path, in parallel it is one suite's wall time. The floor
+  # itself lives in `[tool.coverage.report] fail_under` in pyproject.toml, so this job and a
+  # laptop enforce one number.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the tree the suite runs over
+      id-token: write # OIDC token for Codecov's tokenless upload path
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - run: echo "UV_CACHE_DIR=$(uv cache dir)" >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.UV_CACHE_DIR }}
+          key: uv-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: mise run install:ci
+      - run: mise run test:cov
+      # A public repository needs no CODECOV_TOKEN: the action authenticates the upload with
+      # the OIDC token requested above, so no secret is stored and a fork's pull request
+      # still reports. `fail_ci_if_error: false` because Codecov is a reporting service and
+      # its outage is not a defect in this commit — the coverage FLOOR is already enforced by
+      # `mise run test:cov` in the step above, which fails on its own.
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage.xml
+          use_oidc: true
+          fail_ci_if_error: false

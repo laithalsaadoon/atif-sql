@@ -1,0 +1,21 @@
+---
+/**
+ * Starlight's page title, with the page-action controls beneath it.
+ *
+ * Copy to `src/components/PageTitle.astro` and name it under
+ * `starlight({ components: { PageTitle: … } })`, beside `PageActions.astro`.
+ *
+ * `PageTitle` is the override point because it is the first thing inside the content column on every
+ * page the default template renders. A splash-template route renders no `PageTitle`, so a site that
+ * declares one and wants the controls there mounts them a second time in that template.
+ *
+ * The default component is delegated to rather than reimplemented, so the heading keeps the id that
+ * the skip link and the table of contents both target.
+ */
+import Default from "@astrojs/starlight/components/PageTitle.astro"
+
+import PageActions from "./PageActions.astro"
+---
+
+<Default {...Astro.props}><slot /></Default>
+<PageActions />

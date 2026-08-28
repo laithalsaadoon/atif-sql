@@ -1,0 +1,656 @@
+# atif-sql — virtual workspace root.
+#
+# This pyproject carries NO [project] table on purpose: the root is a uv
+# "virtual" workspace member that only pins the member list, the shared dev
+# dependency-group, and the shared tool config (ruff / ty / import-linter /
+# pytest). Every installable package lives under packages/*.
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv]
+required-version = ">=0.11.7"
+resolution = "highest"
+python-preference = "only-managed"
+python-downloads = "automatic"
+compile-bytecode = true
+link-mode = "clone"
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.13.10",
+    "hypothesis>=6.157.0",
+    "import-linter>=2.3",
+    "lefthook>=2.1.6",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.11",
+    "ty>=0.0.31",
+]
+
+# ---------------------------------------------------------------------------
+# ruff — shared across every workspace member. The py313 target follows the
+# toolchain: harbor==0.22.0 floors at >=3.12 and mise pins 3.13, so a newer
+# target would accept syntax the pinned interpreter cannot run.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = [
+    "packages/atif-converter/src",
+    "packages/atif-corpus/src",
+    "packages/atif-duck/src",
+    "packages/atif-models/src",
+    "packages/atif-analytics/src",
+    "packages/atif-embed/src",
+    "packages/atif-cli/src",
+]
+
+[tool.ruff.lint]
+# Every rule ruff ships, so a rule that is OFF is off by a decision recorded
+# below rather than by never having been named. Preview rules stay dormant
+# (`preview` is unset): `DOC*` (pydoclint) is selected and reports nothing
+# until preview is enabled, which is why the docstring gate here is `D` +
+# `[tool.ruff.lint.pydocstyle]`.
+select = ["ALL"]
+# Each entry states the MEASURED reason it is off (counts taken 2026-08-28 over
+# the 154 package files + 4 verifier scripts + 1 experiment protocol). A rule
+# whose finding could be a real defect does not belong here: `S608` and `SLF001`
+# are enforced, with a per-line `# noqa` at each of the 15 SQL-construction sites
+# and each private read, so the argument for the exception sits next to the code
+# it excuses and a new site has to make that argument again.
+ignore = [
+    # --- rules ruff itself documents as incompatible with `ruff format` ------
+    # `ruff format` is the formatter of record; both of these legislate a
+    # decision the formatter already makes, and ruff's own formatter-compat
+    # table names them.
+    "COM812", # 531 sites, every one a trailing comma `ruff format` placed or omitted.
+    "ISC001", # 0 sites today; listed so the formatter keeps deciding single-line implicit concatenation.
+    "E501",   # Line length is the formatter's. E501 can only fire where it cannot break a line: 14 sites, 8 of them inside LLM prompt text where rewrapping changes the string sent to the model.
+
+    # --- measured house rules ----------------------------------------------
+    "ANN401", # 21 sites, each a duckdb / lancedb / boto3 / tenacity handle or a decoded-JSON value from a distribution shipping no `py.typed`. `Any` is the honest annotation there; `object` would only move the cast inward.
+    "PLC0415", # 182 sites. `atif_cli.app` MUST NOT import duckdb / harbor / lancedb / boto3 / polars at module scope, and `packages/atif-cli/tests/test_lean_import.py` asserts that in a fresh interpreter — a top-level import fails a test, so the deferred import is the contract.
+    "D401",   # 33 sites, every one a value-returning accessor or predicate whose summary names the returned value as a noun phrase ("True when …", "The newest ``mtime_ns`` …"). Imperative mood describes an action; these describe a value.
+    "RUF001", # 13 sites, all typography inside string literals (em dash, arrow, non-breaking hyphen).
+    "RUF002", # 52 sites, the same typography inside docstrings.
+    "RUF003", # 16 sites, the same typography inside comments.
+
+    # --- the three "move this import under TYPE_CHECKING" rules -------------
+    # Probed 2026-08-28: applying all 58 fixes and then walking every module
+    # with `typing.get_type_hints` makes resolution FAIL on 159 first-party
+    # functions and classes (`NameError: name 'Path' is not defined`,
+    # `'Sequence'`, `'SessionSnapshot'`, …). atif-sql is designed to be embedded
+    # in-process, so a consumer that introspects a signature at run time — a
+    # pydantic `TypeAdapter`, a cyclopts wrapper, anything calling
+    # `get_type_hints` — is part of the surface, and 43 of the 58 imports are
+    # stdlib (`pathlib`, `collections.abc`) that every module already pays for.
+    # The deferred-import property that DOES matter here is enforced where it
+    # matters, by a test rather than a lint: `test_lean_import.py` proves in a
+    # fresh interpreter that `import atif_cli.app` pulls in no duckdb / harbor /
+    # lancedb / boto3 / polars. TC004 / TC005 / TC006 / TC010 stay ON.
+    "TC001", "TC002", "TC003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**/*" = [
+    # `assert` IS the test, and a credential-shaped literal in a fixture is
+    # fixture data.
+    "S101", "S105", "S106", "S107",
+    # A test asserts against the literal it is pinning; naming it as a constant
+    # moves the expected value away from the assertion that reads it.
+    "PLR2004",
+    # pytest resolves fixtures and parametrize arguments by name, not by
+    # annotation. The annotations that change what a checker can SEE are covered
+    # over these same trees by pyright's `reportMissingParameterType` and
+    # `reportUnknownParameterType`, both enforced at zero — so a fixture
+    # parameter is still typed; `ANN` would additionally demand `-> None` on
+    # every test body, which tells a reader nothing.
+    "ANN", "T20",
+    "FBT001", "FBT002",
+    # Reaching into a module private is how a unit test pins an internal
+    # invariant. pyright's reportPrivateUsage is switched off over the same
+    # trees, for the same reason, in `[[tool.pyright.executionEnvironments]]`.
+    "SLF001",
+    "PT011", "PT018", "D",
+    # 21 sites, audited one by one: every interpolation is a test-local literal
+    # (`DIM = 4`, the two `duck_fixtures.SESSION_IDS` UUIDs), a name iterated out
+    # of `atif_duck.domain.catalog`, or a `tmp_path` corpus root escaped by the
+    # test's own quote-doubling helper. The 15 src sites carry per-line
+    # `# noqa: S608` instead, each naming what it interpolates.
+    "S608",
+    # 36 sites: a declared-but-unread test parameter IS pytest's injection
+    # mechanism (`monkeypatch` requested for its side effect), and `lambda *_:`
+    # is the shape a monkeypatch stub has to have to match the signature it
+    # replaces.
+    "ARG",
+    # A tests tree must NOT be an importable package: pytest gives each test
+    # module a unique top-level name under rootdir collection, and adding
+    # `__init__.py` would change which conftest and which fixture module each
+    # test resolves.
+    "INP001",
+]
+"**/__init__.py" = ["F401", "E402"]
+# The cyclopts CLI legitimately prints at the process boundary.
+"**/atif_cli/app.py" = ["T20"]
+"**/atif_cli/cron.py" = ["T20"]
+# `scripts/` and `experiments/` are executed by path (`python3 scripts/x.py`),
+# never imported, so neither is a package.
+"scripts/**" = ["INP001"]
+"experiments/**" = ["INP001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["atif_converter", "atif_corpus", "atif_duck", "atif_models", "atif_analytics", "atif_embed", "atif_cli", "conftest"]
+combine-as-imports = true
+split-on-trailing-comma = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# Forbid stdlib `logging` everywhere in atif-sql. The whole workspace logs
+# via loguru, so one sink configures every package instead of two competing.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"logging".msg = "Use loguru via `from loguru import logger`."
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "cyclopts.Parameter",
+    "pydantic.Field",
+    "pydantic_settings.SettingsConfigDict",
+]
+
+[tool.ruff.lint.flake8-annotations]
+ignore-fully-untyped = true
+suppress-none-returning = true
+allow-star-arg-any = true
+
+# The four size limits are RATCHETS, each set at the measured worst function in
+# the tree (2026-08-28) rather than at an aspirational number nothing meets. A
+# limit set below what the code achieves is a rule that has to be ignored to
+# pass, which is how a size rule stops meaning anything; set here, the next
+# function to grow past today's worst fails the gate.
+#
+#   max-args       19 — `atif_cli.app.search`, whose parameters ARE the CLI flags
+#                       cyclopts binds; collapsing them into a settings object
+#                       would move the CLI surface out of the signature.
+#   max-branches   39 — `atif_converter.domain.enrichment.enrich_trajectory`
+#   max-returns     5 — `atif_models.domain.schema` / `parquet_cache._shard_may_hold`
+#   max-statements 119 — `atif_analytics...use_cases.friction._friction_async`
+[tool.ruff.lint.pylint]
+max-args = 19
+max-branches = 39
+max-returns = 5
+max-statements = 119
+
+# Same ratchet, cyclomatic rather than syntactic. The maximum in the tree is 38,
+# in `atif_converter.domain.enrichment.enrich_trajectory` — the function that
+# reconciles harbor's steps against the raw JSONL records, where each branch is
+# one named fidelity gap.
+[tool.ruff.lint.mccabe]
+max-complexity = 38
+
+# numpy, because that is what the docstrings already are: `Parameters` /
+# `Returns` / `Raises` over a dashed underline, and zero google-style `Args:`
+# sections anywhere in the tree. Measured 2026-08-28 over the whole workspace:
+# numpy 60 findings, google 43, pep257 65, no convention 90. google scores lower
+# only by counting 14 D416 "section name should end with a colon" hits, i.e. by
+# proposing to rewrite 14 numpy sections into google ones — a lower number
+# bought with a docstring rewrite is not a better fit.
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+# Apache-2.0 ships here, so the per-file SPDX tag is a CHECKED invariant: a new
+# file without it fails `mise run lint` rather than being noticed at release.
+# The tag is the whole notice — an SPDX identifier is machine-readable and a
+# prose copyright line is not, and REUSE/SPDX tooling reads this exact form.
+[tool.ruff.lint.flake8-copyright]
+notice-rgx = "SPDX-License-Identifier: Apache-2\\.0"
+
+# `TC*` moves a typing-only import under `if TYPE_CHECKING:`. Two families of
+# class DO evaluate their annotations at run time and would break: pydantic
+# models and pydantic-settings settings classes resolve field types when the
+# class is built. Naming them here keeps their imports at module scope.
+# cyclopts also resolves command annotations at run time, but `atif_cli.app` and
+# `atif_cli.cron` have zero `TC*` findings, so no import there moves.
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "pydantic_settings.BaseSettings",
+]
+runtime-evaluated-decorators = [
+    "pydantic.validate_call",
+    "pydantic.dataclasses.dataclass",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+# ---------------------------------------------------------------------------
+# ty — strict over every member's src/ + tests/ tree.
+# ---------------------------------------------------------------------------
+[tool.ty.environment]
+python-version = "3.13"
+python-platform = "linux"
+python = ".venv"
+root = [
+    "./packages/atif-converter/src",
+    "./packages/atif-corpus/src",
+    # Tests import shared fixtures via uniquely-named fixture modules
+    # (corpus_fixtures / duck_fixtures / cli_fixtures) so multiple tests
+    # dirs can be roots; the conftest.py files themselves are never
+    # imported by name, so they do not collide in ty.
+    "./packages/atif-corpus/tests",
+    "./packages/atif-duck/src",
+    "./packages/atif-models/src",
+    "./packages/atif-analytics/src",
+    "./packages/atif-analytics/tests",
+    "./packages/atif-embed/src",
+    "./packages/atif-embed/tests",
+    "./packages/atif-cli/src",
+    "./packages/atif-cli/tests",
+]
+
+[tool.ty.src]
+include = [
+    "packages/atif-converter/src",
+    "packages/atif-converter/tests",
+    "packages/atif-corpus/src",
+    "packages/atif-corpus/tests",
+    "packages/atif-duck/src",
+    "packages/atif-models/src",
+    "packages/atif-models/tests",
+    "packages/atif-analytics/src",
+    "packages/atif-analytics/tests",
+    "packages/atif-embed/src",
+    "packages/atif-embed/tests",
+    "packages/atif-cli/src",
+    "packages/atif-cli/tests",
+]
+respect-ignore-files = true
+
+[tool.ty.terminal]
+error-on-warning = true
+output-format = "concise"
+
+[tool.ty.rules]
+all = "error"
+
+[[tool.ty.overrides]]
+include = ["packages/*/tests/**"]
+
+[tool.ty.overrides.rules]
+not-subscriptable = "ignore"
+not-iterable = "ignore"
+unsupported-operator = "ignore"
+invalid-argument-type = "ignore"
+possibly-unresolved-reference = "warn"
+possibly-missing-attribute = "warn"
+unused-ignore-comment = "warn"
+
+# ---------------------------------------------------------------------------
+# pytest — one run over every member's tests/ tree.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["packages/*/tests"]
+markers = [
+    "integration: end-to-end tests through the real converter into a tmp corpus",
+]
+
+# ---------------------------------------------------------------------------
+# Commitizen — the conventional-commits gate (commit-msg hook) AND the version
+# bump. One version covers the repository: it ships a single CLI distribution,
+# so a per-member version would be seven numbers describing one artifact.
+# ---------------------------------------------------------------------------
+[tool.commitizen]
+name = "cz_conventional_commits"
+allow_abort = false
+allowed_prefixes = ["Merge", "Revert", "Pull request", "fixup!", "squash!"]
+# The single source of truth for that one version. The workspace root is virtual and
+# carries no [project] table, so commitizen's default `version_provider = "commitizen"`
+# reads this key rather than a PEP 621 field.
+version = "0.1.0"
+version_scheme = "pep440"
+# `v0.2.0`. publish.yml derives the release version by stripping the leading `v`, and
+# `gh release create --verify-tag` fails loudly if this format and that expectation
+# diverge.
+tag_format = "v$version"
+# A breaking change moves 0.1.0 to 0.2.0 rather than to 1.0.0. Reaching 1.0.0 is a
+# decision, not a side effect of a `!` in a commit subject.
+major_version_zero = true
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+# `chore(release):` rather than commitizen's default `bump:`. Both satisfy `cz check`,
+# but CONTRIBUTING.md documents the type set as feat|fix|chore|docs|refactor|test|perf|ci,
+# and a release commit using a type outside it makes the documented list wrong.
+bump_message = "chore(release): $new_version"
+# `uv.lock` records every workspace member's version, so rewriting the seven manifests
+# leaves the lockfile describing the previous release — and `mise run lock:check` then
+# fails on the release commit itself, in check.yml, immediately after the push. These
+# hooks run AFTER the version files are rewritten and BEFORE the commit, the only window
+# where the re-resolved lockfile can land in the same commit as the versions it resolves.
+# `git add` is separate because commitizen stages only the files it rewrote itself, and a
+# failing hook aborts the bump.
+pre_bump_hooks = [
+    "uv lock",
+    "git add uv.lock",
+]
+# Each entry is `path:regex`; the path is a glob, and on every line matching the regex the
+# current version string is replaced. Run with `--check-consistency` (release.yml does) so
+# a file that no longer contains the current version FAILS instead of silently going stale
+# — the state a hand-edited manifest or a renamed pin leaves behind.
+#
+# The pin entries are per-file rather than globbed on purpose: `--check-consistency`
+# requires a hit in every matched file, and five of the seven members carry no
+# intra-workspace pin.
+version_files = [
+    'packages/*/pyproject.toml:^version',
+    'packages/atif-cli/pyproject.toml:^\s*"atif-',
+    'packages/atif-analytics/pyproject.toml:^\s*"atif-models==',
+]
+
+# ---------------------------------------------------------------------------
+# import-linter — one layers contract per layered package, plus an
+# independence contract: atif-converter / atif-corpus / atif-duck /
+# atif-models / atif-embed may never import each other. Only atif-cli
+# composes them (atif-analytics additionally composes atif-models — see the
+# forbidden contract below). atif-embed reads the corpus through its own
+# TextRowsPort duckdb adapter over the CONTRACT corpus layout (read_json
+# directly), never through atif-duck.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["atif_converter", "atif_corpus", "atif_duck", "atif_models", "atif_analytics", "atif_embed", "atif_cli"]
+
+[[tool.importlinter.contracts]]
+name = "atif-converter layered architecture (application > infrastructure > domain)"
+type = "layers"
+layers = [
+    "atif_converter.application",
+    "atif_converter.infrastructure",
+    "atif_converter.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "atif-corpus layered architecture (application > infrastructure > domain)"
+type = "layers"
+layers = [
+    "atif_corpus.application",
+    "atif_corpus.infrastructure",
+    "atif_corpus.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "atif-embed layered architecture (application > infrastructure > domain)"
+type = "layers"
+layers = [
+    "atif_embed.application",
+    "atif_embed.infrastructure",
+    "atif_embed.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "atif-models layered architecture (infrastructure > domain)"
+type = "layers"
+layers = [
+    "atif_models.infrastructure",
+    "atif_models.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "atif-analytics layered architecture (application > infrastructure > domain)"
+type = "layers"
+layers = [
+    "atif_analytics.application",
+    "atif_analytics.infrastructure",
+    "atif_analytics.domain",
+]
+
+# PERMISSION, not an observed import: the contracts leave atif-cli and
+# atif-analytics free to import atif-models — both are absent from `modules`
+# below. atif-cli exercises none of it: it declares no atif-models dependency
+# and reaches the package only transitively through atif-analytics. The
+# `forbidden` contract then shuts every other atif-analytics edge.
+[[tool.importlinter.contracts]]
+name = "converter / corpus / duck / models / embed are mutually independent (only atif-cli composes; atif-analytics may import atif-models only)"
+type = "independence"
+modules = ["atif_converter", "atif_corpus", "atif_duck", "atif_models", "atif_embed"]
+
+[[tool.importlinter.contracts]]
+name = "atif-analytics imports only atif-models among workspace packages"
+type = "forbidden"
+source_modules = ["atif_analytics"]
+forbidden_modules = ["atif_converter", "atif_corpus", "atif_duck", "atif_embed", "atif_cli"]
+
+# ---------------------------------------------------------------------------
+# coverage.py — branch coverage over the seven member src/ trees.
+#
+# `source` names the seven import packages rather than the seven
+# `packages/*/src` paths: the members are installed editable, so a path-based
+# source would double-count a module reached through site-packages and a module
+# reached through the workspace path. Naming the import package makes the two
+# resolve to one measured unit.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+parallel = false
+source = [
+    "atif_converter",
+    "atif_corpus",
+    "atif_duck",
+    "atif_models",
+    "atif_analytics",
+    "atif_embed",
+    "atif_cli",
+]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Measured 2026-08-28 on the 819-test suite: 89.47% combined (4621/5066 lines,
+# 1132/1364 branches), which coverage.py prints as TOTAL 89%. The floor sits
+# just below the measured value so an honest small regression fails the gate
+# instead of an aspirational number failing it on the day it lands. Raise this
+# when the suite genuinely climbs; never above what it achieves.
+fail_under = 89
+exclude_also = [
+    # A Protocol body is a signature, not code — `...` is never executed and a
+    # port with an executed body would be an adapter.
+    "^\\s*\\.\\.\\.$",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(?:typing\\.)?overload",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+# ---------------------------------------------------------------------------
+# pyright — a SECOND type checker over the same trees ty checks.
+#
+# ty is Astral's checker and is pre-1.0 (0.0.x), so a rule it does not yet
+# implement is a hole no amount of strictness in its own config closes. pyright
+# in strict mode is the independent second opinion on that hole. Both run; the
+# overlap is the point, not redundancy.
+#
+# Deleting this table does not make pyright stricter or looser in a way anyone
+# notices from the exit code — it silently drops `typeCheckingMode = "strict"`
+# back to pyright's `standard` default, which turns the entire reportUnknown*
+# family off and reports a fraction of the real count.
+#
+# Every rule strict mode turns on is ENFORCED AT ZERO except the four switched
+# off at the bottom of this table, each of which states the measurement behind
+# it. `reportMissingParameterType` and `reportUnknownParameterType` — our own
+# annotations, which is exactly what a type gate is for — are ON and at zero.
+# ---------------------------------------------------------------------------
+[tool.pyright]
+pythonVersion = "3.13"
+pythonPlatform = "Linux"
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "strict"
+include = [
+    "packages/atif-converter/src",
+    "packages/atif-converter/tests",
+    "packages/atif-corpus/src",
+    "packages/atif-corpus/tests",
+    "packages/atif-duck/src",
+    "packages/atif-duck/tests",
+    "packages/atif-models/src",
+    "packages/atif-models/tests",
+    "packages/atif-analytics/src",
+    "packages/atif-analytics/tests",
+    "packages/atif-embed/src",
+    "packages/atif-embed/tests",
+    "packages/atif-cli/src",
+    "packages/atif-cli/tests",
+    "scripts",
+]
+# The seven member src/ trees, so a first-party import resolves to the
+# workspace source rather than to the editable install's redirect.
+extraPaths = [
+    "packages/atif-converter/src",
+    "packages/atif-corpus/src",
+    "packages/atif-duck/src",
+    "packages/atif-models/src",
+    "packages/atif-analytics/src",
+    "packages/atif-embed/src",
+    "packages/atif-cli/src",
+]
+exclude = [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.ruff_cache",
+    ".venv",
+    "dist",
+    "build",
+    # Numbered experiment protocols are not wired into any gate (pytest's
+    # testpaths and `mise run check` both skip them), so a checker that reads
+    # them reports on code no gate owns.
+    "experiments",
+    "scripts/.run",
+]
+
+# --- the four rules that are OFF, and the measurement behind each -----------
+#
+# The three Unknown-PROPAGATION rules below are the ONLY errors this table
+# switches off: 415 findings, measured 2026-08-28, each traced to its origin.
+# NONE of them is a missing or wrong first-party annotation:
+#
+#   266 originate in a distribution that ships no type information at all —
+#       pyarrow 141, boto3 38, botocore 38, graspologic_native 37, scipy 37,
+#       sklearn 21, hdbscan 14, umap 14 (a finding can name more than one), plus
+#       15 where a py.typed library RETURNS an untyped type (lancedb -> pyarrow).
+#   144 originate at `isinstance(x, dict)` / `isinstance(x, list)` applied to a
+#       value read out of a decoded JSON document declared `dict[str, Any]` — a
+#       Claude Code `~/.claude` JSONL record, a harbor ATIF trajectory, a JSON
+#       Schema. pyright narrows an EXPLICIT `Any` to an IMPLICIT
+#       `dict[Unknown, Unknown]` there, so the finding is a bookkeeping
+#       distinction between two spellings of "no information", and every
+#       available fix renames Unknown to Any without adding a fact. Heaviest:
+#       enrichment.py 59, corpus_reader.py 33, schema.py 13, edges.py 11.
+#     8 are pyright reporting `list[Unknown]` for a field whose DECLARED type is
+#       concrete, because `dataclasses.field(default_factory=list)` and pydantic
+#       `Field(...)` are typed to return `Any`. Reproduced 2026-08-28 on six
+#       lines of stdlib: `uuids: list[str] = field(default_factory=list)` alone
+#       reports `Type of "uuids" is "list[Unknown]"`.
+#
+# What would let them be re-enabled, in order of leverage: a `TypedDict` model of
+# the JSONL record and the ATIF trajectory (closes the 144), and `pyarrow-stubs`
+# + `boto3-stubs` + `botocore-stubs` + `scipy-stubs` in the dev group (closes
+# ~250). Neither is enough on its own, and sklearn / umap / hdbscan /
+# graspologic_native have no stubs to add, so the rules stay off rather than
+# carrying a hundred per-site suppressions that say the same sentence.
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+# 23 warnings over 11 modules that genuinely publish no stubs and no `py.typed`:
+# pyarrow (+ pyarrow.parquet), boto3, botocore.exceptions, botocore.config,
+# scipy.sparse (+ scipy.sparse.csgraph), graspologic_native, hdbscan, umap,
+# sklearn.feature_extraction.text. Third-party stub distributions exist for four
+# of them (pyarrow, boto3, botocore, scipy) and for none of the other seven, so
+# adding those four leaves the rule non-enforceable while adding four supply-chain
+# edges to a release that gates on osv-scanner and pip-audit. Off rather than left
+# as a warning nobody reads.
+reportMissingTypeStubs = "none"
+
+# ---------------------------------------------------------------------------
+# Reaching into a module private is how a unit test pins an internal invariant,
+# so `reportPrivateUsage` is off over the tests trees ONLY — one execution
+# environment per tree, because pyright matches `root` as a directory rather
+# than a glob. This is the same decision ruff's `SLF001` per-file-ignore makes,
+# in the same place, for the same reason.
+#
+# src KEEPS the rule. Where one module reads another's symbol, the symbol is
+# public and says so (`atif_corpus...materialize.read_watermark`,
+# `atif_analytics...corpus_reader.parse_ts`, `checkpointer.connect` / `.to_iso`).
+# The two that stay private are `checkpointer`'s bootstrap sentinels, and
+# `retry_queue` carries a per-site `# pyright: ignore[reportPrivateUsage]` naming
+# why the lock has to be the same object in both modules.
+# ---------------------------------------------------------------------------
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-converter/tests"
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-corpus/tests"
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-duck/tests"
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-models/tests"
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-analytics/tests"
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-embed/tests"
+reportPrivateUsage = "none"
+
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-cli/tests"
+reportPrivateUsage = "none"
+
+# ---------------------------------------------------------------------------
+# bandit — SAST over the member src/ trees.
+#
+# ruff's `S` ruleset IS flake8-bandit, so this is a second implementation of
+# largely the same rules rather than novel coverage. It is kept deliberately
+# for two reasons: an independent implementation disagrees with ruff's port
+# where the port is incomplete, and bandit emits SARIF (through
+# bandit-sarif-formatter) which ruff does not, so its findings reach GitHub
+# code scanning alongside every other scanner. Cross-file taint analysis is
+# semgrep's job, not this one's.
+#
+# `exclude_dirs` drops the tests trees for the same reason
+# `[tool.ruff.lint.per-file-ignores]` drops S101 there: `assert` is what a test
+# is made of. Measured 2026-08-28 over `packages/`: WITH this table bandit
+# reports 15 findings, all real B608 in src/; WITHOUT it, 1739 — 1724 of them
+# inside tests and 1695 of those B101 assert_used. A code-scanning upload of
+# the second number is an upload nobody reads.
+#
+# bandit does not auto-discover pyproject.toml — `mise run security:bandit`
+# passes `-c pyproject.toml`, which is why this table is read at all.
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = [
+    "packages/atif-converter/tests",
+    "packages/atif-corpus/tests",
+    "packages/atif-duck/tests",
+    "packages/atif-analytics/tests",
+    "packages/atif-embed/tests",
+    "packages/atif-models/tests",
+    "packages/atif-cli/tests",
+]

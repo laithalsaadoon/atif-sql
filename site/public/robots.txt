@@ -1,0 +1,198 @@
+# robots.txt — the AI-crawler policy for atif-sql's documentation site.
+#
+# ---------------------------------------------------------------------------------------------------
+# WHERE THIS FILE BINDS, AND WHERE IT DOES NOT. READ THIS FIRST.
+#
+# RFC 9309 s2.3 puts robots.txt at `scheme:[//authority]/robots.txt`, and authority is host plus port.
+# robots.txt is therefore PER-ORIGIN, and a site served from a path segment cannot own one. This site is
+# a GitHub Pages PROJECT site at `https://theagenticguy.github.io/atif-sql/`, so Astro copies this file
+# to `/atif-sql/robots.txt` — a path with no protocol meaning, which no crawler fetches.
+#
+# The file that governs every crawler reaching these pages is `https://theagenticguy.github.io/robots.txt`,
+# owned by the `theagenticguy.github.io` USER-pages repository. This copy is the policy atif-sql has
+# decided on and the exact text to install there; the groups below are written for the whole origin, which
+# is what a file at that location governs.
+#
+# Two consequences, both deliberate:
+#
+#   * Until that text is installed at the origin root, the effective policy for these pages is the
+#     origin's existing robots.txt — or, absent one, the fully permissive default described below.
+#   * `Sitemap:` at the bottom carries the `/atif-sql/` segment, because a sitemap reference from the
+#     origin root has to name the project path to reach this site's sitemap.
+#
+# ---------------------------------------------------------------------------------------------------
+# A MISSING robots.txt IS PERMISSIVE, NOT NEUTRAL.
+#
+# Absent this file, every crawler below proceeds as if fully allowed. So a site with no robots.txt has
+# already granted bulk training access — it just has no record of having decided to. That is the failure
+# this file exists to fix. Not the access: the absence of a decision. An explicit `Allow` and a missing
+# file produce identical traffic and are not equivalent artifacts. One can be reviewed.
+#
+# Two more asymmetries follow from the same point. Google-Extended and Applebot-Extended are control
+# tokens that never fetch anything (verified 2026-08-26 on both vendors' crawler pages), so a rule for
+# them governs USE of already-crawled content and nothing else. Unmentioned, they default to allowed.
+# And Applebot inherits Googlebot's rules when Applebot is unmentioned, while Amzn-SearchBot follows the
+# directives given to other search bots — so silence in this file is inherited from a group you did not
+# write for the crawler you were thinking about.
+#
+# ---------------------------------------------------------------------------------------------------
+# THE TWO CLASSES, AND WHY THEY GET DIFFERENT ANSWERS.
+#
+# CLASS A — training and bulk corpus crawlers. They sweep the whole site on their own schedule, for no
+# one in particular, and the corpus feeds model training or an AI answer index. The traffic is unbounded
+# and the benefit to the reader is indirect.
+#
+# CLASS B — user-initiated fetchers. A specific human pasted this URL or asked a question, and the
+# assistant is fetching this one page for them, now, in a live session. The traffic is bounded by human
+# attention, and the benefit is immediate and attributable: it is the same person who would have
+# opened the page in a browser tab.
+#
+# A docs site whose whole purpose is being agent-readable wants Class B allowed without qualification.
+# Blocking it means a reader who asks their assistant about this product gets an apology instead of the
+# documentation, which is precisely the outcome the raw Markdown twins, the llms.txt bundles and the
+# "Open in" controls exist to prevent. Blocking Class B while shipping llms.txt is a site arguing with
+# itself.
+#
+# ---------------------------------------------------------------------------------------------------
+# HOW A CRAWLER READS THIS FILE (RFC 9309), because two of these are near-universally misread.
+#
+#   * A crawler obeys exactly ONE group: the first whose product token matches it. `User-agent: *` is a
+#     fallback used ONLY when no named group matches. So a token named below does not also inherit the
+#     `*` group's rules — every rule that applies to it must appear inside its own group.
+#   * Product-token matching is CASE-INSENSITIVE (RFC 9309 s2.2.1), so `meta-externalagent` and
+#     `Meta-ExternalAgent` are one rule. Path values are case-SENSITIVE. A token may contain only
+#     `a-zA-Z_-`, which is why a non-ASCII hyphen breaks a directive outright rather than loosening it.
+#   * `Allow:` is standardized (s2.2.2) and most-specific-match-wins by path length; on an exact tie the
+#     allow rule wins.
+#   * `Sitemap:` is NOT part of RFC 9309 — it is an "other record" a crawler MAY interpret. It must be an
+#     absolute URL, belongs to no group, and may be repeated.
+#
+# ASCII HYPHENS ONLY. Perplexity's own documentation renders `Perplexity-User` in one table cell with
+# U+2011 NON-BREAKING HYPHEN (verified at the codepoint level, 2026-08-26). A directive copy-pasted from
+# that cell parses as a token no crawler answers to, and nothing anywhere reports the mismatch. Every
+# hyphen in this file is U+002D.
+#
+# Editing this file is not instant. Propagation after a change, from each vendor's own documentation:
+# OpenAI, Perplexity, Meta and Amazon roughly 24 hours; DuckDuckGo 72 hours; Amazon may act on a cached
+# copy up to 30 days old.
+
+
+# ===================================================================================================
+# CLASS B — user-initiated fetchers. ALLOWED: a human is waiting for this page.
+# ===================================================================================================
+#
+# Note what an `Allow` line is worth per vendor, because only two of these treat it as binding. This is
+# each vendor's own published statement, verified 2026-08-26:
+#
+#   Claude-User      binding. Anthropic: its bots honor robots.txt, and Claude-User is the token site
+#                    owners use to control user-initiated access.
+#   DuckAssistBot    binding, with a 72-hour lag before a change takes effect.
+#   ChatGPT-User     advisory. OpenAI: "Because these actions are initiated by a user, robots.txt rules
+#                    may not apply."
+#   Perplexity-User  advisory. Perplexity: "this fetcher generally ignores robots.txt rules."
+#   Amzn-User        advisory. Amazon: "it may not follow all robots.txt directives."
+#
+# The advisory ones are listed anyway, and the reason is not optimism. A named group with `Allow: /` is
+# the record that this access is intended, so a later reader does not read the fetch in an access log as
+# a violation and does not close it by reflex.
+#
+# Google's user-triggered fetchers (Google-Agent, Google-GeminiNotebook) are DELIBERATELY ABSENT.
+# Google publishes them as HTTP user-agent strings and gives them no robots.txt token, and states that
+# user-triggered fetchers generally ignore robots.txt. A group naming them would be a directive with no
+# documented effect, indistinguishable, to a later reader, from one that works.
+
+User-agent: Claude-User
+User-agent: ChatGPT-User
+User-agent: Perplexity-User
+User-agent: DuckAssistBot
+User-agent: Amzn-User
+User-agent: meta-externalfetcher
+Allow: /
+
+
+# ===================================================================================================
+# CLASS A — training, bulk corpus, and AI search indexes. ALLOWED, AS A RECORDED DECISION.
+# ===================================================================================================
+#
+# THIS IS THE DECISION TO MAKE DELIBERATELY. Public documentation exists to be read, and a model that
+# has read it answers questions about this product correctly instead of inventing an API. Since the
+# alternative to an explicit `Allow` here is the same access with no record of it, allowing explicitly
+# costs nothing operationally and buys a reviewable artifact.
+#
+# Reverse it by replacing `Allow: /` with `Disallow: /` in the group below, and say why in a comment on
+# the same line. Do that when the corpus is not public documentation: pre-release material, a customer's
+# content, anything under an agreement that limits redistribution. Do NOT do it merely because the
+# traffic is unattributed — that reasoning also blocks the search index the site depends on.
+#
+# Class A tokens split three ways and the distinction survives in the grouping below, because a site
+# that wants to allow search while declining training needs the two groups already separated.
+
+# A1 — corpus collection that feeds model training.
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: CCBot
+User-agent: meta-externalagent
+User-agent: Applebot
+User-agent: Amazonbot
+Allow: /
+
+# A2 — AI search and answer indexes. Each vendor states these do not feed model training.
+User-agent: OAI-SearchBot
+User-agent: Claude-SearchBot
+User-agent: PerplexityBot
+User-agent: meta-webindexer
+User-agent: Amzn-SearchBot
+User-agent: Google-CloudVertexBot
+Allow: /
+
+# A3 — control-only tokens. These crawlers never fetch; the token governs whether content already
+# collected by the operator's ordinary crawler may be used for AI training. There is no path to allow or
+# disallow, so `Allow: /` here means "this content may be used", and `Disallow: /` means it may not.
+# Unmentioned, both default to permitted.
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+Allow: /
+
+# UNVERIFIED — kept separate because neither token is vendor-published, and an unverified token in a
+# verified group makes the whole group look checked.
+#
+#   anthropic-ai   No vendor standing. Anthropic's crawler documentation lists exactly three tokens
+#                  (ClaudeBot, Claude-User, Claude-SearchBot) and has never listed this one, in the
+#                  current page or in its earliest archived revision. A rule naming it matches nothing
+#                  in Anthropic's fleet. It is here only because it is widely copied, so a reader who
+#                  expects it finds out why it is inert rather than assuming an omission.
+#   Bytespider     Spelling is consistent across third-party sources but ByteDance publishes no
+#                  reachable documentation for it, and independent log studies report it fetching
+#                  disallowed paths. Treat robots.txt as an unreliable control here: if this traffic
+#                  has to stop, it stops at the edge, not in this file.
+User-agent: anthropic-ai
+User-agent: Bytespider
+Allow: /
+
+
+# ===================================================================================================
+# EVERYTHING ELSE
+# ===================================================================================================
+#
+# Ordinary search crawlers and anything unnamed above. Deliberately empty of `Disallow` lines. Blocking
+# `/_astro/` or the stylesheet directory is the classic self-inflicted wound: a crawler that renders a page
+# needs the CSS and the JS to judge it, and a blocked asset is scored as a broken page.
+
+User-agent: *
+Allow: /
+
+
+# The sitemap. Absolute, and carrying the project path segment: a root-relative value is ignored
+# silently, and a value without `/atif-sql/` names the user-pages sitemap instead of this site's.
+# Starlight emits `sitemap-index.xml` plus one or more `sitemap-N.xml`; this points at the index.
+Sitemap: https://theagenticguy.github.io/atif-sql/sitemap-index.xml
+
+# The machine surfaces are NOT listed above, and cannot be: the sitemap covers page routes only, and
+# robots.txt has no registered field for an LLM index. These lines are comments on purpose. Inventing
+# an `Llms:` field would put a directive no parser reads next to five that work. The surfaces are
+# discoverable from every page's <head> (`rel="alternate"` for the page's own Markdown twin,
+# `rel="index"` for llms.txt) and from llms.txt itself:
+#
+#   https://theagenticguy.github.io/atif-sql/llms.txt         the index
+#   https://theagenticguy.github.io/atif-sql/llms-full.txt    every page, one fetch
+#   https://theagenticguy.github.io/atif-sql/llms-small.txt   the same corpus, chrome stripped harder

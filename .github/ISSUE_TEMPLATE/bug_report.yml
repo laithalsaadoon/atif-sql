@@ -1,0 +1,182 @@
+# A YAML issue form rather than a Markdown template: the fields below are the
+# ones that decide which of the seven packages owns a bug, and a form makes them
+# required instead of hoping. The three that most often decide it are the command
+# (which package the failure entered through), whether the corpus is
+# materialized (a missing corpus and a broken view produce the same empty
+# result), and whether `analyze` / `embed` have run (the analytics and vss views
+# do not exist until they have).
+name: Bug report
+description: Something in atif-sql behaves differently from what it documents.
+title: "fix: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. Two things before you start:
+
+        **Do not report a security vulnerability here.** This tracker is public.
+        Use the process in [SECURITY.md](https://github.com/theagenticguy/atif-sql/blob/main/SECURITY.md).
+
+        **Do not paste transcript content, AWS identifiers, or secrets.**
+        atif-sql reads `~/.claude` transcripts, which contain whatever you and
+        the agent said. Redact before pasting, or describe the shape of the data
+        instead of including it.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: What you expected, what happened instead, and which of the two you are more sure about.
+      placeholder: |
+        Expected: `atif-sql query 'SELECT * FROM tool_rank(30)'` returns rows.
+        Got: exit 65 with a catalog error naming `tool_rank`.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Which command
+      description: >-
+        The ten commands of the `atif-sql` CLI, plus the two `cron` subcommands.
+        Pick "none — used as a library" if you imported one of the seven packages
+        directly rather than going through the CLI.
+      options:
+        - convert
+        - materialize
+        - status
+        - query
+        - analyze
+        - embed
+        - search
+        - examples
+        - schema
+        - cron install
+        - cron status
+        - none — used as a library
+    validations:
+      required: true
+
+  - type: textarea
+    id: invocation
+    attributes:
+      label: The exact command you ran
+      description: >-
+        Verbatim, including flags. If it was a `query`, include the SQL — a
+        parse error, a catalog error, and a runtime error exit 64, 65, and 70
+        respectively, and the SQL is what distinguishes them.
+      render: shell
+      placeholder: atif-sql query 'SELECT * FROM tool_rank(30) LIMIT 10'
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: What it printed
+      description: >-
+        The whole output including the exit code. On a non-TTY the CLI writes a
+        JSON error envelope, which carries the classification — paste that rather
+        than summarizing it. `echo $?` for the exit code.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: atif-sql version
+      description: The output of `atif-sql --version`. If you installed from a git checkout, give the commit SHA instead.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: >-
+        The output of `python -VV`. Every member declares
+        `requires-python = ">=3.13"`; on anything older the install itself is the
+        bug.
+      placeholder: "Python 3.13.7 (main, ...) [GCC 13.2.0]"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Windows (WSL2)
+        - Windows (native)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: corpus
+    attributes:
+      label: Is the corpus materialized?
+      description: >-
+        Every DuckDB view reads the materialized ATIF corpus, never
+        `~/.claude/projects` directly. An unmaterialized corpus and a broken view
+        both return nothing, so this field is what tells them apart. `atif-sql
+        status` answers it.
+      options:
+        - "Yes — `atif-sql materialize` has run against this corpus"
+        - "No — I have not run `materialize`"
+        - "Unsure — I have pasted `atif-sql status` below"
+    validations:
+      required: true
+
+  - type: textarea
+    id: status
+    attributes:
+      label: "`atif-sql status` output"
+      description: >-
+        Read-only and fast. It reports corpus freshness and size, which decides
+        whether an empty result is a stale watermark or a defect. Redact paths
+        that name a private project if you need to.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Which surfaces have been built
+      description: >-
+        The catalog splits into three tiers and two of them do not exist until a
+        command has built them. `atif-sql examples --requires analytics` and
+        `--requires vss` list what each tier needs.
+      options:
+        - label: "`atif-sql analyze` has run (required by the `analytics` views and macros)"
+        - label: "`atif-sql embed --all --no-dry-run` has run (required by the `vss` views; a bare `embed` exits 64 by design)"
+        - label: "Neither — the failing object is in the `core` tier"
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Smallest reproduction you have
+      description: >-
+        Ideal: a query built from `atif-sql examples`, since every example there
+        is executed by the test suite against a fixture corpus — if a verbatim
+        example fails on your corpus, that difference is the bug and this issue
+        is already almost solved.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and this is not already reported.
+          required: true
+        - label: I removed transcript content, credentials, and AWS account identifiers from everything I pasted.
+          required: true

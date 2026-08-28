@@ -1,0 +1,89 @@
+# Link checking over every Markdown file in the tree, driven entirely by `lychee.toml`.
+#
+# This one GATES, unlike the report-only link jobs common in other repositories, and
+# `lychee.toml`'s header states why it is defensible here: the generated documentation tree
+# under `docs/` cites source with permalinks into this repository's own tree, so most links
+# are self-referential and deterministic. A broken one is a defect in the commit under
+# review. The genuinely non-deterministic hosts — PyPI project pages that do not exist
+# before the first release, Codecov, Scorecard, shields.io, GitHub's authenticated write
+# paths — are excluded by name in `lychee.toml`, each with its reason.
+#
+# Weekly as well as per-pull-request, because a link rots without anyone touching this
+# repository. The scheduled run is the one that catches an upstream page being renamed.
+name: links
+
+on:
+  pull_request:
+  schedule:
+    # Wednesday, offset from security.yml (Tuesday 06:31) and codeql.yml (Tuesday 06:47) so
+    # three scheduled jobs do not contend for the same runner minute.
+    - cron: "23 7 * * 3"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    name: check every Markdown link
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # `persist-credentials: false`: nothing here pushes, and a token left in .git/config is
+      # readable by every subsequent step including the third-party action below.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # lychee's on-disk request cache. `lychee.toml` sets `cache = true` and
+      # `max_cache_age = "2d"`, which spans the weekly run and any pull-request run beside
+      # it; this step is what carries `.lycheecache` between runs so the second run of the
+      # week re-checks almost nothing. The key is per-run with a prefix restore, so every run
+      # writes a fresh entry and reads the newest one — a fixed key would freeze the cache at
+      # its first contents and the age limit would never advance.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.run_id }}
+          restore-keys: lychee-
+
+      # `lycheeVersion` is pinned rather than left to the action's default, because
+      # `lychee.toml` is written against one version's key set: lychee rejects an unknown key,
+      # so a silent version bump would fail the job on the config rather than on a link.
+      # v0.24.2 happens to be this action version's default too (probed 2026-08-28 against
+      # the pinned SHA's action.yml), and pinning it here is what keeps that a coincidence
+      # rather than a dependency.
+      #
+      # `--config lychee.toml` names the file rather than relying on discovery. lychee's
+      # `--config` DEFAULTS to `lychee.toml`, but its discovery path is a fallback chain over
+      # `lychee.toml`, `Cargo.toml`, `pyproject.toml`, `package.json` that returns `None` when
+      # nothing matches, so a renamed or deleted config yields a fully unconfigured run —
+      # every exclusion gone, every private host probed, and a green tick if the links happen
+      # to resolve. An explicit path fails instead (probed 2026-08-28 in lychee's source at
+      # tag lychee-v0.24.2: `load_from_file` propagates the read error, `default_config_file`
+      # swallows a miss).
+      #
+      # `.` walks the tree; `lychee.toml`'s `extensions = ["md"]` narrows it to Markdown and
+      # its `exclude_path` drops the generated and gitignored trees.
+      #
+      # `token` puts github.com links on the authenticated GitHub API — 5,000 requests/hour
+      # instead of 60 — which is the first of the three mechanisms `lychee.toml` documents for
+      # surviving a docs tree that is mostly one host. The other two, per-host throttling and
+      # the cache, live in that file and in the step above.
+      #
+      # `fail: true` and `failIfEmpty: true` are the action's defaults and are written out:
+      # this job exists to fail, and an empty run means the traversal broke rather than that
+      # the tree is clean.
+      - uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: --config lychee.toml --no-progress .
+          token: ${{ github.token }}
+          fail: true
+          failIfEmpty: true
+          jobSummary: true
