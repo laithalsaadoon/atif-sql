@@ -99,6 +99,37 @@ pre-commit:
 pre-push:
   parallel: true
   jobs:
+    - name: forbid-local-only
+      # `local-only/*` branches are private working state and must never reach a remote.
+      # git hands pre-push one line per ref on stdin (`<local ref> <local oid> <remote ref>
+      # <remote oid>`); this reads that list and refuses the push if any ref is under
+      # refs/heads/local-only/. The blanket commands below never look at stdin, so without
+      # this job a `git push --all` publishes every branch, private or not. Bypassable with
+      # --no-verify like every hook, so the durable copy of anything private belongs in a
+      # bundle outside the clone, not in a branch this guard happens to protect.
+      # The `: {files}` no-op plus `files: echo lefthook.yml` below is what makes this job
+      # run at all. lefthook skips every pre-push job whose `git diff HEAD @{push}` list is
+      # empty (build_command.go, "no matching push files", probed 2026-08-30 in v2.1.11) —
+      # exactly the state of a clean checkout pushing a side branch, the one scenario this
+      # guard exists for. Watched happen: `git push --all --dry-run` from a clean main ran
+      # zero pre-push jobs and listed all five private branches. The only escape that check
+      # leaves is a `run` referencing {files} with a non-empty substitution, and the
+      # substitution passes through git.FindExistingFiles, so the constant must name a file
+      # that exists — this one.
+      run: |
+        : {files}
+        while read -r local_ref _rest; do
+          case "$local_ref" in
+            refs/heads/local-only/*)
+              echo "refusing to push private ref: $local_ref" >&2
+              exit 1
+              ;;
+          esac
+        done
+      use_stdin: true
+      files: "echo lefthook.yml"
+      fail_text: "local-only/* refs are private and must never be pushed."
+
     - name: lint
       run: mise run lint
 
