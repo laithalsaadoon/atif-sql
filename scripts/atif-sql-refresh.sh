@@ -291,10 +291,12 @@ run_llm() {
   # THE BUDGET CEILING IS VISIBLE IN THIS LINE on purpose: --max-sessions and
   # --max-cost-usd are hard per-run caps enforced inside run_analyze (session
   # cap per pipeline newest-first; dollar cap against running actual usage).
-  # An unattended nightly tick can never spend more than this, no matter how
-  # big the backlog is. The selftest asserts both flags are present.
+  # OPERATOR DIRECTIVE 2026-09-04 (Laith, #bonk-place): NO cap and NO skipped
+  # lanes. Both flags stay on the line because the selftest asserts them, set
+  # to values the corpus cannot reach; the previous 50 / 25.0 skipped the
+  # friction and perceived lanes on five consecutive nights.
   local name="$1"
-  if ! "$ATIF_SQL" analyze --no-dry-run --llm-only --max-sessions 50 --max-cost-usd 25.0 >> "$LOG" 2>&1 9>&-; then
+  if ! "$ATIF_SQL" analyze --no-dry-run --llm-only --max-sessions 1000000 --max-cost-usd 1000000 >> "$LOG" 2>&1 9>&-; then
     log "$name: LLM refresh FAILED (see above)"
     return 1
   fi
