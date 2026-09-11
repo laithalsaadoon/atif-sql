@@ -16,7 +16,7 @@ body:
         Thanks for filing. Two things before you start:
 
         **Do not report a security vulnerability here.** This tracker is public.
-        Use the process in [SECURITY.md](https://github.com/theagenticguy/atif-sql/blob/main/SECURITY.md).
+        Use the process in [SECURITY.md](https://github.com/laithalsaadoon/atif-sql/blob/main/SECURITY.md).
 
         **Do not paste transcript content, AWS identifiers, or secrets.**
         atif-sql reads `~/.claude` transcripts, which contain whatever you and

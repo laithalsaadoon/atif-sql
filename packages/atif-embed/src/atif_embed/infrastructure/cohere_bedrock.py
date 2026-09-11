@@ -243,10 +243,11 @@ def _invoke_bedrock_sync(
         # `_invoke_raw` CASTS the decoded body to `dict[str, Any]`; Bedrock is not
         # obliged to honour that, and this handler runs precisely when it did not
         # (the `TypeError` arm above). So the check is redundant to the declared
-        # type and load-bearing at run time.
+        # type and required at run time; both checkers are told so (ty's
+        # `redundant-condition-strict` arrived in 0.0.80 and fires here too).
         shape = (
             sorted(payload)
-            if isinstance(payload, dict)  # pyright: ignore[reportUnnecessaryIsInstance]
+            if isinstance(payload, dict)  # pyright: ignore[reportUnnecessaryIsInstance]  # ty: ignore[redundant-condition-strict]
             else type(payload).__name__
         )
         msg = (

@@ -48,6 +48,11 @@ exclude_path = [
   # them — `mise run check` and pytest's `testpaths` both skip the directory.
   "^experiments/.*/out/",
   ".venv/",
+  # Authored Astro pages link root-relative (`/agents/`, `/llms.txt`) to routes
+  # that exist only in the built site, so a file walk cannot resolve them.
+  # starlight-links-validator checks every one of them during `mise run
+  # docs:gate`, against the real route table.
+  "site/authored/",
 ]
 
 # ---------------------------------------------------------------------------
@@ -123,14 +128,6 @@ max_retries = 1
 retry_wait_time = 2
 timeout = 20
 
-[hosts."github.com"]
-concurrency = 2
-request_interval = "200ms"
-
-[hosts."raw.githubusercontent.com"]
-concurrency = 2
-request_interval = "200ms"
-
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
@@ -147,11 +144,13 @@ cache_exclude_status = "500.."
 # ---------------------------------------------------------------------------
 # 403 and 429 mean a host dislikes robots, which is a fact about the host. 401
 # means the resource exists and is gated, which is also not a broken link.
-accept = ["200..=299", "401", "403", "429"]
+accept = "200..=299,401,403,429"
 
-# HEAD first, GET on refusal: some documentation hosts (readthedocs mirrors,
-# S3-fronted assets) answer 405 to HEAD.
-method = ["head", "get"]
+# GET, one method: lychee-v0.24.2 takes a single string here and rejects a
+# list ("invalid type: sequence, expected a string", probed 2026-09-11). GET
+# rather than HEAD because some documentation hosts (readthedocs mirrors,
+# S3-fronted assets) answer 405 to HEAD, and there is no HEAD-then-GET fallback.
+method = "get"
 
 # `include_fragments` is deliberately UNSET. Anchor checking is valuable against
 # Markdown, but the dominant link shape in `docs/` is a GitHub permalink with a
@@ -160,4 +159,21 @@ method = ["head", "get"]
 # link. Enabling it would produce a wall of false failures on exactly the links
 # this job most wants to trust.
 
-user_agent = "atif-sql-link-check (+https://github.com/theagenticguy/atif-sql)"
+user_agent = "atif-sql-link-check (+https://github.com/laithalsaadoon/atif-sql)"
+
+# ---------------------------------------------------------------------------
+# Per-host throttles
+# ---------------------------------------------------------------------------
+# LAST in the file on purpose. `[hosts.X]` opens a TOML table, and every bare
+# key that follows it belongs to that table, not to the top level. lychee then
+# rejects `accept`, `method`, `cache` and friends as unknown fields of a host
+# entry (probed 2026-09-11 against lychee-v0.24.2: "unknown field `accept`,
+# expected one of `concurrency`, `request_interval`, `headers`"). Add new
+# top-level keys ABOVE this section.
+[hosts."github.com"]
+concurrency = 2
+request_interval = "200ms"
+
+[hosts."raw.githubusercontent.com"]
+concurrency = 2
+request_interval = "200ms"

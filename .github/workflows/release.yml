@@ -79,6 +79,12 @@ jobs:
           persist-credentials: true
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # `minimum_release_age` because a mise release exists on GitHub before its assets finish
+          # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
+          # tarball 404'd five times, and every scanner was skipped. A day-old release has its
+          # assets. `version` stays unpinned so the runner keeps following mise, gated by that day.
+          minimum_release_age: 24h
       - run: echo "UV_CACHE_DIR=$(uv cache dir)" >> "$GITHUB_ENV"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

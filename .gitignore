@@ -45,3 +45,6 @@ docs/.packets/
 # Session handoff notes and salvaged scratch. Working state for whoever picks this up next,
 # not part of the release.
 .handoff/
+
+# lychee request cache; links.yml carries it between runs via actions/cache
+.lycheecache

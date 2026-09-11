@@ -64,10 +64,10 @@ dependencies = [
 atif-sql = "atif_cli.app:main"
 
 [project.urls]
-Homepage = "https://github.com/theagenticguy/atif-sql"
-Repository = "https://github.com/theagenticguy/atif-sql"
-Issues = "https://github.com/theagenticguy/atif-sql/issues"
-Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/laithalsaadoon/atif-sql"
+Repository = "https://github.com/laithalsaadoon/atif-sql"
+Issues = "https://github.com/laithalsaadoon/atif-sql/issues"
+Changelog = "https://github.com/laithalsaadoon/atif-sql/blob/main/CHANGELOG.md"
 
 # hatchling rather than uv_build, for one reason: uv_build resolves every module
 # under a single `module-root` (default `src`), and these seven live under

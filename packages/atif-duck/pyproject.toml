@@ -26,13 +26,13 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/theagenticguy/atif-sql"
-Repository = "https://github.com/theagenticguy/atif-sql"
-Issues = "https://github.com/theagenticguy/atif-sql/issues"
-Changelog = "https://github.com/theagenticguy/atif-sql/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/laithalsaadoon/atif-sql"
+Repository = "https://github.com/laithalsaadoon/atif-sql"
+Issues = "https://github.com/laithalsaadoon/atif-sql/issues"
+Changelog = "https://github.com/laithalsaadoon/atif-sql/blob/main/CHANGELOG.md"
 
 [build-system]
-requires = ["uv_build>=0.11.14,<0.12"]
+requires = ["uv_build>=0.11.14,<0.13"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]

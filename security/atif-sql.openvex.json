@@ -1,6 +1,6 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://github.com/theagenticguy/atif-sql/security/atif-sql.openvex.json",
+  "@id": "https://github.com/laithalsaadoon/atif-sql/security/atif-sql.openvex.json",
   "author": "atif-sql maintainers",
   "role": "document creator",
   "timestamp": "2026-08-28T17:06:14Z",

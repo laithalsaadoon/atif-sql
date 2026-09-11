@@ -18,7 +18,7 @@
 import { execFileSync } from "node:child_process"
 
 /** Repository web root, no trailing slash. */
-export const REPO_URL = "https://github.com/theagenticguy/atif-sql"
+export const REPO_URL = "https://github.com/laithalsaadoon/atif-sql"
 
 /**
  * The commit every citation permalink is pinned to.
@@ -36,7 +36,7 @@ export const PERMALINK_COMMIT =
   execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()
 
 /** The deployed origin, with NO base segment. This is what `Astro.site` holds. */
-export const SITE_ORIGIN = "https://theagenticguy.github.io"
+export const SITE_ORIGIN = "https://laithalsaadoon.github.io"
 
 /**
  * The base segment, leading and trailing slash included.
