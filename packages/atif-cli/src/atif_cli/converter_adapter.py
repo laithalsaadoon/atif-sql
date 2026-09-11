@@ -54,8 +54,6 @@ from atif_converter.application.convert_and_audit import convert_and_audit
 from atif_converter.application.convert_codex import convert_codex_and_audit
 from atif_converter.domain.agents import DEFAULT_AGENT, AgentSource
 from atif_converter.domain.errors import TrajectoryValidationError
-from atif_converter.infrastructure.codex_adapter import assert_harbor_codex_private_api
-from atif_converter.infrastructure.harbor_adapter import assert_harbor_private_api
 from atif_corpus.domain.ports import ConversionOutput
 
 if TYPE_CHECKING:
@@ -79,16 +77,6 @@ class RealConverter:
         #: string from a caller, resolves to THIS package's member — see the
         #: module docstring.
         self.agent = AgentSource(str(agent))
-        # PROBE ONCE, HERE. The per-session adapters assert the pinned private
-        # harbor method too, but materialize catches a session's exception and
-        # carries on: a moved upstream method turned into 77 identical failure
-        # lines under an exit 0, and the cron lane logged "materialize ok" every
-        # ten minutes. Asserting at construction puts the failure BEFORE the
-        # pass, where it can exit 127 and nothing has been written.
-        if self.agent is AgentSource.CODEX:
-            assert_harbor_codex_private_api()
-        else:
-            assert_harbor_private_api()
 
     def convert(self, session_jsonl: Path) -> ConversionOutput:
         """Convert one session through its agent's use case; raise on invalid output.

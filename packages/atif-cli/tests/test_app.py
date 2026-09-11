@@ -1183,38 +1183,6 @@ class TestMaterializeSuspiciousScan:
         assert EXIT_CODES["suspicious_scan"] != 1
 
 
-class TestConvertHarborMissing:
-    """A vanished harbor private API condemns every session, so it is not exit 70.
-
-    `runtime_error` says "this input failed". 127 says "the surface this is
-    built on is gone", which no other transcript and no retry can change — a
-    driver walking a corpus should stop rather than collect the same failure
-    once per session.
-    """
-
-    def test_exits_127(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        import atif_converter.application.convert_and_audit as cna_module
-        from atif_converter.domain.errors import HarborPrivateApiMissing
-
-        def _raise(*_args: Any, **_kwargs: Any) -> None:
-            msg = "ClaudeCode._convert_events_to_trajectory is gone"
-            raise HarborPrivateApiMissing(msg)
-
-        session = tmp_path / "0198f0ab-0000-7000-8000-000000000001.jsonl"
-        session.write_text("{}\n")
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(cna_module, "convert_and_audit", _raise)
-            with pytest.raises(SystemExit) as excinfo:
-                convert(session)
-        assert excinfo.value.code == EXIT_CODES["harbor_missing"] == 127
-        err = capsys.readouterr().err
-        assert "_convert_events_to_trajectory" in err
-        assert "0.22.0" in err, "the hint names the pin a reader has to change"
-
-    def test_is_not_the_generic_runtime_code(self) -> None:
-        assert EXIT_CODES["harbor_missing"] != EXIT_CODES["runtime_error"]
-
-
 class TestStderrLogLevel:
     """`main` installs the ONLY log sink in the workspace.
 

@@ -54,15 +54,16 @@ Rules of the road:
   packages (a `forbidden` contract pins its other edges shut).
 - Inter-package deps: declare in the member's `[project.dependencies]` AND
   `[tool.uv.sources] <pkg> = { workspace = true }`.
-- harbor is pinned `>=0.22.0,<0.23` — we call the private
-  `ClaudeCode._convert_events_to_trajectory` and
-  `Codex._convert_events_to_trajectory`, verified against 0.22.0 only. A
-  Codex rollout is staged ALONE into its own temp dir, because harbor folds
-  every rollout in a directory into one trajectory. The private-API probe runs
-  once when `RealConverter` is built, so a moved upstream method exits 127
-  instead of becoming one failure per session under exit 0.
-  The unit tests in atif-converter pin upstream behavior and are the drift
-  alarm for version bumps.
+- harbor (`>=0.22.0,<1`) is used for its PUBLIC surface only: the ATIF data
+  classes in `harbor.models.trajectories` and `harbor.utils.trajectory_validator`.
+  The raw-JSONL → `Trajectory` conversion is ours
+  (`atif_converter.domain.claude_code_conversion`, `domain.codex_conversion`,
+  ported from 0.22.0 under Apache-2.0). Nothing under `harbor.agents` may be
+  imported from `src/`; the private converters survive only in
+  `packages/atif-converter/tests/harbor_oracle.py` as the parity oracle, with
+  frozen goldens under `tests/goldens/` and a live-corpus parity test.
+  A harbor bump is a lockfile edit plus reading the converter suite's failures
+  as upstream-behavior reports (see CONTRIBUTING).
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - Settings via pydantic-settings, env prefix `ATIF_SQL_`. `agent` is applied
   at CONSTRUCTION, not copied in afterwards: both default roots derive from

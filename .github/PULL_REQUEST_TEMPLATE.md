@@ -49,11 +49,10 @@ Delete the sections that do not apply; do not delete the first two.
 - [ ] `uv.lock` is regenerated and committed (`uv lock`), and `mise run
       lock:check` passes. The `uv-lock-sync` pre-commit job fails on a stale
       lockfile.
-- [ ] A `harbor` version change re-ran the **atif-converter** suite. Those tests
-      pin upstream behavior and are the drift alarm for the private
-      `ClaudeCode._convert_events_to_trajectory` call; the pin is
-      `>=0.22.0,<0.23` and the fidelity gaps in `domain/fidelity.py` need
-      re-auditing past it.
+- [ ] A `harbor` version change re-ran the **atif-converter** suite and
+      `ATIF_PARITY_LIMIT=0 uv run pytest packages/atif-converter/tests/test_parity_live.py`.
+      The golden tests report upstream conversion changes; the drift tests
+      report model-shape changes. Each is a decision to record, not a re-freeze.
 - [ ] No new hardcoded Bedrock model id. `atif-models` owns the alias registry
       and no other package may name a model.
 

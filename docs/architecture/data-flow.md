@@ -34,11 +34,11 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
 6. The adapter that satisfies `ConverterPort` lives in atif-cli because the independence contract
    forbids atif-corpus from importing atif-converter; it raises rather than returning an invalid
    trajectory — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`.
-7. Under `--agent codex` the same step runs `convert_codex_and_audit`, which stages the one rollout
-   alone so harbor cannot fold a directory's rollouts into a single trajectory — `packages/atif-converter/src/atif_converter/application/convert_codex.py:128`.
-8. `convert_and_audit` snapshots the source files, stages the session into harbor's expected
-   directory shape and calls harbor's pinned private method
-   (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`), then builds
+7. Under `--agent codex` the same step runs `convert_codex_and_audit`, which reads the one rollout it
+   is given and converts it with our ported Codex converter — `packages/atif-converter/src/atif_converter/application/convert_codex.py:128`.
+8. `convert_and_audit` snapshots the source files, converts them with our ported converter
+   through the seam at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`
+   (validated by harbor's public `TrajectoryValidator`, `:68`), then builds
    the loss report and edges from the raw records, enriches the trajectory, and refuses the result
    if any source moved mid-pass — `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`.
 9. The four artifacts are written under `.staging/` with `meta.json` last, then the whole directory

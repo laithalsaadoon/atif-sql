@@ -74,9 +74,6 @@ def _loss_report(census: SessionCensus) -> LossReport:
         gaps.add(FidelityGap.NON_MESSAGE_RECORDS_DROPPED)
     if census.subagent_files:
         gaps.add(FidelityGap.SUBAGENTS_INLINED)
-    if census.workflow_subagent_files:
-        gaps.add(FidelityGap.WORKFLOW_SUBAGENTS_MISSED)
-
     # Named rather than inlined: LossReport is shared by both agents, so its
     # key type is the UNION of the two record taxonomies and a same-typed dict
     # of one agent's members does not match the constructor overload without
@@ -88,10 +85,8 @@ def _loss_report(census: SessionCensus) -> LossReport:
         records_dropped=total - converted,
         gaps_observed=frozenset(gaps),
         subagent_files_found=len(census.subagent_files) + len(census.workflow_subagent_files),
-        # Our staging layer flattens workflow-nested files into the
-        # harbor-visible subagents/ dir, so they ARE convertible through the
-        # wrapper; WORKFLOW_SUBAGENTS_MISSED stays observed because it names
-        # the UPSTREAM gap the staging works around.
+        # Our converter discovers every side file itself, workflow-nested ones
+        # included, so all of them are convertible.
         subagent_files_convertible=len(census.subagent_files) + len(census.workflow_subagent_files),
         workflow_subagent_files_found=len(census.workflow_subagent_files),
     )

@@ -216,17 +216,20 @@ forbids the import (`packages/atif-corpus/src/atif_corpus/domain/agents.py:25`).
 `convert_and_audit` returns a conversion result paired with a loss report — the trajectory plus an
 accounting of what upstream dropped
 (`packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`). The conversion is
-one private harbor call, `ClaudeCode._convert_events_to_trajectory`, confined to a single adapter
-module behind a startup assertion
-(`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112`). The Codex path is
+ours: `convert_claude_code_records`, a port of harbor 0.22.0's Claude Code converter built on the
+public ATIF data classes (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`),
+reached through the file-reading seam at
+`packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py:73` and validated
+with harbor's public `TrajectoryValidator`
+(`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68`). The Codex path is
 the same shape one module over: `convert_codex_and_audit`
 (`packages/atif-converter/src/atif_converter/application/convert_codex.py:128`) over
-`Codex._convert_events_to_trajectory`, asserted at
-`packages/atif-converter/src/atif_converter/infrastructure/codex_adapter.py:53` and staging the one
-rollout alone into a temp dir, because harbor folds every rollout it can see in a directory into a
-single trajectory (`:107`). That private pair is why the
-dependency is ceilinged at `harbor>=0.22.0,<0.23` (`packages/atif-converter/pyproject.toml:23`). The
-seven known conversion gaps are types rather than prose — `FidelityGap` enumerates them
+`convert_codex_records` (`packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781`),
+one rollout in and one trajectory out by construction. harbor's own private converters are the
+parity ORACLE, reached from the tests only (`packages/atif-converter/tests/harbor_oracle.py:94`, `:111`),
+frozen to goldens and diffed against the live corpus; that is what lets the dependency widen to
+`harbor>=0.22.0,<1` (`packages/atif-converter/pyproject.toml:26`). The
+known conversion gaps are types rather than prose — `FidelityGap` enumerates them
 (`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`) and a pure enrichment pass repairs
 three by re-running harbor's deterministic normalization order over the raw records
 (`packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). Codex has its own seven

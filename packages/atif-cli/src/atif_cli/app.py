@@ -328,7 +328,7 @@ def convert(
         instead of stdout.
 
     Exit codes: 0 ok, 2 empty session, 64 invalid input or unknown agent,
-    65 validation, 70 conversion, 127 the pinned private harbor method is gone.
+    65 validation, 70 conversion.
     """
     from atif_converter.application.convert_and_audit import convert_and_audit
     from atif_converter.application.convert_codex import convert_codex_and_audit
@@ -336,7 +336,6 @@ def convert(
     from atif_converter.domain.errors import (
         DomainError,
         EmptySessionError,
-        HarborPrivateApiMissing,
         InvalidSessionInput,
     )
 
@@ -352,17 +351,6 @@ def convert(
     except EmptySessionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(EXIT_CODES["empty_session"]) from exc
-    except HarborPrivateApiMissing as exc:
-        # Ahead of the DomainError clause: this one is not about the session.
-        # 127 says the surface is gone, which no retry and no other transcript
-        # can change — the fix is a harbor pin, and every session in the corpus
-        # will fail the same way until it lands.
-        print(f"error: {exc}", file=sys.stderr)
-        print(
-            "hint: harbor's pinned private API moved; atif-converter pins harbor>=0.22.0,<0.23",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODES["harbor_missing"]) from exc
     except DomainError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(EXIT_CODES["runtime_error"]) from exc
@@ -479,7 +467,6 @@ def materialize(
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
     from atif_cli.converter_adapter import RealConverter
-    from atif_converter.domain.errors import HarborPrivateApiMissing
     from atif_corpus.application.materialize import (
         CorpusAgentMismatchError,
         SuspiciousEmptyScanError,
@@ -509,22 +496,6 @@ def materialize(
             force=force,
             session_ids=session_filter,
         )
-    except HarborPrivateApiMissing as exc:
-        # Raised while BUILDING the converter, so nothing was scanned, planned
-        # or written. 127 says the pinned upstream surface is gone: no retry and
-        # no other transcript can change it, and every session would have failed
-        # the same way inside the pass — which is how this used to surface, as an
-        # exit 0 with N identical per-session failures.
-        emit_error(
-            ClassifiedError(
-                kind="harbor_missing",
-                exit_code=EXIT_CODES["harbor_missing"],
-                message=str(exc),
-                hint="harbor's pinned private API moved; atif-converter pins harbor>=0.22.0,<0.23",
-            ),
-            fmt,
-        )
-        raise SystemExit(EXIT_CODES["harbor_missing"]) from exc
     except CorpusAgentMismatchError as exc:
         # One corpus holds one agent. Nothing was removed and nothing written —
         # the same posture as a suspicious scan, and the same exit code, because

@@ -15,10 +15,21 @@ The fixture builds one session under ``<tmp>/projects/-tmp-proj/`` containing:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+# litellm loads its pricing table from GitHub at import time unless told to use
+# the table bundled with the installed version. The frozen goldens carry
+# per-call cost_usd figures priced through that table, so left remote, a
+# BerriAI edit to one model's price (or an unreachable raw.githubusercontent.com
+# in CI) would fail the "never skipped" golden gate with no change in this repo,
+# and TestFrozenGoldens would blame harbor. Pinned to the bundled table, a price
+# change arrives as a litellm lockfile bump, attributable. setdefault, so an
+# operator can still point a run at the remote table deliberately.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
 
 SESSION_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -31,6 +42,12 @@ def _write_jsonl(path: Path, events: list[dict[str, Any]]) -> None:
 @pytest.fixture
 def synthetic_session(tmp_path: Path) -> Path:
     """Return the path to the synthetic session's main JSONL file."""
+    # KEEP cwd / gitBranch / agentId single-valued across these events. harbor
+    # collects them into Python SETS and dumps the sets as lists, so with two or
+    # more distinct values the order follows the process hash seed and the
+    # frozen golden would flake between pytest runs. That is harbor's behavior
+    # and the port keeps it (sorting would diverge from the live oracle); the
+    # fixture just stays out of the nondeterministic case.
     project_dir = tmp_path / "projects" / "-tmp-proj"
     main_jsonl = project_dir / f"{SESSION_ID}.jsonl"
 

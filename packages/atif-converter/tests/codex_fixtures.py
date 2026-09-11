@@ -40,7 +40,11 @@ CODEX_SESSION_ID = "01a09182-2858-7f42-936b-7f027b341fdf"
 CODEX_ROLLOUT_NAME = f"rollout-2026-09-11T17-27-01-{CODEX_SESSION_ID}.jsonl"
 
 #: The model ``turn_context`` names, which harbor uses for every agent step.
-CODEX_MODEL = "bedrock-native/global.openai.gpt-6-astra"
+#: Priced by the litellm table BUNDLED with the locked version (conftest pins
+#: LITELLM_LOCAL_MODEL_COST_MAP), via harbor's second lookup, the part after
+#: the first "/". A model the bundled table cannot price would freeze a golden
+#: with no cost_usd at all and leave the whole cost path unexercised.
+CODEX_MODEL = "openai/gpt-5.1-codex"
 
 #: codex-cli version in ``session_meta``; harbor reports it as agent.version.
 CODEX_CLI_VERSION = "0.154.0"

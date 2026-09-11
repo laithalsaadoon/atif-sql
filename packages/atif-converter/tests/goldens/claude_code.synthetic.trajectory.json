@@ -1,0 +1,154 @@
+{
+  "agent": {
+    "extra": {
+      "cwds": [
+        "/tmp/proj"
+      ],
+      "git_branches": [
+        "main"
+      ]
+    },
+    "model_name": "claude-test-1",
+    "name": "claude-code",
+    "version": "2.0.0"
+  },
+  "final_metrics": {
+    "extra": {
+      "cost_source": "litellm_estimate",
+      "total_cache_creation_input_tokens": 50,
+      "total_cache_read_input_tokens": 210
+    },
+    "total_cached_tokens": 210,
+    "total_completion_tokens": 10,
+    "total_cost_usd": 0.0,
+    "total_prompt_tokens": 295,
+    "total_steps": 6
+  },
+  "schema_version": "ATIF-v1.7",
+  "session_id": "11111111-1111-1111-1111-111111111111",
+  "steps": [
+    {
+      "extra": {
+        "is_sidechain": false
+      },
+      "message": "hello please run a tool",
+      "source": "user",
+      "step_id": 1,
+      "timestamp": "2026-08-22T00:00:01Z"
+    },
+    {
+      "extra": {
+        "is_sidechain": true
+      },
+      "message": "subagent prompt",
+      "source": "user",
+      "step_id": 2,
+      "timestamp": "2026-08-22T00:00:02.500Z"
+    },
+    {
+      "extra": {
+        "is_sidechain": true
+      },
+      "llm_call_count": 1,
+      "message": "subagent answer",
+      "metrics": {
+        "cached_tokens": 0,
+        "completion_tokens": 2,
+        "prompt_tokens": 5
+      },
+      "model_name": "claude-test-1",
+      "source": "agent",
+      "step_id": 3,
+      "timestamp": "2026-08-22T00:00:02.600Z"
+    },
+    {
+      "extra": {
+        "is_sidechain": true
+      },
+      "message": "workflow subagent prompt",
+      "source": "user",
+      "step_id": 4,
+      "timestamp": "2026-08-22T00:00:02.700Z"
+    },
+    {
+      "extra": {
+        "is_sidechain": false,
+        "stop_reason": "tool_use"
+      },
+      "llm_call_count": 1,
+      "message": "running the tool",
+      "metrics": {
+        "cached_tokens": 100,
+        "completion_tokens": 5,
+        "extra": {
+          "cache_creation_input_tokens": 50,
+          "cache_read_input_tokens": 100
+        },
+        "prompt_tokens": 160
+      },
+      "model_name": "claude-test-1",
+      "observation": {
+        "results": [
+          {
+            "content": "hi\n\n[stdout]\nhi",
+            "extra": {
+              "tool_result_metadata": {
+                "raw_tool_result": {
+                  "content": "hi",
+                  "tool_use_id": "toolu_01",
+                  "type": "tool_result"
+                },
+                "tool_use_result": {
+                  "interrupted": false,
+                  "stderr": "",
+                  "stdout": "hi"
+                }
+              }
+            },
+            "source_call_id": "toolu_01"
+          }
+        ]
+      },
+      "reasoning_content": "let me think",
+      "source": "agent",
+      "step_id": 5,
+      "timestamp": "2026-08-22T00:00:02Z",
+      "tool_calls": [
+        {
+          "arguments": {
+            "command": "echo hi"
+          },
+          "extra": {
+            "raw_arguments": {
+              "command": "echo hi"
+            },
+            "tool_use_name": "Bash"
+          },
+          "function_name": "Bash",
+          "tool_call_id": "toolu_01"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "is_sidechain": false,
+        "stop_reason": "end_turn"
+      },
+      "llm_call_count": 1,
+      "message": "done",
+      "metrics": {
+        "cached_tokens": 110,
+        "completion_tokens": 3,
+        "extra": {
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 110
+        },
+        "prompt_tokens": 130
+      },
+      "model_name": "claude-test-1",
+      "source": "agent",
+      "step_id": 6,
+      "timestamp": "2026-08-22T00:00:06Z"
+    }
+  ]
+}

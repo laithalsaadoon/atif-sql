@@ -50,15 +50,20 @@ CONVERTIBLE_RECORD_TYPES: frozenset[RecordType] = frozenset({RecordType.USER, Re
 
 
 class FidelityGap(Enum):
-    """The seven known upstream gaps in harbor 0.22.0's converter.
+    """The known conversion gaps, inherited from harbor 0.22.0's converter.
 
-    Each member documents one loss verified against
-    ``ClaudeCode._convert_events_to_trajectory``.
+    Each member documents one loss verified against harbor's Claude Code
+    conversion. Our converter (:mod:`atif_converter.domain.claude_code_conversion`)
+    is a parity port of it, so these losses are OURS now, by choice: the
+    parity oracle holds the port to harbor's output, and fixing a gap means
+    deciding to diverge from that oracle on purpose.
     """
 
-    #: (1) Discovery uses ``rglob("subagents/*.jsonl")``, which misses
-    #: workflow-nested side-files at ``subagents/workflows/wf_*/agent-*.jsonl``.
-    WORKFLOW_SUBAGENTS_MISSED = "workflow_subagents_missed"
+    #: (1) RETIRED. ``workflow_subagents_missed`` named harbor's discovery,
+    #: ``rglob("subagents/*.jsonl")``, which cannot see workflow-nested side
+    #: files. Our converter discovers every ``*.jsonl`` under the session's side
+    #: directory itself, so the gap has no mechanism left to describe. The value
+    #: is not reused; a corpus materialized before the port still carries it.
 
     #: (2) Only user/assistant events are converted; system / attachment /
     #: queue-operation / mode / last-prompt / summary records are silently dropped.

@@ -37,9 +37,10 @@ Sources, in dispatch order:
 - build_plan — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`.
 - RealConverter — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`, calling
   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`.
-- harbor ClaudeCode — the pinned private
-  `ClaudeCode._convert_events_to_trajectory` invoked at
-  `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`.
+- converter — our ported Claude Code converter,
+  `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`, reached from the
+  seam at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`; harbor
+  supplies only the data classes and the validator (`:68`).
 - corpus artifacts — path arithmetic in
   `packages/atif-corpus/src/atif_corpus/domain/layout.py:26`; the four artifacts written and the
   directory swapped at `packages/atif-corpus/src/atif_corpus/application/materialize.py:222-240`
