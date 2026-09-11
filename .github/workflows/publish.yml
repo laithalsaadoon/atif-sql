@@ -66,6 +66,11 @@ jobs:
       # This job pays the full cold-resolve instead, once per release.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
+          # `minimum_release_age` because a mise release exists on GitHub before its assets finish
+          # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
+          # tarball 404'd five times, and every scanner was skipped. A day-old release has its
+          # assets. `version` stays unpinned so the runner keeps following mise, gated by that day.
+          minimum_release_age: 24h
           cache: false
       - run: mise run install:ci
 
@@ -230,7 +235,7 @@ jobs:
   # project page — the project does not exist yet), add ONE GitHub "pending publisher":
   #
   #     PyPI project name:  atif-sql
-  #     Owner:              theagenticguy
+  #     Owner:              laithalsaadoon
   #     Repository name:    atif-sql
   #     Workflow name:      publish.yml        <- this file's name, not its `name:` field
   #     Environment name:   pypi               <- must match `environment.name` below

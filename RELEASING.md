@@ -273,7 +273,7 @@ because the project does not exist yet — add one GitHub pending publisher:
 | Field | Value |
 | --- | --- |
 | PyPI project name | `atif-sql` |
-| Owner | `theagenticguy` |
+| Owner | `laithalsaadoon` |
 | Repository name | `atif-sql` |
 | Workflow name | `publish.yml` |
 | Environment name | `pypi` |
@@ -330,7 +330,7 @@ the fat-wheel restructure above. Neither is on the table.
 | `default_workflow_permissions` = `read` | Settings → Actions | Every workflow here declares its own per-job permissions, so the default needs no write. |
 | A push path to `main` for the release workflow | Branch protection or ruleset | See below. |
 | Pages **Source = GitHub Actions** | Settings → Pages | `docs.yml` deploys through `actions/deploy-pages`, which needs the Actions source rather than a branch. `base: "/atif-sql/"` in `site/astro.config.ts` matches the resulting project-site path. |
-| The AI-crawler policy, at the ORIGIN root | The `theagenticguy.github.io` user-pages repository | `robots.txt` is per-origin (RFC 9309 §2.3), so a project site served from a path segment cannot own one: Astro emits this site's copy to `/atif-sql/robots.txt`, which no crawler fetches. `site/public/robots.txt` is the decided policy and the exact text to install at `https://theagenticguy.github.io/robots.txt`. Until it is installed there, these pages inherit whatever that origin already serves — and absent a file, that is fully permissive. Outside this repository's reach, so no gate here can assert it. |
+| The AI-crawler policy, at the ORIGIN root | The `laithalsaadoon.github.io` user-pages repository | `robots.txt` is per-origin (RFC 9309 §2.3), so a project site served from a path segment cannot own one: Astro emits this site's copy to `/atif-sql/robots.txt`, which no crawler fetches. `site/public/robots.txt` is the decided policy and the exact text to install at `https://laithalsaadoon.github.io/robots.txt`. Until it is installed there, these pages inherit whatever that origin already serves — and absent a file, that is fully permissive. Outside this repository's reach, so no gate here can assert it. |
 
 ### The release push and branch protection
 

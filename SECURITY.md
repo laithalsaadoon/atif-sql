@@ -8,7 +8,7 @@ Fixes land on `main`; there are no backports and no patch branches.
 ## Reporting a vulnerability
 
 Report privately through GitHub, not in a public issue:
-**<https://github.com/theagenticguy/atif-sql/security/advisories/new>**
+**<https://github.com/laithalsaadoon/atif-sql/security/advisories/new>**
 (the repository's Security tab → "Report a vulnerability").
 
 Include the version or commit, the platform, and the smallest reproduction you

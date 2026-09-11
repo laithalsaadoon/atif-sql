@@ -70,6 +70,11 @@ jobs:
       # cheaper than a tier that can report success for a scan that never executed.
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
+          # `minimum_release_age` because a mise release exists on GitHub before its assets finish
+          # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
+          # tarball 404'd five times, and every scanner was skipped. A day-old release has its
+          # assets. `version` stays unpinned so the runner keeps following mise, gated by that day.
+          minimum_release_age: 24h
           cache: false
       - run: mise run security
         env:
@@ -79,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       # One upload for the whole directory — each SARIF names its own tool, so code scanning
       # separates them without a step per scanner.
-      - uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      - uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
         if: always()
         with:
           sarif_file: .sarif

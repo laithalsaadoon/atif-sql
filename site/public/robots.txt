@@ -5,11 +5,11 @@
 #
 # RFC 9309 s2.3 puts robots.txt at `scheme:[//authority]/robots.txt`, and authority is host plus port.
 # robots.txt is therefore PER-ORIGIN, and a site served from a path segment cannot own one. This site is
-# a GitHub Pages PROJECT site at `https://theagenticguy.github.io/atif-sql/`, so Astro copies this file
+# a GitHub Pages PROJECT site at `https://laithalsaadoon.github.io/atif-sql/`, so Astro copies this file
 # to `/atif-sql/robots.txt` — a path with no protocol meaning, which no crawler fetches.
 #
-# The file that governs every crawler reaching these pages is `https://theagenticguy.github.io/robots.txt`,
-# owned by the `theagenticguy.github.io` USER-pages repository. This copy is the policy atif-sql has
+# The file that governs every crawler reaching these pages is `https://laithalsaadoon.github.io/robots.txt`,
+# owned by the `laithalsaadoon.github.io` USER-pages repository. This copy is the policy atif-sql has
 # decided on and the exact text to install there; the groups below are written for the whole origin, which
 # is what a file at that location governs.
 #
@@ -185,7 +185,7 @@ Allow: /
 # The sitemap. Absolute, and carrying the project path segment: a root-relative value is ignored
 # silently, and a value without `/atif-sql/` names the user-pages sitemap instead of this site's.
 # Starlight emits `sitemap-index.xml` plus one or more `sitemap-N.xml`; this points at the index.
-Sitemap: https://theagenticguy.github.io/atif-sql/sitemap-index.xml
+Sitemap: https://laithalsaadoon.github.io/atif-sql/sitemap-index.xml
 
 # The machine surfaces are NOT listed above, and cannot be: the sitemap covers page routes only, and
 # robots.txt has no registered field for an LLM index. These lines are comments on purpose. Inventing
@@ -193,6 +193,6 @@ Sitemap: https://theagenticguy.github.io/atif-sql/sitemap-index.xml
 # discoverable from every page's <head> (`rel="alternate"` for the page's own Markdown twin,
 # `rel="index"` for llms.txt) and from llms.txt itself:
 #
-#   https://theagenticguy.github.io/atif-sql/llms.txt         the index
-#   https://theagenticguy.github.io/atif-sql/llms-full.txt    every page, one fetch
-#   https://theagenticguy.github.io/atif-sql/llms-small.txt   the same corpus, chrome stripped harder
+#   https://laithalsaadoon.github.io/atif-sql/llms.txt         the index
+#   https://laithalsaadoon.github.io/atif-sql/llms-full.txt    every page, one fetch
+#   https://laithalsaadoon.github.io/atif-sql/llms-small.txt   the same corpus, chrome stripped harder

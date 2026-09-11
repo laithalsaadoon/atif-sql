@@ -44,6 +44,12 @@ jobs:
           fetch-depth: 0
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          # `minimum_release_age` because a mise release exists on GitHub before its assets finish
+          # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
+          # tarball 404'd five times, and every scanner was skipped. A day-old release has its
+          # assets. `version` stays unpinned so the runner keeps following mise, gated by that day.
+          minimum_release_age: 24h
 
       - run: mise run docs:install
 
@@ -70,4 +76,4 @@ jobs:
       id-token: write # the OIDC token the Pages deployment authenticates with
     steps:
       - id: deploy
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

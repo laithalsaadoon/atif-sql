@@ -1,9 +1,9 @@
 # atif-sql
 
-[![CI](https://github.com/theagenticguy/atif-sql/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/theagenticguy/atif-sql/actions/workflows/check.yml)
-[![security](https://github.com/theagenticguy/atif-sql/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/theagenticguy/atif-sql/actions/workflows/security.yml)
-[![CodeQL](https://github.com/theagenticguy/atif-sql/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/theagenticguy/atif-sql/actions/workflows/codeql.yml)
-[![Scorecard](https://github.com/theagenticguy/atif-sql/actions/workflows/scorecard.yml/badge.svg?branch=main)](https://github.com/theagenticguy/atif-sql/actions/workflows/scorecard.yml)
+[![CI](https://github.com/laithalsaadoon/atif-sql/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/check.yml)
+[![security](https://github.com/laithalsaadoon/atif-sql/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/security.yml)
+[![CodeQL](https://github.com/laithalsaadoon/atif-sql/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/codeql.yml)
+[![Scorecard](https://github.com/laithalsaadoon/atif-sql/actions/workflows/scorecard.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/scorecard.yml)
 ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)
 [![License Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
@@ -95,7 +95,7 @@ measurements.
 ## Security
 
 Report a vulnerability privately through
-[GitHub's advisory form](https://github.com/theagenticguy/atif-sql/security/advisories/new),
+[GitHub's advisory form](https://github.com/laithalsaadoon/atif-sql/security/advisories/new),
 not in a public issue. Supported versions, the disclosure expectations, and what counts as a
 vulnerability in a tool that reads local transcripts are in
 **[SECURITY.md](SECURITY.md)**.

@@ -14,25 +14,25 @@ contact_links:
   # reporting). With it off, the URL 404s and the second link below is the only
   # working path — which is why both are listed.
   - name: Report a security vulnerability (private)
-    url: https://github.com/theagenticguy/atif-sql/security/advisories/new
+    url: https://github.com/laithalsaadoon/atif-sql/security/advisories/new
     about: >-
       Opens a private security advisory visible only to the maintainer. Use this
       for anything exploitable, not the public issue tracker.
 
   - name: Security policy
-    url: https://github.com/theagenticguy/atif-sql/blob/main/SECURITY.md
+    url: https://github.com/laithalsaadoon/atif-sql/blob/main/SECURITY.md
     about: >-
       Supported versions, what counts as a vulnerability in a tool that reads
       local transcripts, and the disclosure timeline.
 
   - name: Contributing guide
-    url: https://github.com/theagenticguy/atif-sql/blob/main/CONTRIBUTING.md
+    url: https://github.com/laithalsaadoon/atif-sql/blob/main/CONTRIBUTING.md
     about: >-
       Setup, the five gates `mise run check` runs, the import-linter contracts,
       and the Conventional Commit rule the commit-msg hook enforces.
 
   - name: Ask a question
-    url: https://github.com/theagenticguy/atif-sql/discussions
+    url: https://github.com/laithalsaadoon/atif-sql/discussions
     about: >-
       "How do I query X" and "is this the right view" belong here. If the answer
       turns out to be "the view is wrong", that becomes a bug report.
