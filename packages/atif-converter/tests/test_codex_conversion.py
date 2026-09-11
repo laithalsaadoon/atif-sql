@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pin harbor 0.22.0's CODEX conversion behavior — the drift alarm for bumps.
+"""Pin the Codex conversion behavior our converter inherited from harbor 0.22.0.
 
-Every assertion here encodes an EMPIRICALLY OBSERVED behavior of
-``Codex._convert_events_to_trajectory`` at harbor==0.22.0 (probed 2026-09-11
-against 73 real rollouts under ``~/.codex/sessions`` plus the synthetic fixture
-in ``codex_fixtures.py``). If a harbor bump flips one of these, that is upstream
-drift: re-audit the fidelity policy in
-``atif_converter/domain/codex_fidelity.py`` before touching the assertions.
+Every assertion here encodes a behavior EMPIRICALLY OBSERVED in harbor's Codex
+conversion at 0.22.0 (probed 2026-09-11 against 73 real rollouts under
+``~/.codex/sessions`` plus the synthetic fixture in ``codex_fixtures.py``) and
+carried into our port (``atif_converter.domain.codex_conversion``) on purpose.
+The parity oracle holds the port to that behavior; these tests say what the
+behavior IS, in terms of ``atif_converter/domain/codex_fidelity.py``. Changing
+one is a decision to diverge from harbor, recorded in the policy.
 """
 
 from __future__ import annotations

@@ -135,18 +135,38 @@ name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and a derived
 example that actually executes — or a documented `EXCLUSIONS` entry. The tests
 in `packages/atif-duck/tests/` fail until that is true.
 
-## The harbor pin is load-bearing
+## harbor is a public-API dependency, and the parity oracle is how we know
 
-`packages/atif-converter/pyproject.toml` pins `harbor>=0.22.0,<0.23`.
-`atif_converter.infrastructure.harbor_adapter` calls
-`ClaudeCode._convert_events_to_trajectory`, a private upstream method, verified
-against 0.22.0 only. The unit tests in `packages/atif-converter/tests/` pin
-upstream's observed behavior and are the drift alarm for that call.
+`packages/atif-converter/pyproject.toml` pins `harbor>=0.22.0,<1`. Production code
+imports exactly two things from it: the ATIF data classes in
+`harbor.models.trajectories` (RFC 0001) and `harbor.utils.trajectory_validator`.
+The conversion from a Claude Code session or a Codex rollout to a `Trajectory`
+is ours, in `atif_converter.domain.claude_code_conversion` and
+`atif_converter.domain.codex_conversion`, ported from harbor 0.22.0 under
+Apache-2.0 so that the two upstream files that used to be private dependencies
+(26 and 18 commits between June and September 2026) can change without moving us.
 
-So a harbor version bump is not a lockfile edit. Widen the pin, then re-run the
-atif-converter tests and read the failures as upstream-behavior reports: they
-tell you what changed in the private method and in the seven fidelity gaps
-typed in `atif_converter.domain.fidelity`.
+harbor's private converters still exist in one place: the tests.
+`packages/atif-converter/tests/harbor_oracle.py` reaches them as the PARITY
+ORACLE, and three things hang off it:
+
+- `tests/goldens/*.trajectory.json` — the oracle's output for each synthetic
+  fixture, frozen. `test_harbor_oracle.py` asserts the live oracle still equals
+  the frozen one, so an upstream behavior change under the pin surfaces as a
+  named JSON-path diff, not as a port that mysteriously "fails parity".
+- `test_parity_claude_code.py` / `test_parity_codex.py` — our converters equal
+  the oracle on the fixtures AND the goldens. The golden half never skips, so
+  parity stays checkable the day harbor removes the private method.
+- `test_parity_live.py` — the newest `ATIF_PARITY_LIMIT` local sessions of each
+  agent (`0` = all), converted both ways and diffed. Skips in CI; run it with
+  `ATIF_PARITY_LIMIT=0` before a release, and after any harbor bump.
+
+So a harbor version bump is a lockfile edit plus one reading: run the
+atif-converter suite and read its failures as upstream-behavior reports. A model
+shape change fails the drift tests; a conversion behavior change fails the golden
+test. Each is a decision about whether the port follows upstream. Re-freeze the
+goldens only after that decision: `ATIF_FREEZE_GOLDENS=1 uv run pytest
+packages/atif-converter/tests/test_harbor_oracle.py -k freeze`.
 
 ## Never spend money in a test
 

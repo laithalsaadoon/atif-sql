@@ -9,8 +9,10 @@ rather than fix it, and let the unit tests pin it so a harbor bump that
 changes behavior trips the suite.
 
 Every member below was verified empirically on 2026-09-11 against
-harbor==0.22.0's ``Codex._convert_events_to_trajectory`` over real rollouts
-from ``~/.codex/sessions`` written by codex-cli 0.153.4 and 0.154.0.
+harbor==0.22.0's Codex conversion over real rollouts from ``~/.codex/sessions``
+written by codex-cli 0.153.4 and 0.154.0. Our converter
+(:mod:`atif_converter.domain.codex_conversion`) is a parity port of that
+conversion, so these losses are ours now, by choice.
 """
 
 from __future__ import annotations
@@ -62,7 +64,7 @@ CODEX_CONVERTIBLE_ITEM_TYPES: frozenset[str] = frozenset(
 
 
 class CodexFidelityGap(Enum):
-    """The seven known upstream gaps in harbor 0.22.0's Codex converter.
+    """The known Codex conversion gaps, inherited from harbor 0.22.0.
 
     Values are namespaced ``codex_*`` because they share the
     ``gaps_observed`` array in ``loss_report.json`` with the Claude Code
@@ -70,12 +72,11 @@ class CodexFidelityGap(Enum):
     came from without consulting a second column.
     """
 
-    #: (1) ``_convert_events_to_trajectory`` globs ``*.jsonl`` in the session
-    #: dir and converts ``max(session_files)`` — ONE file, chosen by name.
-    #: Handing it a directory of rollouts silently converts only the last.
-    #: Our adapter stages exactly one rollout per conversion, which is what
-    #: makes this gap unreachable through this wrapper rather than fixed.
-    SINGLE_ROLLOUT_PER_DIRECTORY = "codex_single_rollout_per_directory"
+    #: (1) RETIRED. ``codex_single_rollout_per_directory`` named harbor's
+    #: directory globbing, which converted only ``max(*.jsonl)`` of a session
+    #: dir. Our converter reads the one rollout it is given, so there is no
+    #: directory and no gap. The value is not reused; a corpus materialized
+    #: before the port still carries it.
 
     #: (2) Only ``response_item`` records become steps. ``world_state``,
     #: ``token_usage_record`` and ``compacted`` records are dropped outright,
@@ -118,7 +119,6 @@ class CodexFidelityGap(Enum):
 #: content — the structural set, mirroring the Claude Code policy's.
 CODEX_STRUCTURAL_GAPS: frozenset[CodexFidelityGap] = frozenset(
     {
-        CodexFidelityGap.SINGLE_ROLLOUT_PER_DIRECTORY,
         CodexFidelityGap.ITEM_IDS_NOT_PRESERVED,
     }
 )

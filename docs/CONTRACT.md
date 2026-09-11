@@ -59,17 +59,24 @@ proofs are out of scope for the workspace.
 - Codex layout: $CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl,
   transcript depth 3, no side files. session_id is the trailing UUID of the
   rollout filename, so it survives the date nesting.
-- A Codex rollout is staged ALONE into its own temp dir before conversion,
-  because harbor converts every rollout it can see in a directory into one
-  trajectory.
+- One Codex rollout converts to one trajectory, by construction: the converter
+  reads the one file it is given.
 - Codex fidelity gaps are their own enum (CodexFidelityGap), all values
   namespaced `codex_*` so one loss_report.gaps_observed array can carry both
   agents' gaps without collision.
 
-## Converter enrichment (atif-converter owns; wrap-local, NO upstream patches)
-1. Staging fix: per-FILE symlinks; workflow-nested agent files staged flat into
-   the harbor-visible subagents/ dir with collision-safe names.
-2. Post-conversion enrichment pass over the harbor Trajectory (pure function):
+## Converter (atif-converter owns the conversion; harbor supplies the contract)
+0. harbor is used for its PUBLIC surface only: the ATIF data classes in
+   harbor.models.trajectories (RFC 0001) and harbor.utils.trajectory_validator.
+   The raw-JSONL -> Trajectory conversion for both agents is ours, ported from
+   harbor 0.22.0 (Apache-2.0) and held to PARITY with it by an oracle in
+   atif-converter's tests: frozen goldens per synthetic fixture, plus a
+   live-corpus diff. Nothing under harbor.agents may be imported from src/.
+1. Side-file discovery: every *.jsonl under <session-stem>/ (including
+   workflow-nested subagents/workflows/wf_*/agent-*.jsonl, which harbor's own
+   discovery cannot see) is read, and named with its nested path parts joined
+   by `__` so two files sharing a basename never collide.
+2. Post-conversion enrichment pass over the Trajectory (pure function):
    - step.extra["source_uuids"]: list of raw record uuids contributing to the step
      (join on assistant message.id / tool_use_id; user steps via content match order).
    - step.extra["is_compact_summary"] when the source record had it.

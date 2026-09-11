@@ -11,7 +11,7 @@
    disk, so counts and classification cannot disagree.
 3. CENSUS SCOPE: every discovered ``*.jsonl`` is counted, matching the file
    set the adapter stages and edges.jsonl is built from.
-4. PRIVATE-API DRIFT: a missing ``ClaudeCode._convert_events_to_trajectory``
+4. (retired with the port: the private-API drift alarm now lives in harbor_oracle)
    raises its own loud error, never the generic per-session ConversionError.
 5. IN-PLACE ENRICHMENT: ``copy_input=False`` skips the deep copy while the
    default still protects the caller's dict.
@@ -31,8 +31,6 @@ from atif_converter.application import convert_and_audit as convert_and_audit_mo
 from atif_converter.application.convert_and_audit import convert_and_audit
 from atif_converter.domain.enrichment import enrich_trajectory
 from atif_converter.domain.errors import (
-    ConversionError,
-    HarborPrivateApiMissing,
     SourceMutatedDuringConversion,
 )
 from atif_converter.domain.fidelity import RecordType
@@ -290,48 +288,6 @@ class TestConvertRefusesOnMidConversionWrite:
         with pytest.raises(SourceMutatedDuringConversion) as excinfo:
             convert_and_audit(synthetic_session)
         assert synthetic_session in excinfo.value.mutated
-
-
-class TestHarborPrivateApiDrift:
-    def test_missing_private_method_raises_its_own_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An upstream rename must NOT arrive as ConversionError — that is the
-        per-bad-transcript error, and this failure hits every session."""
-        from harbor.agents.installed.claude_code import ClaudeCode  # type: ignore[import-untyped]
-
-        monkeypatch.delattr(ClaudeCode, "_convert_events_to_trajectory", raising=True)
-        with pytest.raises(HarborPrivateApiMissing) as excinfo:
-            harbor_adapter.assert_harbor_private_api()
-        assert "_convert_events_to_trajectory" in str(excinfo.value)
-
-    def test_convert_session_surfaces_drift_not_conversion_error(
-        self,
-        synthetic_session: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from harbor.agents.installed.claude_code import ClaudeCode  # type: ignore[import-untyped]
-
-        monkeypatch.delattr(ClaudeCode, "_convert_events_to_trajectory", raising=True)
-        with pytest.raises(HarborPrivateApiMissing):
-            harbor_adapter.convert_session(synthetic_session)
-
-    def test_non_callable_attribute_also_counts_as_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from harbor.agents.installed.claude_code import ClaudeCode  # type: ignore[import-untyped]
-
-        monkeypatch.setattr(ClaudeCode, "_convert_events_to_trajectory", "not a method")
-        with pytest.raises(HarborPrivateApiMissing):
-            harbor_adapter.assert_harbor_private_api()
-
-    def test_present_api_is_a_no_op(self) -> None:
-        assert harbor_adapter.assert_harbor_private_api() is None
-
-    def test_drift_error_is_not_a_conversion_error(self) -> None:
-        """The two must be distinguishable by type at the catch site."""
-        assert not issubclass(HarborPrivateApiMissing, ConversionError)
-        assert not issubclass(ConversionError, HarborPrivateApiMissing)
 
 
 class TestEnrichInPlace:

@@ -194,59 +194,6 @@ class TestAdapterRouting:
         assert seen == {"path": Path("s.jsonl"), "include_subagents": False}
 
 
-class TestPrivateApiProbe:
-    """A moved upstream method must fail the PASS, not every session in it.
-
-    ``materialize`` records a session's exception and continues, so an absent
-    ``Codex._convert_events_to_trajectory`` used to produce N identical failures
-    under exit 0 — and the cron lane logged "materialize ok" every ten minutes.
-    Probing when the adapter is BUILT puts the failure before the pass.
-    """
-
-    def test_building_the_codex_adapter_probes_the_private_method(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from harbor.agents.installed.codex import Codex
-
-        from atif_converter.domain.errors import HarborPrivateApiMissing
-
-        monkeypatch.delattr(Codex, "_convert_events_to_trajectory")
-        with pytest.raises(HarborPrivateApiMissing):
-            RealConverter(agent="codex")
-
-    def test_building_the_claude_code_adapter_probes_its_own_private_method(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from harbor.agents.installed.claude_code import ClaudeCode
-
-        from atif_converter.domain.errors import HarborPrivateApiMissing
-
-        monkeypatch.delattr(ClaudeCode, "_convert_events_to_trajectory")
-        with pytest.raises(HarborPrivateApiMissing):
-            RealConverter()
-
-    def test_materialize_exits_127_when_the_private_method_is_gone(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from harbor.agents.installed.codex import Codex
-
-        monkeypatch.delattr(Codex, "_convert_events_to_trajectory")
-        monkeypatch.delenv("ATIF_SQL_CORPUS_ROOT", raising=False)
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.delenv("CODEX_HOME", raising=False)
-        (tmp_path / ".codex" / "sessions").mkdir(parents=True)
-
-        with pytest.raises(SystemExit) as excinfo:
-            materialize(agent="codex", fmt=OutputFormat.JSON)
-
-        assert excinfo.value.code == EXIT_CODES["harbor_missing"]
-        envelope = capsys.readouterr()
-        assert "harbor" in (envelope.out + envelope.err)
-
-
 class TestConvertCommand:
     def test_convert_codex_writes_trajectory_and_edges(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

@@ -685,67 +685,48 @@ that the two hint STRINGS are equal, so the copies could diverge in wording whil
 Mitigation: treat the two `RECOVERY_HINT` literals as one value — change both in the same commit,
 which is what both docstrings instruct.
 
-## harbor's private `_convert_events_to_trajectory`
+## harbor's public ATIF surface, consumed by our ported converters
 
-**Producer:** upstream, `harbor.agents.installed.claude_code.ClaudeCode`, pinned
-`harbor>=0.22.0,<0.23` at `packages/atif-converter/pyproject.toml:23`
+**Producer:** upstream, `harbor.models.trajectories` (RFC 0001 data classes) and
+`harbor.utils.trajectory_validator`, pinned `harbor>=0.22.0,<1` at
+`packages/atif-converter/pyproject.toml:26`
 
 **Consumer(s):**
 
-- `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:32` — the method
-  name lives in one named module constant, `_CONVERT_METHOD`.
-- `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178` — the sole call
-  site, reached via `getattr`.
-- `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112` —
-  `assert_harbor_private_api()`, the pre-flight probe, invoked at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:167`.
-- `packages/atif-converter/tests/test_snapshot_and_drift.py:303-329` — the drift alarm: deletes and
-  then corrupts the attribute and asserts the probe raises.
-- `packages/atif-converter/tests/test_convert_and_audit.py:153` — calls the private method directly
-  to pin observed 0.22.0 behavior.
-- `packages/atif-converter/src/atif_converter/domain/fidelity.py:44` — `FidelityGap`, the seven
-  known conversion gaps, is the typed record of what this method loses.
+- `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75` — `convert_claude_code_records`, our Claude Code converter, a parity port of harbor
+  0.22.0's, building `Trajectory` / `Step` / `ToolCall` / `Metrics` from the public models.
+- `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781` — `convert_codex_records`, the Codex counterpart.
+- `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68` — `validate_trajectory`, the only call into harbor's validator.
+- `packages/atif-converter/tests/test_harbor_public_surface_guard.py:29` — the `ast` guard that pins the allowlist to those two modules.
+- `packages/atif-converter/tests/harbor_oracle.py:94` and `:111` — the parity ORACLE: harbor's private converters, reached from the tests
+  only, with frozen goldens and a live-corpus diff.
 
 **Shape:**
 
 ```python
-#: The private harbor entry point this whole package is built on.
-_CONVERT_METHOD = "_convert_events_to_trajectory"
-
-
-def assert_harbor_private_api() -> None:
-    from harbor.agents.installed.claude_code import ClaudeCode
-
-    if not callable(getattr(ClaudeCode, _CONVERT_METHOD, None)):
-        ...
-        raise HarborPrivateApiMissing(msg)
+#: The public harbor surface atif-converter is allowed to depend on.
+PUBLIC_HARBOR_MODULES: frozenset[str] = frozenset(
+    {
+        "harbor.models.trajectories",
+        "harbor.utils.trajectory_validator",
+    }
+)
 ```
 
 **Assumptions consumers make:**
 
-- **The method takes a DIRECTORY, not a file**, laid out as `<session>.jsonl` plus optional
-  `subagents/*.jsonl` under a `<session-stem>/` subdirectory — reconstructed by symlink staging at
-  `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:54-94`.
-- **harbor's own subagent discovery cannot see workflow-nested side-files**, so the adapter stages
-  every `*.jsonl` FLAT into the harbor-visible `subagents/` dir with `__`-joined collision-safe
-  names (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:71-92`). This is fidelity gap 1, and it is why the parity oracle
-  expected a superset (`docs/CONTRACT.md:74-76`).
-- **Directory symlinks are not enough.** Python 3.13's `Path.rglob` does not descend a symlinked
-  directory, so per-FILE symlinks under real directories are mandatory or every subagent transcript
-  vanishes silently (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:74-77`).
-- **A missing attribute is a FLEET failure, not a session failure.** Without the probe an upstream
-  rename surfaces as one `AttributeError` per session swallowed into `ConversionError`
-  (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:114-118`), which is exactly the shape `HarborPrivateApiMissing` exists to
-  distinguish (`packages/atif-converter/src/atif_converter/domain/errors.py:47-54`).
-- **harbor ships no `py.typed`**, so every import from it is untyped and the surface is confined to
-  this one module (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:11-12`).
-- **`None` from the method means "no convertible events", not "error"** — mapped to
-  `EmptySessionError` and to exit code 2 (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:157`,
-  `packages/atif-cli/src/atif_cli/errors.py:27`).
-
-**Drift risk:** the whole package rests on an API upstream owes nobody, and a rename inside 0.22.x
-would still satisfy the pin. Mitigation: the ceiling is `<0.23` with the re-audit obligation written
-into the manifest (`packages/atif-converter/pyproject.toml:19-23`), and the probe converts a rename
-into one specific, actionable error before any session is attempted.
+- **The data classes are the contract, and they are versioned by ATIF.** Our converters write
+  `schema_version` explicitly (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:72`, `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:74`), so a harbor release that adds a newer
+  default still validates what we emit; a release that changes a field fails the drift tests.
+- **Parity is measured, not assumed.** `test_harbor_oracle.py` asserts the live oracle equals the
+  frozen goldens, and `test_parity_*` asserts our output equals both. A harbor bump that changes
+  conversion behavior surfaces as a named JSON-path diff (`packages/atif-converter/tests/harbor_oracle.py:142`), which is a decision to
+  record in the fidelity policy before any re-freeze.
+- **Side-file discovery is ours.** Every `*.jsonl` under a session's side directory is read,
+  workflow-nested ones included, with nested path parts joined by `__`
+  (`packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py:57`); harbor's
+  own discovery cannot see those files, which is why the oracle stages them flat the same way.
+- **harbor ships no `py.typed`**, so every import from it carries an `import-untyped` ignore.
 
 ## The `atif-sql` distribution's `==0.1.0` sibling pins
 

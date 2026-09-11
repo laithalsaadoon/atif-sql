@@ -141,17 +141,17 @@ Three readings the drawn edge deliberately compresses:
   imported more often, or in more sites, by another member, so the attribution rule sources all three
   elsewhere. Its own import sites are real: `packages/atif-corpus/src/atif_corpus/infrastructure/settings.py:19`
   and `packages/atif-corpus/src/atif_corpus/domain/sessions.py:29`.
-- **harbor's single importing file is the highest-consequence external edge in the graph.**
-  `packages/atif-converter/pyproject.toml:19-23` ceilings the pin at `harbor>=0.22.0,<0.23` because
-  atif-converter calls the private `ClaudeCode._convert_events_to_trajectory`, bound to
-  `_CONVERT_METHOD` at
-  `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:32` and imported at
-  `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161`;
-  `assert_harbor_private_api` at
-  `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112` raises a located
-  error if a version bump removes it. Everything harbor touches is confined to that one module because
-  harbor ships no `py.typed` marker
-  (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:11-12`).
+- **harbor is a public-API edge now.** `packages/atif-converter/pyproject.toml:26` pins
+  `harbor>=0.22.0,<1`, and production code imports two things from it: the ATIF data classes
+  (`harbor.models.trajectories`, e.g. `packages/atif-converter/src/atif_converter/infrastructure/codex_converter.py:36`)
+  and the validator (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68`).
+  The conversion itself is ours, ported from 0.22.0
+  (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`,
+  `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781`). An `ast` guard pins
+  the allowlist (`packages/atif-converter/tests/test_harbor_public_surface_guard.py:29`), and
+  harbor's private converters are reachable from the parity oracle in the tests only
+  (`packages/atif-converter/tests/harbor_oracle.py:94`). harbor ships no `py.typed` marker, so each
+  import site carries an `import-untyped` ignore.
 
 ## Declared dependencies are not the installed closure
 

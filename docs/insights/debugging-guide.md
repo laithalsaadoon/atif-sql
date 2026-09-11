@@ -26,14 +26,11 @@ The exit-code contract, read from source and confirmed by running the CLI:
 | 65 | `catalog_error`, `validation_error`, `embedding_mismatch` | the named object cannot be bound |
 | 70 | `runtime_error` | everything else the adapter raises |
 | 78 | `terminal_state`, `suspicious_scan` | an operator has to act; retrying cannot succeed |
-| 127 | `harbor_missing` | the private harbor method the converter is built on is gone |
+| 127 | `harbor_missing` | RETIRED: kept so the table never renumbers; no code path raises it since the conversion became ours |
 | 1 | *(none)* | an unhandled exception — outside the taxonomy |
 
-Two of these codes exist to be told apart from a crash rather than from each other.
-**`harbor_missing: 127`** is raised only by `convert`, ahead of its generic `DomainError`
-clause (`packages/atif-cli/src/atif_cli/app.py:285-295`), because a vanished private method
-condemns every session in the corpus rather than the one in hand — a driver should stop, not
-walk the corpus collecting the same failure. **`suspicious_scan: 78`** is raised only by
+One of these codes exists to be told apart from a crash rather than from another code.
+**`suspicious_scan: 78`** is raised only by
 `materialize` (`packages/atif-cli/src/atif_cli/app.py:429-443`), when the source scan finds
 zero sessions over a non-empty corpus and ghost removal is refused; it shares 78 with
 `terminal_state` because both mean an operator has to act, and carries its own `kind` string
@@ -69,7 +66,7 @@ On a pipe the envelope is the last line on stderr, in this shape:
 | A changed session never materializes | Quiescence: the newest source mtime is younger than `quiesce_seconds` (default 300) | `atif-sql status` reports it under `live`; `--force` overrides staleness but never quiescence | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:81-104`, `packages/atif-corpus/src/atif_corpus/domain/sessions.py:172-173`, `packages/atif-corpus/src/atif_corpus/domain/sessions.py:201-203` |
 | A session stays `live` forever and warns about a FUTURE mtime | The writing host's clock is ahead, so the age is negative and never meets the threshold | Fix the clock on the host writing the transcript | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:96-103` |
 | `materialize` or `status` aborts inside `read_watermark` with `ValueError` or `TypeError` | A watermark whose values are not numbers; the `int(value)` coercion sits outside the try | Delete `watermark.json`; a missing watermark costs one full re-materialization pass and is always safe | `packages/atif-corpus/src/atif_corpus/application/materialize.py:160-176` |
-| Every session fails conversion at once, with `harbor … has no ClaudeCode._convert_events_to_trajectory` | harbor moved past the pin; this is upstream drift, not a data problem | Compare the installed harbor against the `>=0.22.0,<0.23` pin before touching any transcript | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112-139` |
+| Every session fails conversion at once, on the same `ConversionError` | The converter is a port of harbor 0.22.0's, so a systematic failure is a bug in the port or a transcript shape it never saw | Run the parity oracle: `ATIF_PARITY_LIMIT=0 uv run pytest packages/atif-converter/tests/test_parity_live.py`, and read the diff paths | `packages/atif-converter/tests/harbor_oracle.py:142` |
 | One session fails with `N source file(s) changed while converting …` | The session is still being written; the snapshot re-check refused to publish inconsistent artifacts | Retry once the session goes quiet — this is self-clearing | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:93-102`, `packages/atif-converter/src/atif_converter/domain/errors.py:57-70` |
 | `convert` prints a trajectory and then exits 65 | The enriched trajectory failed harbor's `TrajectoryValidator` | Read `validation_errors` in the JSON it already printed | `packages/atif-cli/src/atif_cli/app.py:283-304`, `packages/atif-cli/src/atif_cli/converter_adapter.py:62-64` |
 | `loss_report.json` shows `records_dropped > 0` | Fidelity gap 2: harbor 0.22.0 converts only user and assistant records | Check `gaps_observed` against the seven named gaps — these are documented losses, not defects | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79` |
@@ -223,13 +220,12 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   one corpus directory, and sessions from both interleaved. Mitigation: every
   tick exports both `CLAUDE_CONFIG_DIR` and `ATIF_SQL_SOURCE_ROOT` per corpus.
   `scripts/atif-sql-refresh.sh:52-59`, `scripts/atif-sql-refresh.sh:312-313`
-- **`HarborPrivateApiMissing`:** the converter is built on a private harbor
-  method, so an upstream rename makes every session fail for a reason unrelated
-  to any transcript. Signal: a materialize pass where the failure count equals
-  the session count. Mitigation: an explicit callable probe before any
-  conversion raises a distinct error naming the installed harbor version, so
-  the log line cannot be mistaken for one bad transcript among many.
-  `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112-139`
+- **Divergence from harbor's conversion:** the converters are parity ports of harbor
+  0.22.0's private ones, and harbor keeps changing those files upstream. Signal:
+  `test_harbor_oracle.py` reports a golden diff after a harbor bump, or the live
+  parity test names diverging JSON paths. Mitigation: each diff is a decision to
+  follow upstream or not, recorded in the fidelity policy; re-freeze the goldens
+  only after it (`packages/atif-converter/tests/harbor_oracle.py:135`). `packages/atif-converter/tests/harbor_oracle.py:59`
 - **`SourceMutatedDuringConversion`:** a session that resumes writing
   mid-conversion would yield a census, a trajectory, and an `edges.jsonl` each
   describing different bytes. Signal: one session failing with a

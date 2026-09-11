@@ -39,7 +39,7 @@ rises.
 
 | Rank | Debt item | Category | Cost to fix | Citation |
 | --- | --- | --- | --- | --- |
-| 1 | The entire Claude Code → ATIF conversion path runs through one PRIVATE upstream method, `ClaudeCode._convert_events_to_trajectory`, verified against harbor 0.22.0 only — so the manifest carries a minor-version ceiling and the unit tests are the drift alarm. Nothing upstream promises the method exists in 0.23. | `version pin` | L | `packages/atif-converter/pyproject.toml:19-23` |
+| 1 | RETIRED 2026-09-11. The conversion path used to run through one PRIVATE upstream method per agent; both are now ported into this package on harbor's public ATIF models (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`, `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781`), held to parity by an oracle in the tests (`packages/atif-converter/tests/harbor_oracle.py:94`), and the pin widened to `harbor>=0.22.0,<1`. What remains of the item is the install weight in row 3. | Coupling | Done | `packages/atif-converter/pyproject.toml:26` |
 | 2 | Seven upstream conversion losses are catalogued as `FidelityGap` enum members rather than fixed. Gap 3 flattens the `parentUuid` tree by timestamp sort, losing branch and rewind structure; gap 7 drops the event `uuid`, making step-to-raw-record identity unrecoverable from the trajectory — recovered out of band through a parallel `edges.jsonl` sidecar the corpus layout mandates. | `wrong abstraction` | L | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79`, `docs/CONTRACT.md:26-28` |
 | 3 | 63 of the 113 runtime distributions reach this project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`, `aiohttp` — for exactly one private method call. A CLI that converts JSONL ships a web server and a database client. 57% of the roster, 155 MiB. | `version pin` | L | `RELEASING.md:215-222` |
 | 4 | 415 pyright findings sit behind three disabled Unknown-propagation rules, and the config names the fix it has not built: a `TypedDict` model of the `~/.claude` JSONL record and the ATIF trajectory would close 144 of them. Until that model exists, every JSON-shaped value in the hottest modules is `dict[str, Any]` narrowed by `isinstance`, with the type checker's opinion switched off. The two heaviest concentrations are the converter's enrichment module at 59 findings and the analytics corpus reader at 33. | `wrong abstraction` | L | `pyproject.toml:641-671` |
@@ -117,35 +117,18 @@ Shows up in:
 Cost: L — the analysis is done and written; the work it defers is a `TypedDict` model of
 the JSONL record, four stub distributions, and three refactors of named functions.
 
-### One private upstream method carries the whole product
+### One private upstream method carried the whole product (retired)
 
-`atif-converter` exists to call `ClaudeCode._convert_events_to_trajectory`, a private
-harbor method. Four consequences compound. The manifest carries a minor-version ceiling
-that only a manual re-audit can lift. Seven data losses are documented as enum members
-because the private method's behavior cannot be changed, and two of them — flattened
-parent chains, dropped event uuids — are worked around by writing a parallel `edges.jsonl`
-sidecar for every session, so the corpus layout itself is shaped by an upstream defect.
-The dependency arrives with 63 other distributions including a web framework, an ASGI
-server, and a hosted-database client, none of which this code imports.
-
-And it forecloses a supply-chain control the rest of the toolchain would take. semgrep's
-`uv-missing-dependency-cooldown` asks for `exclude-newer` under `[tool.uv]`, so a freshly
-published version waits before it can be resolved — the standard mitigation for a
-compromised release. Probed 2026-08-28 with `uv lock --dry-run --exclude-newer "7 days"`:
-the workspace becomes UNSATISFIABLE, because no distribution inside
-`harbor>=0.22.0,<0.23` is older than the cutoff. The control is declined for that measured
-reason rather than overlooked, and `uv.lock` plus `uv sync --locked` remain what actually
-pins the resolution.
-
-Shows up in:
-
-- `packages/atif-converter/pyproject.toml:19-23` — the ceiling and the reason.
-- `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79` — the seven gaps.
-- `docs/CONTRACT.md:26-28` — `edges.jsonl`, the sidecar that exists because of gaps 3 and 7.
-- `RELEASING.md:215-222` — 63 of 113 packages, 155 MiB, for one method.
-
-Cost: L — either vendor the conversion the method performs and drop harbor entirely, or get
-a public entry point upstreamed. Both are real projects.
+`atif-converter` used to exist to call `ClaudeCode._convert_events_to_trajectory` and its Codex
+sibling, both private harbor methods. The port of 2026-09-11 moved the conversion into this
+package (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`, `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781`), built on the public ATIF data classes, with harbor's private
+converters kept as a test-only parity oracle (`packages/atif-converter/tests/harbor_oracle.py:94`) frozen to goldens and diffed over the
+live corpus. Three of the four consequences are gone with it: the minor-version ceiling, the
+staging layer that reconstructed harbor's directory shape, and the two "gaps" that only described
+harbor's file discovery. What stays is by choice: the data-loss gaps are still typed as enum
+members because the port is a PARITY port, and fixing one now means deciding to diverge from the
+oracle. The fourth consequence, the dependency arriving with 63 other distributions, stands
+until harbor's models and validator are available without the rest of it.
 
 ### The independence contract is paid for in copies, and the copies are pinned by text
 

@@ -81,48 +81,26 @@ Four catalogs (`VIEW_NAMES` 16, `MACRO_NAMES` 9, `ANALYTICS_VIEW_NAMES` 12,
   `DESCRIBE`, so reordering a `SELECT` list in the DDL without reordering the catalog entry fails CI
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:47-50`).
 
-## harbor's private `_convert_events_to_trajectory`
+## harbor's public surface, and the parity oracle behind the ported converters
 
-Defined at: `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:32`
+Defined at: `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75` (Claude Code) and `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781` (Codex)
 
-The whole converter package is built on one private upstream method, pinned `harbor>=0.22.0,<0.23`
-(`packages/atif-converter/pyproject.toml:23`). Every `from harbor...` import in `src/` lives inside
-that one module by policy (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:11-12`,
-with the three sites at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:103`, `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:124`, and `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161`).
+Production code depends on harbor for two public things — the ATIF data classes in
+`harbor.models.trajectories` and `harbor.utils.trajectory_validator` — pinned `harbor>=0.22.0,<1`
+(`packages/atif-converter/pyproject.toml:26`). The conversion is a parity port of harbor 0.22.0's
+private converters, and those private methods are reachable from the tests only, as the oracle
+(`packages/atif-converter/tests/harbor_oracle.py:94`, `packages/atif-converter/tests/harbor_oracle.py:111`), frozen to goldens under `packages/atif-converter/tests/goldens/`.
 
 | Downstream | Type | Touch on change | Citation |
 | --- | --- | --- | --- |
-| `assert_harbor_private_api()` — the preflight `callable(getattr(...))` check | direct import | yes | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112-137` |
-| `convert_session()` — the only caller of the private method | direct import | yes | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161-182` |
-| `FidelityGap` — 7 members, each a behavior probed against 0.22.0 | indirect | yes | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79` |
-| `atif_converter.domain.enrichment` — replicates harbor's dedup + timestamp-sort + `turn_by_msgid` bundling order to re-derive step identity | indirect | yes | `packages/atif-converter/src/atif_converter/domain/enrichment.py:15-51` |
-| `atif_converter.application.convert_and_audit` — composes census + adapter, declares the always-present gap set | direct import | likely | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:39-51` |
-| `HarborPrivateApiMissing` — distinct from `ConversionError` so one bad transcript and a renamed method do not look alike in a log | direct import | likely | `packages/atif-converter/src/atif_converter/domain/errors.py:47-54` |
-| `EXIT_CODES["harbor_missing"] = 127` | config | likely | `packages/atif-cli/src/atif_cli/errors.py:38` |
-| `atif_cli.app.materialize` — stamps `_version_of("harbor")` into every `meta.json` | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:401` |
-| `atif_duck.infrastructure.registry` — SQL comments encode gap 6 and gap 7 as facts the DDL depends on | indirect | likely | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:348` and `packages/atif-duck/src/atif_duck/infrastructure/registry.py:427-428` |
-| `atif_duck.infrastructure.analytics` — treats `root_session_id = session_id` because harbor inlines subagents (gap 4) | indirect | likely | `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:405` |
-| `test_convert_and_audit.py` — the drift alarm; the gap-1 test calls the private method DIRECTLY | test | yes | `packages/atif-converter/tests/test_convert_and_audit.py:136-159` |
-| `test_snapshot_and_drift.py` — `monkeypatch.delattr` on the private method, three scenarios | test | yes | `packages/atif-converter/tests/test_snapshot_and_drift.py:301-329` |
-| `test_lean_import.py` — `harbor` is on the forbidden-eager-import list | test | no | `packages/atif-cli/tests/test_lean_import.py:19` |
-
-### Blast-radius notes
-
-- **A harbor bump that FIXES a gap fails the suite on purpose.** The gap-1 canary asserts harbor's own
-  `rglob("subagents/*.jsonl")` still misses workflow-nested files and fails with "harbor now discovers
-  workflow-nested subagent files — gap 1 closed"
-  (`packages/atif-converter/tests/test_convert_and_audit.py:159`); the gap-7 canary does the same for
-  event-uuid preservation (`packages/atif-converter/tests/test_convert_and_audit.py:104`). Read a red
-  converter suite after a bump as upstream drift to
-  re-verify, not as a regression to patch around.
-- **harbor ships no `py.typed`.** Every import from it carries `# type: ignore[import-untyped]`, and the
-  quarantine to one module is what keeps the untyped surface from spreading past the adapter
-  (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:11-12`).
-- **63 of the 113 runtime packages reach this project only through harbor** — `fastapi`, `uvicorn`,
-  `starlette`, `litellm`, `openai`, `tiktoken` — for this one private call: 57% of the roster and
-  155 MiB (`RELEASING.md:215-222`). None of them is imported by this code. Retargeting this method is
-  therefore also the only lever on install weight, and it is what pins the Python floor at 3.13
-  (`pyproject.toml:124`).
+| `test_harbor_public_surface_guard.py` — `ast` allowlist of the two public modules | test | yes | `packages/atif-converter/tests/test_harbor_public_surface_guard.py:29` |
+| `harbor_adapter.convert_session()` / `codex_adapter.convert_codex_session()` — the seams: converter in, validated dict out | direct import | yes | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`, `packages/atif-converter/src/atif_converter/infrastructure/codex_adapter.py:63` |
+| `FidelityGap` / `CodexFidelityGap` — the losses the port inherited on purpose; fixing one is a decision to diverge from the oracle | indirect | yes | `packages/atif-converter/src/atif_converter/domain/fidelity.py:52`, `packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:66` |
+| `test_harbor_oracle.py` — live oracle equals frozen goldens; a harbor bump that changes conversion fails here first | test | yes | `packages/atif-converter/tests/test_harbor_oracle.py:1` |
+| `test_parity_live.py` — newest N local sessions of each agent, both converters, every diverging path | test | yes | `packages/atif-converter/tests/test_parity_live.py:1` |
+| `atif_converter.domain.enrichment` / `codex_enrichment` — re-derive step identity by replicating the converter's normalization order | indirect | yes | `packages/atif-converter/src/atif_converter/domain/enrichment.py:1`, `packages/atif-converter/src/atif_converter/domain/codex_enrichment.py:1` |
+| `EXIT_CODES["harbor_missing"] = 127` — retired, kept so the table never renumbers | config | no | `packages/atif-cli/src/atif_cli/errors.py:47` |
+| `atif_cli.app.materialize` — stamps `_version_of("harbor")` into every `meta.json` | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:426` |
 
 ## The materialized corpus artifact layout
 

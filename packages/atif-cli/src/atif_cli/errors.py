@@ -44,10 +44,10 @@ EXIT_CODES: dict[str, int] = {
     # same wrong root cannot succeed — but a distinct `kind` string, because the
     # remedy is a path, not a store. A separate code matters most for what it is
     # NOT: exit 1 here is an uncaught traceback, indistinguishable from a crash.
-    "harbor_missing": 127,  # convert: the private harbor method atif-converter is built
-    # on is gone (EX_NOTFOUND by convention: a surface, not a datum). Distinct from
-    # runtime_error because it condemns EVERY session, not the one in hand, so a
-    # driver should stop rather than walk the corpus collecting identical failures.
+    "harbor_missing": 127,  # RETIRED, kept so this table never renumbers. It named
+    # the loss of the private harbor method the converter used to be built on; the
+    # conversion is ours now (atif_converter.domain.*_conversion), so no code path
+    # raises it. EX_NOTFOUND by convention: a surface, not a datum.
 }
 
 

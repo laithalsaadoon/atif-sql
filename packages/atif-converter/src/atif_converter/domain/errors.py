@@ -44,16 +44,6 @@ class ConversionError(DomainError):
     """Unexpected failure inside the harbor adapter during conversion."""
 
 
-class HarborPrivateApiMissing(DomainError):  # noqa: N818 — names a missing surface, not a runtime fault
-    """The private harbor method this converter is built on is gone.
-
-    Distinct from :class:`ConversionError` on purpose. A bad transcript makes
-    ONE session fail; a renamed private method makes EVERY session fail for a
-    reason that has nothing to do with the data, and the two must not look
-    alike in a materialization log.
-    """
-
-
 class SourceMutatedDuringConversion(DomainError):  # noqa: N818 — names a race verdict, not a runtime fault
     """A source file changed while the session was being converted.
 

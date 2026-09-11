@@ -69,13 +69,14 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:226`
 2. Fingerprint every source file — the main transcript and each discovered
    side-file — before harbor reads anything —
    `packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:110`.
-3. Assert harbor still exposes the pinned private method, then stage the
-   session as symlinks into the directory shape `ClaudeCode` expects —
-   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112`,
-   `:54`.
-4. Call `ClaudeCode._convert_events_to_trajectory` inside a temporary
-   directory and dump the result to a JSON-mode dict; a `None` return means no
-   convertible events and raises `EmptySessionError` — `:178`.
+3. Read the main transcript and discover every side file under `<stem>/`,
+   workflow-nested ones included —
+   `packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py:57`.
+4. Convert the records with our ported converter (a parity port of harbor
+   0.22.0's, built on the public ATIF models) and dump the result to a
+   JSON-mode dict; a `None` return means no convertible events and raises
+   `EmptySessionError` —
+   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`.
 5. Re-check the fingerprints. Any movement raises
    `SourceMutatedDuringConversion` rather than emitting a census, a trajectory,
    and an edges file that describe different bytes of one session —

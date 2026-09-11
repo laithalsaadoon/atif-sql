@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pin harbor 0.22.0 conversion behavior — the drift alarm for version bumps.
+"""Pin the Claude Code conversion behavior our converter inherited from harbor 0.22.0.
 
-Every assertion here encodes an EMPIRICALLY OBSERVED behavior of
-``ClaudeCode._convert_events_to_trajectory`` at harbor==0.22.0 (probed
-2026-08-22). If a harbor bump flips one of these, that is upstream drift:
-re-audit the fidelity policy in ``atif_converter/domain/fidelity.py`` before
-touching the assertions.
+Every assertion here encodes a behavior EMPIRICALLY OBSERVED in harbor's
+conversion at 0.22.0 (probed 2026-08-22) and carried into our port
+(``atif_converter.domain.claude_code_conversion``) on purpose. The parity
+oracle (``harbor_oracle.py``, the goldens, ``test_parity_*``) is what holds the
+port to that behavior; these tests say what the behavior IS, in terms of the
+fidelity policy in ``atif_converter/domain/fidelity.py``. Changing one of them
+is a decision to diverge from harbor, and the policy is where that is recorded.
 """
 
 from __future__ import annotations
@@ -75,9 +77,9 @@ class TestConversion:
         assert len(sidechain) == 3
         assert "subagent_trajectories" not in result.trajectory
 
-    def test_staging_fix_converts_workflow_files(self, converted: Converted) -> None:
-        """Our staging flattens workflow-nested side-files into the
-        harbor-visible subagents/ dir, so their records now convert."""
+    def test_workflow_nested_side_files_convert(self, converted: Converted) -> None:
+        """Our converter discovers workflow-nested side-files itself, so their
+        records convert (harbor's own discovery cannot see them)."""
         result, _ = converted
         texts = [
             (s.get("message") or "") for s in result.trajectory["steps"] if s["source"] == "user"
@@ -124,41 +126,33 @@ class TestLossReport:
         assert report.records_dropped == 2  # attachment + queue-operation
         assert FidelityGap.NON_MESSAGE_RECORDS_DROPPED in report.gaps_observed
 
-    def test_workflow_file_convertible_via_staging_gap1(self, converted: Converted) -> None:
-        """Workflow files count as convertible through OUR wrapper's staging;
-        the gap stays observed because it names the upstream blindness."""
+    def test_workflow_files_are_convertible_and_gap1_is_retired(self, converted: Converted) -> None:
+        """Every side file is convertible through our converter, and the retired
+        ``workflow_subagents_missed`` value is never emitted again."""
         _, report = converted
         assert report.subagent_files_found == 2
         assert report.subagent_files_convertible == 2
         assert report.workflow_subagent_files_found == 1
-        assert FidelityGap.WORKFLOW_SUBAGENTS_MISSED in report.gaps_observed
+        assert "workflow_subagents_missed" not in {gap.value for gap in report.gaps_observed}
 
-    def test_raw_harbor_still_blind_to_workflow_files_gap1(self, synthetic_session: Path) -> None:
-        """DRIFT ALARM: harbor's own rglob("subagents/*.jsonl") discovery must
-        still miss workflow-nested files when given the RAW (unstaged) layout.
-        If this fails, upstream closed gap 1 — re-audit the fidelity policy
-        and the staging flattener."""
+    def test_raw_harbor_is_still_blind_to_workflow_files(self, synthetic_session: Path) -> None:
+        """An ORACLE fact, not a gap: harbor's own discovery misses workflow-nested
+        side files when handed the raw layout, which is why our converter does its
+        own discovery. Skips the day harbor drops the private method; if it FAILS,
+        upstream learned to see them and the oracle's flat staging should be
+        re-checked against ours."""
+        from harbor_oracle import require_harbor_private_api
+
+        require_harbor_private_api("claude-code")
         from harbor.agents.installed.claude_code import ClaudeCode  # type: ignore[import-untyped]
 
         session_dir = synthetic_session.parent
-        visible = set(session_dir.rglob("subagents/*.jsonl"))
-        all_side = {
-            p
-            for p in session_dir.rglob("*.jsonl")
-            if p != synthetic_session and "subagents" in p.parts
-        }
-        workflow_nested = all_side - visible
-        assert workflow_nested, "fixture lost its workflow-nested side-file"
-
         trajectory = ClaudeCode(logs_dir=session_dir.parent)._convert_events_to_trajectory(
             session_dir
         )
         assert trajectory is not None
         texts = [(s.message or "") for s in trajectory.steps if s.source == "user"]
-        assert not any("workflow subagent prompt" in t for t in texts), (
-            "harbor now discovers workflow-nested subagent files — gap 1 closed "
-            "upstream; re-audit FidelityGap.WORKFLOW_SUBAGENTS_MISSED"
-        )
+        assert not any("workflow subagent prompt" in t for t in texts)
 
     def test_structural_gaps_always_observed(self, converted: Converted) -> None:
         _, report = converted
@@ -170,7 +164,7 @@ class TestLossReport:
         } <= report.gaps_observed
 
     def test_workflow_records_now_reach_the_trajectory(self, converted: Converted) -> None:
-        """With the staging fix the workflow file's user record becomes a
+        """With our own side-file discovery the workflow file's user record becomes a
         step: 1 main user + 1 subagent user + 1 subagent assistant +
         1 workflow user + 2 agent turns = 6 (the tool_result user event
         attaches to its pending call in place)."""

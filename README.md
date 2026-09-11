@@ -48,7 +48,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 
 | Directory | What |
 | --- | --- |
-| `atif-converter` | Harbor `ClaudeCode` and `Codex` adapter wrappers + per-agent fidelity policy (loss accounting per session) |
+| `atif-converter` | Claude Code and Codex CLI transcript → ATIF converters (ours, built on Harbor's public trajectory models) + per-agent fidelity policy (loss accounting per session) |
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM client; no other package hardcodes a model id |

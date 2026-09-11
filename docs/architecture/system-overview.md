@@ -28,10 +28,14 @@ per invocation, and each is dry-run by default (`README.md:37`).
 ## How the pieces fit
 
 The seven directories under `packages/` are internal module boundaries, not seven installs
-(`README.md:43`); they are uv workspace members (`pyproject.toml:100`). `atif-converter` wraps
-Harbor's `ClaudeCode` and `Codex` adapters, pinned `harbor>=0.22.0,<0.23`
-(`packages/atif-converter/pyproject.toml:23`) because it calls a private upstream method verified
-against 0.22.0 only (`:20`), and owns the fidelity policy as types: `FidelityGap` enumerates the
+(`README.md:43`); they are uv workspace members (`pyproject.toml:100`). `atif-converter` owns the
+conversion itself: two converters ported from Harbor 0.22.0 under Apache-2.0
+(`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py`,
+`packages/atif-converter/src/atif_converter/domain/codex_conversion.py`), built on Harbor's public
+ATIF data classes and validator, which is all the pinned `harbor>=0.22.0,<1`
+(`packages/atif-converter/pyproject.toml:26`) is for. Harbor's private converters survive only as the
+parity oracle in the converter's tests (`packages/atif-converter/tests/harbor_oracle.py:94`). It also
+owns the fidelity policy as types: `FidelityGap` enumerates the
 seven known upstream conversion gaps
 (`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`, 137 LOC), and `CodexFidelityGap`
 enumerates the seven that are Codex's

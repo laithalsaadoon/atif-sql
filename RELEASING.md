@@ -215,11 +215,13 @@ Alpine and other musl targets are worse and are not supported: `duckdb`, `hdbsca
 **The harbor subtree is the standing follow-up.** 63 of the 113 runtime packages reach this
 project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client
 stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`,
-`aiohttp` — while `atif-converter` uses harbor for exactly one private method,
-`ClaudeCode._convert_events_to_trajectory`. That is 57% of the dependency roster and 13% of
-the bytes (155 MiB): a CLI that converts JSONL ships a web server and a database client to do
-it. It is a supply-chain and install-weight question, not a release blocker, and it does not
-change the shape of a release.
+`aiohttp` — while `atif-converter` uses harbor for its public ATIF data classes and validator
+only (the conversion itself is ours since the port away from harbor's private methods). That
+is 57% of the dependency roster and 13% of the bytes (155 MiB): a CLI that converts JSONL
+ships a web server and a database client to do it. It is a supply-chain and install-weight
+question, not a release blocker, and it does not change the shape of a release. The port
+makes the next step tractable: the eleven pydantic models and the validator are small enough
+to vendor or to depend on a slimmer distribution, should upstream publish one.
 
 ## The normal path
 

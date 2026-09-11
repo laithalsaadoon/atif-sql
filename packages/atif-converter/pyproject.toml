@@ -16,11 +16,18 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # Ceiling on the minor: we depend on the PRIVATE method
-    # ClaudeCode._convert_events_to_trajectory, verified against 0.22.0 only.
-    # Bumping past <0.23 requires re-running the atif-converter test suite
-    # (the drift alarm) and re-auditing the fidelity gaps in domain/fidelity.py.
-    "harbor>=0.22.0,<0.23",
+    # harbor is here for its PUBLIC surface only: the ATIF data classes in
+    # harbor.models.trajectories (RFC 0001) and harbor.utils.trajectory_validator.
+    # The conversion itself is ours (domain/claude_code_conversion.py,
+    # domain/codex_conversion.py, ported from 0.22.0 under Apache-2.0), so the
+    # pin no longer has to hold a private method still. The model shapes we
+    # write are pinned by tests instead: a harbor release that changes them
+    # fails the suite, which is the alarm a version ceiling used to stand in for.
+    "harbor>=0.22.0,<1",
+    # Same lazy import harbor's own converters make for per-call cost: the port
+    # keeps it, so it is our dependency now rather than one we reached through
+    # harbor. Floor matches harbor 0.22.0's own requirement.
+    "litellm>=1.92.0",
     "loguru>=0.7.3",
 ]
 
