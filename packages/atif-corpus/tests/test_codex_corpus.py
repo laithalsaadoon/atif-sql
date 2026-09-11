@@ -17,12 +17,12 @@ import stat
 from pathlib import Path
 
 import pytest
-from corpus_fixtures import LIVE_NS, NOW_NS, STALE_NS
+from corpus_fixtures import LIVE_NS, NOW_NS, STALE_NS, write_session
 
-from atif_corpus.application.materialize import materialize
+from atif_corpus.application.materialize import CorpusAgentMismatchError, materialize
 from atif_corpus.domain.agents import AgentSource
 from atif_corpus.domain.layout import CorpusLayout
-from atif_corpus.domain.source_layout import CODEX_LAYOUT
+from atif_corpus.domain.source_layout import CLAUDE_CODE_LAYOUT, CODEX_LAYOUT
 from atif_corpus.infrastructure.fake_converter import FakeConverter
 from atif_corpus.infrastructure.scanner import scan_source_root, scan_sources
 
@@ -234,3 +234,108 @@ class TestCodexMaterialization:
         os.utime(rollout, ns=(newer, newer))
         report = _materialize_codex(codex_source_root, corpus_root)
         assert report.materialized_count == 1
+
+
+class TestOneCorpusHoldsOneAgent:
+    """The corpus's own ``meta.agent`` is a discriminator, not just provenance.
+
+    Per-agent default roots keep the two agents apart on their own, but an
+    explicit ``--corpus-root`` / ``ATIF_SQL_CORPUS_ROOT`` defeats them. Aimed at
+    the other agent's corpus, every session there is a ghost by construction, so
+    the pass would delete all of them and report it as "source vanished".
+    """
+
+    def test_a_codex_pass_refuses_a_claude_corpus(
+        self, tmp_path: Path, codex_source_root: Path
+    ) -> None:
+        claude_source = tmp_path / "projects"
+        claude_source.mkdir()
+        write_session(claude_source, SESSION_A, mtime_ns=STALE_NS)
+        corpus_root = tmp_path / "corpus"
+        first = materialize(
+            source_root=claude_source,
+            corpus_root=corpus_root,
+            converter=FakeConverter(),
+            materialized_at="2026-09-11T00:00:00Z",
+            harbor_version="0.22.0",
+            converter_version="0.1.0",
+            now_ns=NOW_NS,
+            source_layout=CLAUDE_CODE_LAYOUT,
+        )
+        assert first.materialized_count == 1
+
+        write_rollout(codex_source_root, SESSION_B, mtime_ns=STALE_NS)
+        with pytest.raises(CorpusAgentMismatchError) as caught:
+            _materialize_codex(codex_source_root, corpus_root)
+
+        assert "one agent" in str(caught.value)
+        layout = CorpusLayout(corpus_root)
+        assert layout.session_dir(SESSION_A).is_dir(), "the Claude session was deleted"
+        assert not layout.session_dir(SESSION_B).exists(), "the refusal wrote anyway"
+
+    def test_a_claude_pass_refuses_a_codex_corpus(
+        self, tmp_path: Path, codex_source_root: Path
+    ) -> None:
+        corpus_root = tmp_path / "corpus"
+        write_rollout(codex_source_root, SESSION_B, mtime_ns=STALE_NS)
+        assert _materialize_codex(codex_source_root, corpus_root).materialized_count == 1
+
+        claude_source = tmp_path / "projects"
+        claude_source.mkdir()
+        write_session(claude_source, SESSION_A, mtime_ns=STALE_NS)
+        with pytest.raises(CorpusAgentMismatchError):
+            materialize(
+                source_root=claude_source,
+                corpus_root=corpus_root,
+                converter=FakeConverter(),
+                materialized_at="2026-09-11T00:00:00Z",
+                harbor_version="0.22.0",
+                converter_version="0.1.0",
+                now_ns=NOW_NS,
+                source_layout=CLAUDE_CODE_LAYOUT,
+            )
+        assert CorpusLayout(corpus_root).session_dir(SESSION_B).is_dir()
+
+    def test_a_corpus_written_before_the_agent_key_reads_as_claude_code(
+        self, tmp_path: Path, codex_source_root: Path
+    ) -> None:
+        """No corpus predating Codex support can hold Codex sessions.
+
+        So a ``meta.json`` with no ``agent`` key answers ``claude-code`` — which
+        is what protects the corpora that were on disk before this feature.
+        """
+        claude_source = tmp_path / "projects"
+        claude_source.mkdir()
+        write_session(claude_source, SESSION_A, mtime_ns=STALE_NS)
+        corpus_root = tmp_path / "corpus"
+        materialize(
+            source_root=claude_source,
+            corpus_root=corpus_root,
+            converter=FakeConverter(),
+            materialized_at="2026-09-11T00:00:00Z",
+            harbor_version="0.22.0",
+            converter_version="0.1.0",
+            now_ns=NOW_NS,
+            source_layout=CLAUDE_CODE_LAYOUT,
+        )
+        meta_path = CorpusLayout(corpus_root).meta_path(SESSION_A)
+        meta = json.loads(meta_path.read_text())
+        del meta["agent"]
+        meta_path.write_text(json.dumps(meta))
+
+        write_rollout(codex_source_root, SESSION_B, mtime_ns=STALE_NS)
+        with pytest.raises(CorpusAgentMismatchError):
+            _materialize_codex(codex_source_root, corpus_root)
+        assert CorpusLayout(corpus_root).session_dir(SESSION_A).is_dir()
+
+    def test_the_same_agent_twice_is_not_a_mismatch(
+        self, tmp_path: Path, codex_source_root: Path
+    ) -> None:
+        """The guard must not fire on the normal case: two passes, one agent."""
+        corpus_root = tmp_path / "corpus"
+        write_rollout(codex_source_root, SESSION_A, mtime_ns=STALE_NS)
+        assert _materialize_codex(codex_source_root, corpus_root).materialized_count == 1
+        write_rollout(codex_source_root, SESSION_B, mtime_ns=STALE_NS)
+        second = _materialize_codex(codex_source_root, corpus_root)
+        assert second.materialized_count == 1
+        assert second.removed_session_ids == ()

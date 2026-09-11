@@ -379,6 +379,59 @@ class TestEnrichment:
         assert enriched["extra"]["enrichment_unattributed_steps"] == 1
         assert not (enriched["steps"][0].get("extra") or {}).get("source_uuids")
 
+    def test_message_records_that_reach_no_step_are_counted(self) -> None:
+        """The silent end of the positional walk: records left over, no step refused.
+
+        Running out of RECORDS refuses a step and is loud. Running out of STEPS
+        is invisible — the leftover records attribute to nothing while the loss
+        report still counts them convertible — so the count is the only marker
+        that the conversion lost something.
+        """
+        trajectory: dict[str, Any] = {
+            "steps": [{"step_id": 1, "source": "user", "message": "first"}],
+        }
+        records: list[tuple[dict[str, Any], str]] = [
+            (
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "id": f"msg_{index}",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": text}],
+                    },
+                },
+                "r.jsonl",
+            )
+            for index, text in ((1, "first"), (2, "second"), (3, "third"))
+        ]
+        enriched = enrich_codex_trajectory(trajectory, records)
+        assert enriched["extra"]["enrichment_leftover_messages"] == 2
+        assert "enrichment_truncated_at_step" not in enriched["extra"]
+        assert (enriched["steps"][0]["extra"])["source_uuids"] == ["msg_1"]
+
+    def test_no_leftover_key_when_every_record_reached_a_step(self) -> None:
+        """The key is present only when nonzero, so its presence means loss."""
+        trajectory: dict[str, Any] = {
+            "steps": [{"step_id": 1, "source": "user", "message": "only"}],
+        }
+        records: list[tuple[dict[str, Any], str]] = [
+            (
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "only"}],
+                    },
+                },
+                "r.jsonl",
+            )
+        ]
+        enriched = enrich_codex_trajectory(trajectory, records)
+        assert "enrichment_leftover_messages" not in (enriched.get("extra") or {})
+
     def test_copy_input_leaves_the_caller_s_dict_untouched(self) -> None:
         trajectory: dict[str, Any] = {"steps": [{"step_id": 1, "source": "agent", "message": ""}]}
         enriched = enrich_codex_trajectory(trajectory, [], copy_input=True)

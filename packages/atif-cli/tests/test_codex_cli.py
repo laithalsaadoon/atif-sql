@@ -194,6 +194,59 @@ class TestAdapterRouting:
         assert seen == {"path": Path("s.jsonl"), "include_subagents": False}
 
 
+class TestPrivateApiProbe:
+    """A moved upstream method must fail the PASS, not every session in it.
+
+    ``materialize`` records a session's exception and continues, so an absent
+    ``Codex._convert_events_to_trajectory`` used to produce N identical failures
+    under exit 0 — and the cron lane logged "materialize ok" every ten minutes.
+    Probing when the adapter is BUILT puts the failure before the pass.
+    """
+
+    def test_building_the_codex_adapter_probes_the_private_method(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from harbor.agents.installed.codex import Codex
+
+        from atif_converter.domain.errors import HarborPrivateApiMissing
+
+        monkeypatch.delattr(Codex, "_convert_events_to_trajectory")
+        with pytest.raises(HarborPrivateApiMissing):
+            RealConverter(agent="codex")
+
+    def test_building_the_claude_code_adapter_probes_its_own_private_method(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from harbor.agents.installed.claude_code import ClaudeCode
+
+        from atif_converter.domain.errors import HarborPrivateApiMissing
+
+        monkeypatch.delattr(ClaudeCode, "_convert_events_to_trajectory")
+        with pytest.raises(HarborPrivateApiMissing):
+            RealConverter()
+
+    def test_materialize_exits_127_when_the_private_method_is_gone(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from harbor.agents.installed.codex import Codex
+
+        monkeypatch.delattr(Codex, "_convert_events_to_trajectory")
+        monkeypatch.delenv("ATIF_SQL_CORPUS_ROOT", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        (tmp_path / ".codex" / "sessions").mkdir(parents=True)
+
+        with pytest.raises(SystemExit) as excinfo:
+            materialize(agent="codex", fmt=OutputFormat.JSON)
+
+        assert excinfo.value.code == EXIT_CODES["harbor_missing"]
+        envelope = capsys.readouterr()
+        assert "harbor" in (envelope.out + envelope.err)
+
+
 class TestConvertCommand:
     def test_convert_codex_writes_trajectory_and_edges(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -209,6 +262,34 @@ class TestConvertCommand:
         captured = capsys.readouterr().out
         assert "loss_report" in captured
         assert "codex_" in captured, "the loss report must name the Codex gaps"
+
+    def test_convert_honors_the_atif_sql_agent_setting(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``ATIF_SQL_AGENT`` is documented as a setting, so every command reads it.
+
+        ``convert`` takes no corpus settings, so it used to ignore the variable
+        and run the Claude Code converter over a rollout — which exits 2 with
+        "no convertible events", blaming the transcript for the wrong adapter.
+        """
+        monkeypatch.setenv("ATIF_SQL_AGENT", "codex")
+        rollout = write_rollout(tmp_path / "sessions")
+        out = tmp_path / "out" / "trajectory.json"
+        convert(rollout, trajectory_out=out)
+        capsys.readouterr()
+        assert json.loads(out.read_text())["agent"]["name"] == "codex"
+
+    def test_an_explicit_agent_flag_beats_the_setting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_AGENT", "codex")
+        rollout = write_rollout(tmp_path / "sessions")
+        with pytest.raises(SystemExit) as excinfo:
+            convert(rollout, agent="claude-code")
+        assert excinfo.value.code == EXIT_CODES["empty_session"]
 
     def test_convert_codex_rejects_a_claude_code_session(self, tmp_path: Path) -> None:
         """A Claude Code transcript has no rollout records, so harbor converts nothing."""

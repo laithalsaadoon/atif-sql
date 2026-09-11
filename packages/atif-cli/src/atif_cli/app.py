@@ -256,6 +256,20 @@ def _corpus_settings(
     return settings
 
 
+def _env_agent() -> str:
+    """The ``ATIF_SQL_AGENT`` setting, or the default spelling.
+
+    ``materialize`` / ``status`` / ``query`` read this through
+    ``CorpusSettings``, which is env-aware for every field. ``convert`` takes no
+    corpus settings at all, so it would have ignored the variable and run the
+    Claude Code converter over a Codex rollout — which fails with "no
+    convertible events", blaming the transcript for the wrong adapter.
+    """
+    import os
+
+    return os.environ.get("ATIF_SQL_AGENT", "claude-code")
+
+
 def _resolve_agent(value: str, agent_enum: Any) -> Any:
     """Parse an ``--agent`` value, or exit 64 naming the accepted spellings.
 
@@ -282,7 +296,7 @@ def _resolve_agent(value: str, agent_enum: Any) -> Any:
 def convert(
     session_jsonl: Path,
     *,
-    agent: str = "claude-code",
+    agent: str | None = None,
     include_subagents: Annotated[bool, cyclopts.Parameter(negative="--no-subagents")] = True,
     trajectory_out: Path | None = None,
 ) -> None:
@@ -326,7 +340,7 @@ def convert(
         InvalidSessionInput,
     )
 
-    resolved_agent = _resolve_agent(agent, AgentSource)
+    resolved_agent = _resolve_agent(agent or _env_agent(), AgentSource)
     try:
         if resolved_agent is AgentSource.CODEX:
             result, report = convert_codex_and_audit(session_jsonl)
@@ -465,7 +479,9 @@ def materialize(
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
     from atif_cli.converter_adapter import RealConverter
+    from atif_converter.domain.errors import HarborPrivateApiMissing
     from atif_corpus.application.materialize import (
+        CorpusAgentMismatchError,
         SuspiciousEmptyScanError,
         materialize as materialize_use_case,
     )
@@ -493,6 +509,36 @@ def materialize(
             force=force,
             session_ids=session_filter,
         )
+    except HarborPrivateApiMissing as exc:
+        # Raised while BUILDING the converter, so nothing was scanned, planned
+        # or written. 127 says the pinned upstream surface is gone: no retry and
+        # no other transcript can change it, and every session would have failed
+        # the same way inside the pass — which is how this used to surface, as an
+        # exit 0 with N identical per-session failures.
+        emit_error(
+            ClassifiedError(
+                kind="harbor_missing",
+                exit_code=EXIT_CODES["harbor_missing"],
+                message=str(exc),
+                hint="harbor's pinned private API moved; atif-converter pins harbor>=0.22.0,<0.23",
+            ),
+            fmt,
+        )
+        raise SystemExit(EXIT_CODES["harbor_missing"]) from exc
+    except CorpusAgentMismatchError as exc:
+        # One corpus holds one agent. Nothing was removed and nothing written —
+        # the same posture as a suspicious scan, and the same exit code, because
+        # an unattended lane must branch on it rather than retry.
+        emit_error(
+            ClassifiedError(
+                kind="terminal_state",
+                exit_code=EXIT_CODES["terminal_state"],
+                message=str(exc),
+                hint="point --corpus-root / ATIF_SQL_CORPUS_ROOT at this agent's own corpus",
+            ),
+            fmt,
+        )
+        raise SystemExit(EXIT_CODES["terminal_state"]) from exc
     except SuspiciousEmptyScanError as exc:
         # The corpus's loudest data-loss tripwire, so it gets a code an
         # unattended lane can branch on. Uncaught it would exit 1, which a

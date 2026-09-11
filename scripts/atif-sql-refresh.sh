@@ -61,7 +61,16 @@
 #   * ATIF_SQL_CORPUS_ROOT set in the environment -> that pinned root belongs to
 #     the Claude corpus, and one corpus holds ONE agent (docs/CONTRACT.md), so
 #     writing Codex sessions into it would corrupt the corpus. Set
-#     ATIF_SQL_CODEX_CORPUS_ROOT to say where Codex should go instead.
+#     ATIF_SQL_CODEX_CORPUS_ROOT to say where Codex should go instead. A
+#     CODEX_CORPUS_ROOT that itself points at a Claude corpus is caught one
+#     layer down: materialize reads the corpus's own meta.agent and exits 78
+#     rather than deleting the other agent's sessions as ghosts.
+# A PERMANENT CODEX SKIP IS AN OPERATOR SIGNAL, not a steady state: the resolved
+# CLI (see CLI RESOLUTION below) can be an older `uv tool install` that predates
+# `--agent`, and then every tick logs "codex not yet supported" forever while the
+# Codex corpus quietly ages. If that line repeats, reinstall the tool
+# (`uv tool install --force atif-sql`) rather than reading it as normal.
+#
 # Embedding does NOT piggyback on the Codex pass: `atif-sql embed` takes no
 # --agent, so it would need the Codex corpus root threaded in explicitly. That
 # is a deliberate deferral, not an oversight — the Codex corpus stays fresh, and
@@ -392,6 +401,21 @@ if [ "$MODE" != materialize ]; then
     CLAUDE_CONFIG_DIR="$config_dir" ATIF_SQL_SOURCE_ROOT="$config_dir/projects" \
       "$ATIF_SQL" status --format json >> "$LOG" 2>&1 9>&- || true
   done
+
+  # The Codex corpus too, or the log's answer to "is it fresh?" silently
+  # excludes the one corpus that has no lane of its own to report it. Same
+  # guards as the pass, and the same unexported roots.
+  if [ -d "${CODEX_HOME:-$HOME/.codex}/sessions" ] \
+     && "$ATIF_SQL" status --help 2>/dev/null 9>&- | grep -q -- '--agent'; then
+    log "--- corpus status: codex ---"
+    (
+      unset ATIF_SQL_SOURCE_ROOT CLAUDE_CONFIG_DIR
+      [ -n "${ATIF_SQL_CODEX_CORPUS_ROOT:-}" ] \
+        && export ATIF_SQL_CORPUS_ROOT="$ATIF_SQL_CODEX_CORPUS_ROOT" \
+        || unset ATIF_SQL_CORPUS_ROOT
+      "$ATIF_SQL" status --agent codex --format json >> "$LOG" 2>&1 9>&-
+    ) || true
+  fi
 fi
 
 log "refresh complete (mode=$MODE, exit=$overall)"

@@ -34,11 +34,14 @@ proofs are out of scope for the workspace.
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
   One key is reserved and not hashed: `codex` names the Codex CLI corpus.
 - meta.agent: the AgentSource value ("claude-code" or "codex") the session was
-  materialized from. A corpus written before this key existed reads as NULL and
-  is still valid; nothing may require it to be present.
-- One corpus holds ONE agent. Mixing agents under one corpus_root is not a
-  supported state, and per-agent default roots exist so it cannot happen by
-  accident.
+  materialized from. A corpus written before this key existed reads as NULL in
+  SQL and is still valid; nothing may require it to be present.
+- One corpus holds ONE agent, and meta.agent is the DISCRIMINATOR that enforces
+  it: materialize reads it before ghost removal and before any write, and a
+  disagreement fails the pass (exit 78) with nothing removed. A meta.json with
+  no agent key answers claude-code, because no corpus predating Codex support
+  can hold Codex sessions. Per-agent default roots keep the two apart without
+  anyone thinking about it; an explicit corpus_root is what this guard covers.
 - Source discovery MUST include subagents/agent-*.jsonl AND
   subagents/workflows/wf_*/agent-*.jsonl (and any deeper future nesting: use
   rglob over the session dir filtered to *.jsonl, excluding *.meta.json).
@@ -94,6 +97,7 @@ proofs are out of scope for the workspace.
 
 ## CLI (atif-cli composes; the only package importing the other five)
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
+                                       # --agent defaults from ATIF_SQL_AGENT
 atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...]  # sync corpus
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
@@ -117,7 +121,7 @@ repo neither declares nor provides.
 
 ## Settings (env prefix ATIF_SQL_)
 source_root (default CLAUDE_CONFIG_DIR~/.claude /projects), corpus_root,
-quiesce_seconds=300, agent=claude-code. _default_*() factories read env at call
+quiesce_seconds=300, agent=claude-code (every --agent command reads it). _default_*() factories read env at call
 time. With agent=codex the two roots re-derive to $CODEX_HOME (default
 ~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that

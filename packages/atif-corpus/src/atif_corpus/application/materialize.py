@@ -67,7 +67,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection, Mapping, Sequence
 
 from atif_corpus.domain.layout import (
     EDGES_FILENAME,
@@ -103,6 +103,23 @@ class SuspiciousEmptyScanError(RuntimeError):
     pointing elsewhere) — proceeding would garbage-collect the ENTIRE
     corpus as "ghosts". Fail loud instead; an operator who really emptied
     the source tree can delete the corpus dir explicitly.
+    """
+
+
+class CorpusAgentMismatchError(RuntimeError):
+    """The corpus at this root was materialized from a DIFFERENT agent.
+
+    One corpus holds one agent's sessions (``docs/CONTRACT.md``), and the
+    per-agent default roots keep that true without anyone thinking about it.
+    An EXPLICIT root defeats them: ``--corpus-root <claude corpus> --agent
+    codex``, or ``ATIF_SQL_CORPUS_ROOT`` left pointing at one corpus while the
+    agent moves, aims a Codex pass at a corpus full of Claude Code sessions.
+    Every one of them is then a ghost — no Codex scan will ever name them — so
+    the pass would delete the lot and report it as "source vanished".
+
+    So the corpus's own ``meta.agent`` is a DISCRIMINATOR, not just provenance:
+    it is read before ghost removal and before any write, and a disagreement
+    fails the pass with nothing removed.
     """
 
 
@@ -396,6 +413,37 @@ def _sessions_under_unlistable_dirs(
     return resolved
 
 
+#: How many existing session dirs to open looking for the corpus's agent. One
+#: is normally enough; a handful covers a corpus whose first dirs are mid-swap
+#: or unreadable, and the cap keeps the probe O(1) on a 3,700-session corpus.
+_AGENT_PROBE_LIMIT = 8
+
+
+def _corpus_agent(layout: CorpusLayout, session_dir_names: Sequence[str]) -> str | None:
+    """The agent a materialized corpus says it holds, or ``None`` if it cannot say.
+
+    Reads at most :data:`_AGENT_PROBE_LIMIT` ``meta.json`` files and returns the
+    first answer. A ``meta.json`` with NO ``agent`` key still answers
+    ``claude-code``: the key landed with Codex support, and this workspace could
+    not read a Codex rollout before then, so a corpus written without it holds
+    Claude Code sessions. Unreadable or unparseable meta files are skipped
+    rather than treated as an answer — a permission blip must not be able to
+    relabel a corpus.
+    """
+    for name in list(session_dir_names)[:_AGENT_PROBE_LIMIT]:
+        try:
+            meta = json.loads(layout.meta_path(name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        agent = meta.get("agent")
+        if isinstance(agent, str) and agent:
+            return agent
+        return CLAUDE_CODE_LAYOUT.agent.value
+    return None
+
+
 def _remove_ghost_sessions(
     layout: CorpusLayout,
     scanned_session_ids: Collection[str],
@@ -570,6 +618,18 @@ def materialize(
         if layout.sessions_dir.is_dir()
         else []
     )
+    # Agent check FIRST: it is the one condition under which every existing
+    # session dir is a ghost by construction, so it has to run before the
+    # emptiness tripwire and before the first write.
+    corpus_agent = _corpus_agent(layout, existing_session_dirs)
+    if corpus_agent is not None and corpus_agent != source_layout.agent.value:
+        msg = (
+            f"the corpus at {corpus_root} holds {corpus_agent} sessions but this "
+            f"pass is materializing {source_layout.agent.value} from {source_root} "
+            f"— refusing: one corpus holds one agent, and continuing would delete "
+            f"all {len(existing_session_dirs)} of them as ghosts"
+        )
+        raise CorpusAgentMismatchError(msg)
     if not sessions and existing_session_dirs and not scan.unlistable_dirs:
         msg = (
             f"scan of {source_root} found 0 sessions but the corpus at "

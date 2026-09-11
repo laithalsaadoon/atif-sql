@@ -58,14 +58,19 @@ Rules of the road:
   `ClaudeCode._convert_events_to_trajectory` and
   `Codex._convert_events_to_trajectory`, verified against 0.22.0 only. A
   Codex rollout is staged ALONE into its own temp dir, because harbor folds
-  every rollout in a directory into one trajectory.
+  every rollout in a directory into one trajectory. The private-API probe runs
+  once when `RealConverter` is built, so a moved upstream method exits 127
+  instead of becoming one failure per session under exit 0.
   The unit tests in atif-converter pin upstream behavior and are the drift
   alarm for version bumps.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - Settings via pydantic-settings, env prefix `ATIF_SQL_`. `agent` is applied
   at CONSTRUCTION, not copied in afterwards: both default roots derive from
   it, and only roots absent from `model_fields_set` re-derive, so an explicit
-  `ATIF_SQL_SOURCE_ROOT` or `ATIF_SQL_CORPUS_ROOT` still wins.
+  `ATIF_SQL_SOURCE_ROOT` or `ATIF_SQL_CORPUS_ROOT` still wins. That override is
+  also the one way to aim a pass at the other agent's corpus, which
+  `meta.agent` catches: materialize refuses (exit 78) rather than deleting the
+  other agent's sessions as ghosts.
 
 ## Agent query workflow
 

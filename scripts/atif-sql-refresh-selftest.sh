@@ -335,7 +335,7 @@ make_codex_shim() {
 case "\${1:-}" in
   --help)
     echo "Usage: atif-sql COMMAND"
-    echo "  materialize  status  query  schema"
+    echo "  materialize  status  query  schema  analyze"
     ;;
   materialize)
     if [ "\${2:-}" = --help ]; then
@@ -346,6 +346,16 @@ case "\${1:-}" in
       echo '{"materialize": "ok"}'
     fi
     ;;
+  status)
+    if [ "\${2:-}" = --help ]; then
+      echo "Usage: atif-sql status [OPTIONS]"
+      echo "  --source-root --corpus-root --quiesce-seconds --format$([ "$mode" = with ] && echo ' --agent')"
+    else
+      echo "status \$*" >> "$dir/calls.log"
+      echo '{"status": "ok"}'
+    fi
+    ;;
+  analyze) echo "analyze \$*" >> "$dir/calls.log" ;;
   *) exit 0 ;;
 esac
 SHIM
@@ -379,6 +389,20 @@ if [ "$rc" = 0 ] && grep -q -- 'materialize --agent codex' "$shim_root/codex-wit
   ok "codex guard stands down: the lane runs materialize --agent codex when the CLI carries the flag"
 else
   fail "the codex pass did not run against a CLI advertising --agent (exit=$rc)"
+fi
+
+# The freshness dump must cover the Codex corpus too, or the log answers "is it
+# fresh?" for every corpus except the one with no lane of its own.
+PATH="$shim_root/codex-with:$PATH" \
+  ATIF_SQL_CLI="$shim_root/codex-with/atif-sql" \
+  ATIF_SQL_REFRESH_RUN_DIR="$shim_root/codex-status-run" \
+  CODEX_HOME="$codex_home" \
+  bash "$SCRIPT" structural
+if grep -q 'corpus status: codex' "$shim_root/codex-status-run/atif-sql-refresh.log" 2>/dev/null \
+   && grep -q -- 'status --agent codex' "$shim_root/codex-with/calls.log" 2>/dev/null; then
+  ok "the freshness dump reports the Codex corpus"
+else
+  fail "no Codex corpus status in the freshness dump — its staleness would go unreported"
 fi
 
 # A pinned ATIF_SQL_CORPUS_ROOT belongs to the Claude corpus, and one corpus

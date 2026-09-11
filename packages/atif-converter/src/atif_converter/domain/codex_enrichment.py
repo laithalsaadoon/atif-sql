@@ -85,6 +85,8 @@ from atif_converter.domain.codex_edges import build_codex_edges
 
 _SOURCE_UUIDS = "source_uuids"
 _TRUNCATED_AT = "enrichment_truncated_at_step"
+#: Message records that reached no step: the silent end of the positional walk.
+_LEFTOVER_MESSAGES = "enrichment_leftover_messages"
 
 #: ATIF ``source`` values keyed by the raw Codex message role. ``developer``
 #: and anything unknown land on ``system`` — the flattening named by
@@ -319,7 +321,7 @@ def enrich_codex_trajectory(
         _attach(step, attributed)
 
     # Pass 3 — position, over the non-assistant message steps only.
-    truncated_at = _attribute_non_agent_messages(steps, index.non_agent_messages)
+    truncated_at, leftover_messages = _attribute_non_agent_messages(steps, index.non_agent_messages)
 
     extra = trajectory.get("extra")
     if not isinstance(extra, dict):
@@ -340,6 +342,13 @@ def enrich_codex_trajectory(
     )
     if unattributed:
         extra["enrichment_unattributed_steps"] = unattributed
+    if leftover_messages:
+        extra[_LEFTOVER_MESSAGES] = leftover_messages
+        logger.warning(
+            "codex enrichment: {} message record(s) attributed to no step — the "
+            "loss report counts them convertible, so this is real unreported loss",
+            leftover_messages,
+        )
     if extra:
         trajectory["extra"] = extra
     return trajectory
@@ -348,12 +357,19 @@ def enrich_codex_trajectory(
 def _attribute_non_agent_messages(
     steps: list[Any],
     messages: list[tuple[str, str, str]],
-) -> int | None:
+) -> tuple[int | None, int]:
     """Pair user/system steps with user/developer message records, 1:1.
 
-    Returns the step id the walk refused at, or ``None`` when every such step
-    paired cleanly. A step is refused when the next unconsumed record's ATIF
-    source or harbor-extracted text disagrees with it.
+    Returns the step id the walk refused at (``None`` when every such step
+    paired cleanly) and the count of message records left unconsumed. A step is
+    refused when the next unconsumed record's ATIF source or harbor-extracted
+    text disagrees with it.
+
+    THE TWO ENDS OF THE WALK FAIL DIFFERENTLY, and both have to be reported.
+    Running out of RECORDS refuses the step, which is loud. Running out of
+    STEPS is silent: the remaining records attribute to nothing, and the loss
+    report still counts them convertible, so it would understate the loss with
+    no marker anywhere. The leftover count is that marker.
     """
     cursor = 0
     for step in steps:
@@ -363,13 +379,13 @@ def _attribute_non_agent_messages(
         if source not in {"user", "system"}:
             continue
         if cursor >= len(messages):
-            return _step_id(step)
+            return _step_id(step), 0
         record_id, record_source, record_text = messages[cursor]
         if record_source != source or record_text != (step.get("message") or ""):
-            return _step_id(step)
+            return _step_id(step), len(messages) - cursor
         _attach(step, [record_id])
         cursor += 1
-    return None
+    return None, len(messages) - cursor
 
 
 def _record_cache_total(trajectory: dict[str, Any], extra: dict[str, Any]) -> None:
