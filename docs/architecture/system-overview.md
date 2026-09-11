@@ -2,13 +2,18 @@
 
 ## What it does
 
-`atif-sql` is a command-line analytics tool over Claude Code agent trajectories. It reads the
-session transcripts Claude Code leaves at `~/.claude/projects/**/*.jsonl`, converts each one to
+`atif-sql` is a command-line analytics tool over agent trajectories from two agents. It reads the
+session transcripts Claude Code leaves at `~/.claude/projects/**/*.jsonl` and the rollouts Codex CLI
+leaves at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`, converts each one to
 ATIF — Harbor's Agent Trajectory Interchange Format — materializes the results as an on-disk
 corpus, and answers SQL against that corpus through DuckDB (`README.md:12`). The design bet is
 stated in the README itself: converting once at the boundary, with an explicit and tested fidelity
 policy for what the upstream converter drops, beats re-deriving trajectory semantics inside every
-SQL view (`README.md:15`). The reader it serves is an engineer or an agent asking how sessions
+SQL view (`README.md:15`). Which agent a command works on is one flag, `--agent claude-code|codex`, and it
+moves the default source and corpus roots with it
+(`packages/atif-corpus/src/atif_corpus/infrastructure/settings.py`); one corpus holds one agent, and
+the `sessions` view reports which (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:428`).
+The reader it serves is an engineer or an agent asking how sessions
 actually went — which tools ran, where tokens went, where a session turned into friction.
 
 Users get one installable distribution and one console script,
@@ -24,11 +29,13 @@ per invocation, and each is dry-run by default (`README.md:37`).
 
 The seven directories under `packages/` are internal module boundaries, not seven installs
 (`README.md:43`); they are uv workspace members (`pyproject.toml:100`). `atif-converter` wraps
-Harbor's `ClaudeCode` adapter, pinned `harbor>=0.22.0,<0.23`
+Harbor's `ClaudeCode` and `Codex` adapters, pinned `harbor>=0.22.0,<0.23`
 (`packages/atif-converter/pyproject.toml:23`) because it calls a private upstream method verified
 against 0.22.0 only (`:20`), and owns the fidelity policy as types: `FidelityGap` enumerates the
 seven known upstream conversion gaps
-(`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`, 137 LOC). `atif-corpus`
+(`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`, 137 LOC), and `CodexFidelityGap`
+enumerates the seven that are Codex's
+(`packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:64`). `atif-corpus`
 drives materialization, writing per-session artifacts plus a corpus watermark
 (`docs/CONTRACT.md:21`). Its `ConverterPort` Protocol lets an implementation raise anything: the
 materialize use case records the failure against that session and continues, so one broken

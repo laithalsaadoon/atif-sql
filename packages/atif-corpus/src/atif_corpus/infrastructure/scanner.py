@@ -2,15 +2,24 @@
 
 """Filesystem discovery: sessions + side-files with their ``st_mtime_ns``.
 
-The one place atif-corpus stats the source corpus. Discovery follows
-CONTRACT.md exactly:
+The one place atif-corpus stats the source corpus. WHERE it looks comes from a
+:class:`~atif_corpus.domain.source_layout.SourceLayout` — one per agent, so
+this module walks one algorithm instead of carrying a branch per transcript
+shape. Discovery follows CONTRACT.md exactly:
 
-* main transcripts are project-level ``<source_root>/*/*.jsonl``;
+* transcripts sit ``layout.transcript_depth`` directory levels under the source
+  root: ``<source_root>/<project>/<session>.jsonl`` for Claude Code,
+  ``<source_root>/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`` for Codex;
+* the session id comes from the FILENAME via ``layout.session_id`` — the whole
+  stem for Claude Code, the trailing uuid for a Codex rollout;
 * side-files are found by ``rglob`` over the session dir (the directory
   named after the session stem) filtered to ``*.jsonl`` — the rglob
   deliberately does NOT hardcode ``subagents/`` vs
   ``subagents/workflows/wf_*/`` so any deeper future nesting is still
-  watermarked.
+  watermarked. Only layouts that HAVE side-files are walked for them: a Codex
+  sub-agent writes its own rollout under its own session id, so a rollout is
+  always alone and looking for siblings would be a stat per session for a
+  directory that cannot exist.
 
 A scan reports two kinds of absence and they must never be conflated. A
 session whose main transcript is genuinely GONE is ghost-eligible: its
@@ -30,6 +39,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from atif_corpus.domain.sessions import SessionSource
+from atif_corpus.domain.source_layout import CLAUDE_CODE_LAYOUT, SourceLayout
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -95,7 +105,7 @@ def _mtime_ns(path: Path) -> int | None:
         return None
 
 
-def _session_mtimes(main_jsonl: Path) -> dict[str, int] | None:
+def _session_mtimes(main_jsonl: Path, layout: SourceLayout) -> dict[str, int] | None:
     """``{path: mtime_ns}`` for one session, or ``None`` when its main file vanished.
 
     A vanished SIDE-file is simply omitted: the session is still part of the
@@ -107,6 +117,8 @@ def _session_mtimes(main_jsonl: Path) -> dict[str, int] | None:
         return None
     mtimes = {str(main_jsonl): main_mtime}
 
+    if not layout.has_side_files:
+        return mtimes
     side_dir = main_jsonl.parent / main_jsonl.stem
     if side_dir.is_dir():
         for side_file in sorted(side_dir.rglob("*.jsonl")):
@@ -116,31 +128,63 @@ def _session_mtimes(main_jsonl: Path) -> dict[str, int] | None:
     return mtimes
 
 
-def _project_transcripts(project_dir: Path) -> list[Path] | None:
-    """``*.jsonl`` directly under one project dir, or ``None`` if unlistable.
+def _list_dir(directory: Path) -> list[Path] | None:
+    """Sorted entries of ``directory``; ``[]`` if it vanished, ``None`` if unlistable.
 
     ``Path.glob`` swallows a ``PermissionError`` on a directory it cannot
     open and simply yields nothing, which is indistinguishable from an empty
-    project — and "empty" makes every session under it a ghost. Listing each
-    project dir explicitly is what keeps the two apart.
+    directory — and "empty" makes every session under it a ghost. Listing each
+    level explicitly is what keeps the two apart.
     """
     try:
-        entries = sorted(project_dir.iterdir())
+        return sorted(directory.iterdir())
     except FileNotFoundError:
-        logger.debug("scan: project dir {} vanished mid-scan; skipping", project_dir)
+        logger.debug("scan: directory {} vanished mid-scan; skipping", directory)
         return []
     except OSError as error:
         logger.warning(
-            "scan: cannot list project dir {} ({}); its sessions are unreadable "
+            "scan: cannot list directory {} ({}); its sessions are unreadable "
             "this pass and are NOT treated as deleted",
-            project_dir,
+            directory,
             error,
         )
         return None
-    return [entry for entry in entries if entry.suffix == ".jsonl"]
 
 
-def scan_sources(source_root: Path) -> SourceScan:
+def _transcript_dirs(source_root: Path, layout: SourceLayout) -> tuple[list[Path], list[str]]:
+    """The directories that hold transcripts, plus every dir that would not list.
+
+    Descends exactly ``layout.transcript_depth`` levels, listing each one, so an
+    unopenable directory at ANY level is reported as unlistable instead of
+    reading as empty. Claude Code stops at the project dirs; Codex walks
+    year -> month -> day.
+    """
+    level = [source_root]
+    unlistable: list[str] = []
+    for _ in range(layout.transcript_depth):
+        next_level: list[Path] = []
+        for directory in level:
+            entries = _list_dir(directory)
+            if entries is None:
+                unlistable.append(str(directory))
+                continue
+            next_level.extend(entry for entry in entries if entry.is_dir())
+        level = sorted(next_level)
+    return level, unlistable
+
+
+def _transcripts(transcript_dir: Path, layout: SourceLayout) -> list[Path] | None:
+    """List one dir's transcript files for this agent, or ``None`` if unlistable."""
+    entries = _list_dir(transcript_dir)
+    if entries is None:
+        return None
+    return [entry for entry in entries if layout.is_transcript(entry.name)]
+
+
+def scan_sources(
+    source_root: Path,
+    layout: SourceLayout = CLAUDE_CODE_LAYOUT,
+) -> SourceScan:
     """Discover every session under ``source_root``, separating unreadable ones.
 
     Sessions come back sorted by session id so the scan itself is
@@ -148,58 +192,66 @@ def scan_sources(source_root: Path) -> SourceScan:
     An absent or empty root yields an empty scan — a fresh machine is not an
     error condition.
 
-    Absence is separated from unreadability at BOTH levels: a session whose
-    ``stat`` failed lands in :attr:`SourceScan.unreadable`, and a whole
-    project directory that could not be LISTED lands in
-    :attr:`SourceScan.unlistable_dirs` — its sessions were never discovered,
-    so only the caller's watermark knows which ids they were.
+    Absence is separated from unreadability at EVERY level: a session whose
+    ``stat`` failed lands in :attr:`SourceScan.unreadable`, and any directory
+    that could not be LISTED — the root, a Claude Code project dir, a Codex
+    year/month/day dir — lands in :attr:`SourceScan.unlistable_dirs`. Its
+    sessions were never discovered, so only the caller's watermark knows which
+    ids they were.
+
+    ``layout`` defaults to Claude Code's shape, which is what every caller
+    predating Codex support meant.
     """
     if not source_root.is_dir():
         logger.debug("scan: source root {} does not exist", source_root)
         return SourceScan()
 
-    try:
-        project_dirs = sorted(p for p in source_root.iterdir() if p.is_dir())
-    except OSError as error:
-        logger.warning("scan: cannot list source root {} ({})", source_root, error)
-        return SourceScan(unlistable_dirs=(str(source_root),))
+    transcript_dirs, unlistable = _transcript_dirs(source_root, layout)
 
     sessions: list[SessionSource] = []
     unreadable: dict[str, str] = {}
-    unlistable: list[str] = []
-    for project_dir in project_dirs:
-        transcripts = _project_transcripts(project_dir)
+    for transcript_dir in transcript_dirs:
+        transcripts = _transcripts(transcript_dir, layout)
         if transcripts is None:
-            unlistable.append(str(project_dir))
+            unlistable.append(str(transcript_dir))
             continue
         for main_jsonl in transcripts:
+            session_id = layout.session_id(main_jsonl.name)
+            if session_id is None:
+                logger.debug(
+                    "scan: {} is not a {} transcript name; skipping",
+                    main_jsonl,
+                    layout.agent.value,
+                )
+                continue
             try:
-                mtimes = _session_mtimes(main_jsonl)
+                mtimes = _session_mtimes(main_jsonl, layout)
             except OSError as error:
                 logger.warning(
                     "scan: cannot stat sources of session {} ({}); skipping this pass "
                     "and NOT treating it as deleted",
-                    main_jsonl.stem,
+                    session_id,
                     error,
                 )
-                unreadable[main_jsonl.stem] = str(main_jsonl)
+                unreadable[session_id] = str(main_jsonl)
                 continue
             if mtimes is None:
                 continue
             sessions.append(
                 SessionSource(
-                    session_id=main_jsonl.stem,
+                    session_id=session_id,
                     session_jsonl=str(main_jsonl),
                     source_mtimes=mtimes,
                 )
             )
     sessions.sort(key=lambda s: s.session_id)
     logger.debug(
-        "scan: {} sessions ({} unreadable, {} unlistable dirs) under {}",
+        "scan: {} sessions ({} unreadable, {} unlistable dirs) under {} as {}",
         len(sessions),
         len(unreadable),
         len(unlistable),
         source_root,
+        layout.agent.value,
     )
     return SourceScan(
         sessions=tuple(sessions),
@@ -208,7 +260,10 @@ def scan_sources(source_root: Path) -> SourceScan:
     )
 
 
-def scan_source_root(source_root: Path) -> tuple[SessionSource, ...]:
+def scan_source_root(
+    source_root: Path,
+    layout: SourceLayout = CLAUDE_CODE_LAYOUT,
+) -> tuple[SessionSource, ...]:
     """The sessions found under ``source_root`` — :func:`scan_sources` without diagnostics.
 
     For read-only callers (``atif-sql status``) that plan but never delete:
@@ -219,4 +274,4 @@ def scan_source_root(source_root: Path) -> tuple[SessionSource, ...]:
     is WARNING-and-up on stderr, so an unreadable source still announces
     itself alongside the status output.
     """
-    return scan_sources(source_root).sessions
+    return scan_sources(source_root, layout).sessions

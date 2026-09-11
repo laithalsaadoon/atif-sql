@@ -53,6 +53,8 @@ VIEW_NAMES: tuple[str, ...] = (
 VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
     "sessions": (
         ("session_id", "VARCHAR"),
+        ("agent", "VARCHAR"),
+        ("agent_version", "VARCHAR"),
         ("cwd", "VARCHAR"),
         ("git_branch", "VARCHAR"),
         ("started_at", "TIMESTAMP"),
@@ -332,7 +334,10 @@ TABLE_MACRO_NAMES: frozenset[str] = frozenset(
 
 DESCRIPTIONS: dict[str, str] = {
     # -- core views ---------------------------------------------------------
-    "sessions": "One row per materialized session: timing, step counts, model, total cost.",
+    "sessions": (
+        "One row per materialized session: which agent wrote it, timing, step "
+        "counts, model, total cost."
+    ),
     "steps": "One row per ATIF step (turn): flattened message text plus token metrics.",
     "messages": "Raw-record identity from edges.jsonl: uuid, parent_uuid, type, timestamp.",
     "tool_calls": "One row per tool call: tool_name plus JSON tool_input.",

@@ -31,6 +31,14 @@ from pathlib import Path
 #: dirname a human can recognize in ``ls``.
 DEFAULT_CORPUS_KEY = "default"
 
+#: Reserved slug for the Codex rollout corpus at ``~/.codex/sessions``. Same
+#: reasoning as :data:`DEFAULT_CORPUS_KEY`, and safe to add rather than a
+#: breaking change: this workspace could not read a Codex rollout before
+#: 2026-09-11, so no corpus can already occupy the hashed name this replaces
+#: (``sessions-<8 hex>``). Reserved on the SESSIONS dir rather than on
+#: ``~/.codex`` because the sessions dir is the source root a scan walks.
+CODEX_CORPUS_KEY = "codex"
+
 #: Any run of characters outside ``[a-z0-9]`` collapses to a single ``-``.
 _SLUG_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 
@@ -48,12 +56,17 @@ def corpus_slug(corpus_root: Path | str) -> str:
     enough to eyeball in ``ls``, hashed enough that two roots sharing a
     dirname (``…/alice/.claude`` vs ``…/bob/.claude``) never collide.
 
+    The Codex rollout root (``~/.codex/sessions``) maps to
+    :data:`CODEX_CORPUS_KEY` for the same legibility reason.
+
     The root is ``expanduser().resolve()``-normalized first so symlinked
     spellings of the same corpus agree on one key.
     """
     resolved = Path(corpus_root).expanduser().resolve()
     if resolved == Path("~/.claude").expanduser().resolve():
         return DEFAULT_CORPUS_KEY
+    if resolved == Path("~/.codex/sessions").expanduser().resolve():
+        return CODEX_CORPUS_KEY
     name = _SLUG_SANITIZE_RE.sub("-", resolved.name.lower()).strip("-")[:_SLUG_MAX_NAME_LEN]
     digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
     return f"{name}-{digest}" if name else digest

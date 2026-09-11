@@ -19,7 +19,10 @@
 #   (e) the analytics-absent guard REALLY exits 0: run the refresh script
 #       against a PATH-shim atif-sql whose --help lacks `analyze`, then again
 #       against one that has it, and assert both behaviors. A guard that was
-#       never seen firing is hope, not a guard.
+#       never seen firing is hope, not a guard;
+#   (g) the Codex pass's own guards fire AND stand down: skipped against a CLI
+#       with no `--agent`, run against one that has it, and refused when
+#       ATIF_SQL_CORPUS_ROOT is pinned to the Claude corpus.
 #
 # Run by hand after an atif-sql upgrade, or wire into a nightly.
 # Exits the FAILURE COUNT (0 = green).
@@ -60,6 +63,10 @@ while IFS=' ' read -r subcommand flags; do
     for flag in $flags; do
       if printf '%s' "$sub_help" | grep -qE -- "$flag\b"; then
         ok "$subcommand accepts $flag"
+      elif [ "$flag" = --agent ] && grep -q 'codex not yet supported' "$SCRIPT"; then
+        # --agent is allowed to be absent — but ONLY because the script probes
+        # for it and skips the Codex pass when it is missing.
+        ok "$subcommand lacks --agent but the refresh script carries the codex absence guard"
       else
         fail "$subcommand no longer accepts $flag (passed by the refresh script)"
       fi
@@ -86,7 +93,7 @@ done < <(
   # shellcheck disable=SC2016  # deliberate: grepping the SCRIPT for the literal text `"$ATIF_SQL"`, not expanding it here
   grep -oE '"\$ATIF_SQL" [a-z][a-z-]*( --[a-z-]+( [a-z0-9.]+)?)*' "$SCRIPT" \
     | sed 's/^"\$ATIF_SQL" //' \
-    | awk '{ line=$1; for (i=2; i<=NF; i++) if ($i ~ /^--/) line=line " " $i; print line }' \
+    | awk '{ line=$1; for (i=2; i<=NF; i++) if ($i ~ /^--/ && $i != "--help") line=line " " $i; print line }' \
     | sort -u
 )
 
@@ -307,6 +314,104 @@ if [ "$calls_after_3" -gt "$calls_after_2" ] \
   ok "clearance works: store mtime change lifts the suppression and embed retries"
 else
   fail "store mtime change did not lift the suppression (calls $calls_after_2 -> $calls_after_3)"
+fi
+
+# ---------------------------------------------------------------------------
+# (g) THE CODEX GUARD MUST FIRE, AND STAND DOWN. The materialize lane runs one
+#     extra pass with `--agent codex`, and the resolved CLI can predate that
+#     flag. Shim an atif-sql whose `materialize --help` lacks `--agent` and
+#     assert the lane logs the documented skip and never passes the flag; then
+#     shim one that advertises it and assert the pass actually runs.
+# ---------------------------------------------------------------------------
+codex_home="$shim_root/codex-home"
+mkdir -p "$codex_home/sessions"
+
+make_codex_shim() {
+  # $1 = shim dir, $2 = "with" | "without" (--agent in `materialize --help`)
+  local dir="$1" mode="$2"
+  mkdir -p "$dir"
+  cat > "$dir/atif-sql" <<SHIM
+#!/usr/bin/env bash
+case "\${1:-}" in
+  --help)
+    echo "Usage: atif-sql COMMAND"
+    echo "  materialize  status  query  schema  analyze"
+    ;;
+  materialize)
+    if [ "\${2:-}" = --help ]; then
+      echo "Usage: atif-sql materialize [OPTIONS]"
+      echo "  --force --quiesce-seconds --source-root --corpus-root --sessions --format$([ "$mode" = with ] && echo ' --agent')"
+    else
+      echo "materialize \$*" >> "$dir/calls.log"
+      echo '{"materialize": "ok"}'
+    fi
+    ;;
+  status)
+    if [ "\${2:-}" = --help ]; then
+      echo "Usage: atif-sql status [OPTIONS]"
+      echo "  --source-root --corpus-root --quiesce-seconds --format$([ "$mode" = with ] && echo ' --agent')"
+    else
+      echo "status \$*" >> "$dir/calls.log"
+      echo '{"status": "ok"}'
+    fi
+    ;;
+  analyze) echo "analyze \$*" >> "$dir/calls.log" ;;
+  *) exit 0 ;;
+esac
+SHIM
+  chmod +x "$dir/atif-sql"
+}
+
+run_codex_tick() {
+  # $1 = shim dir
+  PATH="$1:$PATH" \
+    ATIF_SQL_CLI="$1/atif-sql" \
+    ATIF_SQL_REFRESH_RUN_DIR="$1-run" \
+    CODEX_HOME="$codex_home" \
+    bash "$SCRIPT" materialize
+}
+
+make_codex_shim "$shim_root/codex-without" without
+run_codex_tick "$shim_root/codex-without"
+rc=$?
+if [ "$rc" = 0 ] \
+   && grep -q 'codex not yet supported' "$shim_root/codex-without-run/atif-sql-refresh.log" 2>/dev/null \
+   && ! grep -q -- '--agent' "$shim_root/codex-without/calls.log" 2>/dev/null; then
+  ok "codex guard fires: the pass is skipped and --agent is never passed to a CLI without it"
+else
+  fail "codex guard did NOT fire cleanly (exit=$rc; expected 0, a logged skip, and no --agent call)"
+fi
+
+make_codex_shim "$shim_root/codex-with" with
+run_codex_tick "$shim_root/codex-with"
+rc=$?
+if [ "$rc" = 0 ] && grep -q -- 'materialize --agent codex' "$shim_root/codex-with/calls.log" 2>/dev/null; then
+  ok "codex guard stands down: the lane runs materialize --agent codex when the CLI carries the flag"
+else
+  fail "the codex pass did not run against a CLI advertising --agent (exit=$rc)"
+fi
+
+# The freshness dump must cover the Codex corpus too, or the log answers "is it
+# fresh?" for every corpus except the one with no lane of its own.
+PATH="$shim_root/codex-with:$PATH" \
+  ATIF_SQL_CLI="$shim_root/codex-with/atif-sql" \
+  ATIF_SQL_REFRESH_RUN_DIR="$shim_root/codex-status-run" \
+  CODEX_HOME="$codex_home" \
+  bash "$SCRIPT" structural
+if grep -q 'corpus status: codex' "$shim_root/codex-status-run/atif-sql-refresh.log" 2>/dev/null \
+   && grep -q -- 'status --agent codex' "$shim_root/codex-with/calls.log" 2>/dev/null; then
+  ok "the freshness dump reports the Codex corpus"
+else
+  fail "no Codex corpus status in the freshness dump — its staleness would go unreported"
+fi
+
+# A pinned ATIF_SQL_CORPUS_ROOT belongs to the Claude corpus, and one corpus
+# holds one agent — the pass must refuse rather than mix agents in it.
+ATIF_SQL_CORPUS_ROOT="$shim_root/pinned-corpus" run_codex_tick "$shim_root/codex-with" >/dev/null
+if grep -q 'set ATIF_SQL_CODEX_CORPUS_ROOT' "$shim_root/codex-with-run/atif-sql-refresh.log" 2>/dev/null; then
+  ok "codex pass refuses a corpus root pinned to the Claude corpus"
+else
+  fail "codex pass did not refuse a pinned ATIF_SQL_CORPUS_ROOT — two agents could land in one corpus"
 fi
 
 printf '\n%s\n' "selftest: $fails failure(s)"

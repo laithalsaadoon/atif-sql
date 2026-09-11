@@ -170,3 +170,10 @@ def synthetic_session(tmp_path: Path) -> Path:
     _write_jsonl(side_dir / "workflows" / "wf_123" / "agent-def.jsonl", workflow_events)
 
     return main_jsonl
+
+
+# The Codex rollout fixture lives in its own module so the two agents' fixture
+# data stay separately readable; re-exported here because pytest resolves
+# fixtures through conftest. The redundant alias is the explicit re-export form,
+# which is what tells a type checker the import is deliberate.
+from codex_fixtures import codex_rollout as codex_rollout  # noqa: E402, PLC0414

@@ -177,7 +177,13 @@ atif-duck reads the corpus with no locks and no journal
 (`packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:5`). Conversion arrives through the
 `ConverterPort` Protocol, typed to the contract's artifact shapes rather than converter internals
 since this member may never import atif-converter
-(`packages/atif-corpus/src/atif_corpus/domain/ports.py:41`).
+(`packages/atif-corpus/src/atif_corpus/domain/ports.py:41`). What counts as a transcript, and how deep
+under the source root it sits, is one value object per agent — depth 1 for Claude Code's
+`<project>/<session>.jsonl`, depth 3 for Codex's `<YYYY>/<MM>/<DD>` nesting
+(`packages/atif-corpus/src/atif_corpus/domain/source_layout.py:119`) — so the scanner walks either
+layout without branching on the agent, and `layout_for` refuses an agent that has none (`:131`).
+The agent enum itself is an AST-pinned twin of the converter's, since the independence contract
+forbids the import (`packages/atif-corpus/src/atif_corpus/domain/agents.py:25`).
 
 - `packages/atif-corpus/src/atif_corpus/application/materialize.py` (634 LOC) — the pass itself
   (`packages/atif-corpus/src/atif_corpus/application/materialize.py:476`), the report value object
@@ -212,12 +218,23 @@ accounting of what upstream dropped
 (`packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`). The conversion is
 one private harbor call, `ClaudeCode._convert_events_to_trajectory`, confined to a single adapter
 module behind a startup assertion
-(`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112`), which is why the
+(`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:112`). The Codex path is
+the same shape one module over: `convert_codex_and_audit`
+(`packages/atif-converter/src/atif_converter/application/convert_codex.py:128`) over
+`Codex._convert_events_to_trajectory`, asserted at
+`packages/atif-converter/src/atif_converter/infrastructure/codex_adapter.py:53` and staging the one
+rollout alone into a temp dir, because harbor folds every rollout it can see in a directory into a
+single trajectory (`:107`). That private pair is why the
 dependency is ceilinged at `harbor>=0.22.0,<0.23` (`packages/atif-converter/pyproject.toml:23`). The
 seven known conversion gaps are types rather than prose — `FidelityGap` enumerates them
 (`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`) and a pure enrichment pass repairs
 three by re-running harbor's deterministic normalization order over the raw records
-(`packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). A fingerprint snapshot is
+(`packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). Codex has its own seven
+(`packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:64`), all values namespaced
+`codex_*` so one `gaps_observed` array can carry either agent's, and its own enrichment pass, which
+attributes agent steps by a re-derived `api_call_id` rather than by message text because harbor drops
+empty text parts and an empty assistant message can never be placed by matching
+(`packages/atif-converter/src/atif_converter/domain/codex_enrichment.py`). A fingerprint snapshot is
 taken before harbor reads and re-checked afterwards, so a session that resumes writing mid-conversion
 fails instead of yielding mutually inconsistent artifacts
 (`packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:110`).

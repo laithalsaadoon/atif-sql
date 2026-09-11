@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from corpus_fixtures import SESSION_A, STALE_NS, write_session
 
+from atif_corpus.domain.agents import AgentSource
 from atif_corpus.infrastructure.scanner import scan_source_root
 from atif_corpus.infrastructure.settings import CorpusSettings
 
@@ -65,3 +66,55 @@ class TestSettings:
         settings = CorpusSettings()
         assert settings.corpus_root == tmp_path / "explicit"
         assert settings.quiesce_seconds == 60
+
+    def test_the_default_agent_is_claude_code(self) -> None:
+        """Every caller predating Codex support observes exactly the old defaults."""
+        assert CorpusSettings().agent is AgentSource.CLAUDE_CODE
+
+    def test_codex_takes_the_codex_home_and_its_own_corpus(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``--agent codex`` alone must not read the Claude Code source root."""
+        monkeypatch.delenv("ATIF_SQL_SOURCE_ROOT", raising=False)
+        monkeypatch.delenv("ATIF_SQL_CORPUS_ROOT", raising=False)
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        claude = CorpusSettings()
+        codex = CorpusSettings(agent=AgentSource.CODEX)
+        assert codex.source_root == codex_home / "sessions"
+        assert codex.source_root != claude.source_root
+        assert codex.corpus_root != claude.corpus_root
+
+    def test_codex_home_is_read_at_call_time(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.delenv("ATIF_SQL_SOURCE_ROOT", raising=False)
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "one"))
+        first = CorpusSettings(agent=AgentSource.CODEX).source_root
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "two"))
+        second = CorpusSettings(agent=AgentSource.CODEX).source_root
+        assert first != second
+
+    def test_an_explicit_source_root_beats_the_agent_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``ATIF_SQL_SOURCE_ROOT`` keeps meaning what it meant before Codex existed."""
+        monkeypatch.delenv("ATIF_SQL_CORPUS_ROOT", raising=False)
+        monkeypatch.setenv("ATIF_SQL_SOURCE_ROOT", str(tmp_path / "pinned"))
+        settings = CorpusSettings(agent=AgentSource.CODEX)
+        assert settings.source_root == tmp_path / "pinned"
+        # ...and the corpus root still derives from the root actually in use.
+        assert settings.corpus_root.name.startswith("pinned-")
+
+    def test_an_explicit_corpus_root_beats_the_agent_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_CORPUS_ROOT", str(tmp_path / "explicit"))
+        settings = CorpusSettings(agent=AgentSource.CODEX)
+        assert settings.corpus_root == tmp_path / "explicit"
+
+    def test_the_agent_is_settable_from_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_AGENT", "codex")
+        assert CorpusSettings().agent is AgentSource.CODEX

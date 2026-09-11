@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from atif_corpus.domain.slug import DEFAULT_CORPUS_KEY, corpus_slug
+from atif_corpus.domain.slug import CODEX_CORPUS_KEY, DEFAULT_CORPUS_KEY, corpus_slug
 
 
 class TestFrozenSlugValues:
@@ -26,6 +26,20 @@ class TestFrozenSlugValues:
         assert corpus_slug("~/.claude") == DEFAULT_CORPUS_KEY
         assert corpus_slug(Path("~/.claude").expanduser()) == DEFAULT_CORPUS_KEY
         assert DEFAULT_CORPUS_KEY == "default"
+
+    def test_codex_rollout_root_maps_to_its_reserved_key(self) -> None:
+        """``~/.codex/sessions`` is the Codex source root a scan walks."""
+        assert corpus_slug("~/.codex/sessions") == CODEX_CORPUS_KEY
+        assert corpus_slug(Path("~/.codex/sessions").expanduser()) == CODEX_CORPUS_KEY
+        assert CODEX_CORPUS_KEY == "codex"
+
+    def test_the_two_reserved_keys_are_distinct(self) -> None:
+        """One corpus root per agent: a shared key would have them overwrite each other."""
+        assert DEFAULT_CORPUS_KEY != CODEX_CORPUS_KEY
+
+    def test_the_codex_home_itself_is_not_reserved(self) -> None:
+        """Only the sessions dir is a source root; ``~/.codex`` holds config, not transcripts."""
+        assert corpus_slug("~/.codex") != CODEX_CORPUS_KEY
 
     def test_concrete_values_are_frozen(self) -> None:
         """Exact directory names an installed corpus may already occupy."""

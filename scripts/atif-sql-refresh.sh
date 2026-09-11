@@ -49,6 +49,33 @@
 # agent fleet gets its own isolated config root so a run cannot mutate the
 # operator's live session state, and each such root is its own corpus.
 #
+# THE CODEX PASS (materialize lane only). Codex CLI keeps its own transcripts
+# at ${CODEX_HOME:-$HOME/.codex}/sessions, which no CLAUDE_CONFIG_DIR names, so
+# it is not one of the corpora above: it is one extra materialize pass with
+# `--agent codex`, run after them, with ATIF_SQL_SOURCE_ROOT UNEXPORTED so the
+# flag's own default root wins. Guards, all of them exit-0 skips:
+#   * no ${CODEX_HOME:-$HOME/.codex}/sessions -> nothing to materialize;
+#   * a CLI whose `materialize --help` lacks `--agent` -> the resolved CLI
+#     predates Codex support (log "codex not yet supported, skipping"), the same
+#     shape as the analyze/embed absence guards;
+#   * ATIF_SQL_CORPUS_ROOT set in the environment -> that pinned root belongs to
+#     the Claude corpus, and one corpus holds ONE agent (docs/CONTRACT.md), so
+#     writing Codex sessions into it would corrupt the corpus. Set
+#     ATIF_SQL_CODEX_CORPUS_ROOT to say where Codex should go instead. A
+#     CODEX_CORPUS_ROOT that itself points at a Claude corpus is caught one
+#     layer down: materialize reads the corpus's own meta.agent and exits 78
+#     rather than deleting the other agent's sessions as ghosts.
+# A PERMANENT CODEX SKIP IS AN OPERATOR SIGNAL, not a steady state: the resolved
+# CLI (see CLI RESOLUTION below) can be an older `uv tool install` that predates
+# `--agent`, and then every tick logs "codex not yet supported" forever while the
+# Codex corpus quietly ages. If that line repeats, reinstall the tool
+# (`uv tool install --force atif-sql`) rather than reading it as normal.
+#
+# Embedding does NOT piggyback on the Codex pass: `atif-sql embed` takes no
+# --agent, so it would need the Codex corpus root threaded in explicitly. That
+# is a deliberate deferral, not an oversight — the Codex corpus stays fresh, and
+# semantic search over it stays a follow-up.
+#
 # atif-corpus resolves its source root from ATIF_SQL_SOURCE_ROOT
 # (= <config-dir>/projects), BUT its default corpus-root slug derives from
 # CLAUDE_CONFIG_DIR — setting only ATIF_SQL_SOURCE_ROOT points one corpus's
@@ -67,7 +94,7 @@
 #
 # Arm with ONE user-crontab line per lane (`atif-sql cron install` prints this
 # block; check `crontab -l` first — no tool writes the crontab silently):
-#   */10 * * * * <repo>/scripts/atif-sql-refresh.sh materialize >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
+#   */10 * * * * <repo>/scripts/atif-sql-refresh.sh materialize >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1   # Claude Code corpora + the Codex pass
 #   17   * * * * <repo>/scripts/atif-sql-refresh.sh structural  >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
 #   20  10 * * * <repo>/scripts/atif-sql-refresh.sh llm         >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
 #
@@ -303,6 +330,42 @@ run_llm() {
   log "$name: LLM refresh ok (spent)"
 }
 
+run_codex_materialize() {
+  # One extra materialize pass over the Codex CLI transcript root. See the
+  # header for every guard below and why embed does not ride along.
+  local name=codex
+  local codex_sessions="${CODEX_HOME:-$HOME/.codex}/sessions"
+
+  if [ ! -d "$codex_sessions" ]; then
+    log "$name: $codex_sessions absent — skip"
+    return 0
+  fi
+  if ! "$ATIF_SQL" materialize --help 2>/dev/null 9>&- | grep -q -- '--agent'; then
+    log "$name: codex not yet supported by $ATIF_SQL, skipping"
+    return 0
+  fi
+
+  local codex_corpus_root="${ATIF_SQL_CODEX_CORPUS_ROOT:-}"
+  if [ -z "$codex_corpus_root" ] && [ -n "${ATIF_SQL_CORPUS_ROOT:-}" ]; then
+    log "$name: ATIF_SQL_CORPUS_ROOT is pinned to the Claude corpus and one corpus holds one agent — set ATIF_SQL_CODEX_CORPUS_ROOT to materialize Codex, skipping"
+    return 0
+  fi
+
+  # A SUBSHELL, so unexporting the per-corpus roots cannot leak into the status
+  # dump or a later lane: with ATIF_SQL_SOURCE_ROOT still exported, --agent
+  # codex would scan the Claude transcripts.
+  (
+    unset ATIF_SQL_SOURCE_ROOT CLAUDE_CONFIG_DIR
+    if [ -n "$codex_corpus_root" ]; then
+      export ATIF_SQL_CORPUS_ROOT="$codex_corpus_root"
+    else
+      unset ATIF_SQL_CORPUS_ROOT
+    fi
+    "$ATIF_SQL" materialize --agent codex --format json >> "$LOG" 2>&1 9>&-
+  ) || { log "$name: materialize FAILED (see above)"; return 1; }
+  log "$name: materialize ok"
+}
+
 overall=0
 for i in "${!CORPUS_NAMES[@]}"; do
   name="${CORPUS_NAMES[$i]}"
@@ -321,6 +384,10 @@ for i in "${!CORPUS_NAMES[@]}"; do
   esac
 done
 
+if [ "$MODE" = materialize ]; then
+  run_codex_materialize || overall=1
+fi
+
 # Report what the corpora now look like, so the log answers "is it fresh?"
 # without a second command. `atif-sql status` is read-only and fast (a scan +
 # a pure re-plan, no conversion), so it is cheap enough to dump per corpus.
@@ -334,6 +401,21 @@ if [ "$MODE" != materialize ]; then
     CLAUDE_CONFIG_DIR="$config_dir" ATIF_SQL_SOURCE_ROOT="$config_dir/projects" \
       "$ATIF_SQL" status --format json >> "$LOG" 2>&1 9>&- || true
   done
+
+  # The Codex corpus too, or the log's answer to "is it fresh?" silently
+  # excludes the one corpus that has no lane of its own to report it. Same
+  # guards as the pass, and the same unexported roots.
+  if [ -d "${CODEX_HOME:-$HOME/.codex}/sessions" ] \
+     && "$ATIF_SQL" status --help 2>/dev/null 9>&- | grep -q -- '--agent'; then
+    log "--- corpus status: codex ---"
+    (
+      unset ATIF_SQL_SOURCE_ROOT CLAUDE_CONFIG_DIR
+      [ -n "${ATIF_SQL_CODEX_CORPUS_ROOT:-}" ] \
+        && export ATIF_SQL_CORPUS_ROOT="$ATIF_SQL_CODEX_CORPUS_ROOT" \
+        || unset ATIF_SQL_CORPUS_ROOT
+      "$ATIF_SQL" status --agent codex --format json >> "$LOG" 2>&1 9>&-
+    ) || true
+  fi
 fi
 
 log "refresh complete (mode=$MODE, exit=$overall)"

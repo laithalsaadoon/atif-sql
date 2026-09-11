@@ -67,7 +67,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection, Mapping, Sequence
 
 from atif_corpus.domain.layout import (
     EDGES_FILENAME,
@@ -82,6 +82,7 @@ from atif_corpus.domain.sessions import (
     build_plan,
     owns_path,
 )
+from atif_corpus.domain.source_layout import CLAUDE_CODE_LAYOUT, SourceLayout
 from atif_corpus.infrastructure.atomic import (
     replace_dir_atomic,
     write_json_atomic,
@@ -102,6 +103,23 @@ class SuspiciousEmptyScanError(RuntimeError):
     pointing elsewhere) — proceeding would garbage-collect the ENTIRE
     corpus as "ghosts". Fail loud instead; an operator who really emptied
     the source tree can delete the corpus dir explicitly.
+    """
+
+
+class CorpusAgentMismatchError(RuntimeError):
+    """The corpus at this root was materialized from a DIFFERENT agent.
+
+    One corpus holds one agent's sessions (``docs/CONTRACT.md``), and the
+    per-agent default roots keep that true without anyone thinking about it.
+    An EXPLICIT root defeats them: ``--corpus-root <claude corpus> --agent
+    codex``, or ``ATIF_SQL_CORPUS_ROOT`` left pointing at one corpus while the
+    agent moves, aims a Codex pass at a corpus full of Claude Code sessions.
+    Every one of them is then a ghost — no Codex scan will ever name them — so
+    the pass would delete the lot and report it as "source vanished".
+
+    So the corpus's own ``meta.agent`` is a DISCRIMINATOR, not just provenance:
+    it is read before ghost removal and before any write, and a disagreement
+    fails the pass with nothing removed.
     """
 
 
@@ -196,6 +214,7 @@ def _write_session(
     materialized_at: str,
     harbor_version: str,
     converter_version: str,
+    agent: str,
 ) -> float:
     """Convert one session and write its four artifacts; returns convert seconds.
 
@@ -235,6 +254,13 @@ def _write_session(
                 "harbor_version": harbor_version,
                 "converter_version": converter_version,
                 "materialized_at": materialized_at,
+                # WHICH agent wrote the transcript this artifact set came from.
+                # A corpus root holds one agent's sessions by construction (the
+                # slug derives from the source root), so this is provenance
+                # rather than a discriminator — but a corpus copied out of place
+                # keeps saying what it is, and an operator reading one
+                # meta.json does not have to infer the agent from a path shape.
+                "agent": agent,
             },
         )
         layout.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -345,39 +371,38 @@ def _sessions_under_unlistable_dirs(
     watermark: Mapping[str, int],
     *,
     source_root: Path,
+    source_layout: SourceLayout,
 ) -> dict[str, str]:
     """``{session_id: main_jsonl}`` for sessions inside a dir that would not list.
 
-    A project dir at mode 000 discovers NOTHING, so its sessions cannot reach
+    A directory at mode 000 discovers NOTHING, so its sessions cannot reach
     :attr:`SourceScan.unreadable` — that map is keyed by a session the scan
     actually saw. Without this resolution every session under such a dir looks
     deleted and its corpus dir is removed, which is the same data loss the
     per-session stat guard exists to prevent, one level up.
 
     The watermark is the only record of which sessions lived there, so it
-    supplies the ids. Position under the SOURCE ROOT names the session, never
-    position under the unlistable dir: the contract puts a main transcript at
-    ``<source_root>/<project>/<session>.jsonl`` and its side-files under
-    ``<source_root>/<project>/<session>/``, so the second segment is the
-    session id whichever level failed to list. Stripping the unlistable prefix
-    instead yields the PROJECT name when the unlistable dir is the root, and
-    that value reaches operators through
+    supplies the ids, and
+    :meth:`~atif_corpus.domain.source_layout.SourceLayout.session_from_watermark_path`
+    resolves each recorded path by POSITION under the source root — never by
+    stripping the unlistable prefix, which would yield a project or a date
+    component when the unlistable dir is an intermediate one. That resolved id
+    reaches operators through
     :attr:`MaterializationReport.unreadable_session_ids`.
     """
     if not scan.unlistable_dirs:
         return {}
-    root_prefix = f"{str(source_root).rstrip('/')}/"
     resolved: dict[str, str] = {}
     for directory in scan.unlistable_dirs:
         prefix = f"{directory.rstrip('/')}/"
         for path in watermark:
-            if not path.startswith(prefix) or not path.startswith(root_prefix):
+            if not path.startswith(prefix):
                 continue
-            segments = path[len(root_prefix) :].split("/")
-            if len(segments) < 2:  # noqa: PLR2004 — <project>/<session>.jsonl is two
+            session = source_layout.session_from_watermark_path(str(source_root), path)
+            if session is None:
                 continue
-            project, session_id = segments[0], segments[1].removesuffix(".jsonl")
-            resolved[session_id] = f"{root_prefix}{project}/{session_id}.jsonl"
+            session_id, main_jsonl = session
+            resolved[session_id] = main_jsonl
     if resolved:
         logger.warning(
             "materialize: {} session(s) live under a directory that could not be "
@@ -386,6 +411,37 @@ def _sessions_under_unlistable_dirs(
             len(resolved),
         )
     return resolved
+
+
+#: How many existing session dirs to open looking for the corpus's agent. One
+#: is normally enough; a handful covers a corpus whose first dirs are mid-swap
+#: or unreadable, and the cap keeps the probe O(1) on a 3,700-session corpus.
+_AGENT_PROBE_LIMIT = 8
+
+
+def _corpus_agent(layout: CorpusLayout, session_dir_names: Sequence[str]) -> str | None:
+    """The agent a materialized corpus says it holds, or ``None`` if it cannot say.
+
+    Reads at most :data:`_AGENT_PROBE_LIMIT` ``meta.json`` files and returns the
+    first answer. A ``meta.json`` with NO ``agent`` key still answers
+    ``claude-code``: the key landed with Codex support, and this workspace could
+    not read a Codex rollout before then, so a corpus written without it holds
+    Claude Code sessions. Unreadable or unparseable meta files are skipped
+    rather than treated as an answer — a permission blip must not be able to
+    relabel a corpus.
+    """
+    for name in list(session_dir_names)[:_AGENT_PROBE_LIMIT]:
+        try:
+            meta = json.loads(layout.meta_path(name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict):
+            continue
+        agent = meta.get("agent")
+        if isinstance(agent, str) and agent:
+            return agent
+        return CLAUDE_CODE_LAYOUT.agent.value
+    return None
 
 
 def _remove_ghost_sessions(
@@ -486,6 +542,7 @@ def materialize(
     force: bool = False,
     now_ns: int | None = None,
     session_ids: Collection[str] | None = None,
+    source_layout: SourceLayout = CLAUDE_CODE_LAYOUT,
 ) -> MaterializationReport:
     """Run one materialization pass; see the module docstring for the shape.
 
@@ -509,6 +566,11 @@ def materialize(
     now_ns
         Epoch-ns "now" for the quiescence check; defaults to ``time.time_ns()``.
         Pass explicitly in tests to pin the decision.
+    source_layout
+        Which agent's transcript arrangement to discover under
+        ``source_root``, and the agent name stamped into every ``meta.json``
+        this pass writes. Defaults to Claude Code's shape, which is what every
+        caller predating Codex support meant.
     session_ids
         Optional session-id filter (contract-compatible extension for
         ``atif-sql materialize --sessions``): when given, only these
@@ -531,12 +593,17 @@ def materialize(
     layout = CorpusLayout(corpus_root=corpus_root)
     _sweep_staging(layout)
     previous_watermark = read_watermark(layout.watermark_path)
-    scan = scan_sources(source_root)
+    scan = scan_sources(source_root, source_layout)
     # A dir that would not list discovered no sessions, so its ids come from
     # the watermark; folding them in makes every downstream unreadable check
     # (ghost removal, retention, the report) read one set.
     scan = scan.with_unreadable(
-        _sessions_under_unlistable_dirs(scan, previous_watermark, source_root=source_root)
+        _sessions_under_unlistable_dirs(
+            scan,
+            previous_watermark,
+            source_root=source_root,
+            source_layout=source_layout,
+        )
     )
     sessions = scan.sessions
 
@@ -551,6 +618,18 @@ def materialize(
         if layout.sessions_dir.is_dir()
         else []
     )
+    # Agent check FIRST: it is the one condition under which every existing
+    # session dir is a ghost by construction, so it has to run before the
+    # emptiness tripwire and before the first write.
+    corpus_agent = _corpus_agent(layout, existing_session_dirs)
+    if corpus_agent is not None and corpus_agent != source_layout.agent.value:
+        msg = (
+            f"the corpus at {corpus_root} holds {corpus_agent} sessions but this "
+            f"pass is materializing {source_layout.agent.value} from {source_root} "
+            f"— refusing: one corpus holds one agent, and continuing would delete "
+            f"all {len(existing_session_dirs)} of them as ghosts"
+        )
+        raise CorpusAgentMismatchError(msg)
     if not sessions and existing_session_dirs and not scan.unlistable_dirs:
         msg = (
             f"scan of {source_root} found 0 sessions but the corpus at "
@@ -604,6 +683,7 @@ def materialize(
                 materialized_at=materialized_at,
                 harbor_version=harbor_version,
                 converter_version=converter_version,
+                agent=source_layout.agent.value,
             )
         except Exception as error:  # noqa: BLE001 — one bad session must not abort the sync
             logger.warning("materialize: session {} failed: {}", session.session_id, error)

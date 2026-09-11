@@ -1,19 +1,24 @@
 ---
 title: atif-sql
-description: ATIF-native analytics over Claude Code agent trajectories — convert sessions to ATIF, materialize a corpus, query it through DuckDB views.
+description: ATIF-native analytics over Claude Code and Codex CLI agent trajectories — convert sessions to ATIF, materialize a corpus, query it through DuckDB views.
 ---
 
-atif-sql reads Claude Code session transcripts, converts each session to
+atif-sql reads Claude Code session transcripts and Codex CLI rollouts, converts each session to
 [ATIF](https://github.com/laude-institute/harbor) — Harbor's Agent Trajectory Interchange Format —
 materializes the results as a corpus of ATIF documents on disk, and layers DuckDB views and macros
 over that corpus. Converting once at the boundary, with an explicit and tested fidelity policy for
 what the upstream adapter drops, replaces re-deriving trajectory semantics inside every SQL view.
 
+Pick the agent with `--agent claude-code|codex` on `convert`, `materialize`, `status` and `query`.
+One corpus holds one agent, the two default to separate roots, and `sessions.agent` names which one a
+row came from.
+
 It is a uv Python workspace, Apache-2.0, and it replaces `claude-sql`.
 
-```mermaid The conversion pipeline: Claude Code session JSONL is converted once to an ATIF corpus on disk, and every DuckDB view, analytics pipeline and embedding run reads that corpus.
+```mermaid The conversion pipeline: a Claude Code session JSONL or a Codex CLI rollout JSONL is converted once to an ATIF corpus on disk, and every DuckDB view, analytics pipeline and embedding run reads that corpus.
 flowchart LR
   jsonl[Claude Code session JSONL] --> convert[atif-sql convert]
+  rollout[Codex CLI rollout JSONL] --> convert
   convert --> corpus[ATIF corpus on disk]
   corpus --> duck[DuckDB views and macros]
   duck --> query[atif-sql query]
@@ -27,7 +32,7 @@ flowchart LR
 
 | Package | What it owns |
 | --- | --- |
-| `atif-converter` | The Harbor `ClaudeCode` adapter wrapper, and the fidelity policy that accounts for every known upstream conversion gap per session |
+| `atif-converter` | The Harbor `ClaudeCode` and `Codex` adapter wrappers, and the per-agent fidelity policy that accounts for every known upstream conversion gap per session |
 | `atif-corpus` | Corpus materialization: source discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | The DuckDB views and macros over the materialized corpus, declared in a drift-tested static catalog |
 | `atif-models` | The model alias registry and the structured-output LLM client. No other package names a Bedrock model id |
