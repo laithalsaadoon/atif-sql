@@ -24,7 +24,7 @@ Flags:
 - `--include-subagents` / `--no-subagents` — stage `<session>/subagents/**.jsonl` side-files alongside the main chain; default `True`, with the negative form named explicitly. `:228`
 - `--trajectory-out` — write the trajectory JSON here and `edges.jsonl` beside it, instead of stdout. `:229`
 
-Exit codes: `0` ok, `2` empty session, `64` invalid input, `65` validation, `70` conversion, `127` the pinned private harbor method is gone. `:250`
+Exit codes: `0` ok, `2` empty session, `64` invalid input, `65` validation, `70` conversion. `:250`
 
 ## materialize
 
@@ -45,7 +45,7 @@ Flags:
 - `--sessions` — comma-separated session-id filter; only these sessions are planned this pass. `:345`
 - `--format` — report format. `:346`
 
-Exit codes: `0` ok, `127` the pinned private harbor method is gone — probed once when the converter is built, so the pass fails before it starts rather than reporting N per-session failures under exit 0; `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
+Exit codes: `0` ok, `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
 
 ## status
 

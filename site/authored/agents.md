@@ -59,7 +59,7 @@ adds what a schema cannot state: what a silence means, and which surface you are
 - **Branch on the exit code, never on the message text.** The codes are a stable wire contract: `64`
   for malformed input or malformed SQL, `65` for a catalog miss or a store written by another embedding
   provider, `70` for anything the database or an adapter raises, `78` for a state only an operator can
-  clear, `127` for a missing harbor install, and `2` for a parsed-but-empty result an automated caller
+  clear, `127` retired (kept so the table never renumbers), and `2` for a parsed-but-empty result an automated caller
   should treat as "nothing to do". The message beside the code is prose a maintainer rewrites freely.
 
 ## 3. Which surface you are on

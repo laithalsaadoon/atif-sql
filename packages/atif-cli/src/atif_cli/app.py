@@ -328,7 +328,7 @@ def convert(
         instead of stdout.
 
     Exit codes: 0 ok, 2 empty session, 64 invalid input or unknown agent,
-    65 validation, 70 conversion, 127 the pinned private harbor method is gone.
+    65 validation, 70 conversion.
     """
     from atif_converter.application.convert_and_audit import convert_and_audit
     from atif_converter.application.convert_codex import convert_codex_and_audit

@@ -50,7 +50,7 @@ def read_codex_rollout(rollout_jsonl: Path) -> list[dict[str, Any]]:
         OSError: the file cannot be opened or read.
     """
     raw_events: list[dict[str, Any]] = []
-    with rollout_jsonl.open() as handle:
+    with rollout_jsonl.open(encoding="utf-8") as handle:
         for line in handle:
             stripped = line.strip()
             if not stripped:

@@ -966,6 +966,12 @@ def convert_claude_code_records(
         ``None`` exactly when harbor returns ``None``: no records at all, or no
         record produced a step.
     """
+    # The three collections below are SETS, dumped as lists: with two or more
+    # distinct values their order follows the process hash seed, so the same
+    # session can serialize differently per process. That is harbor's behavior,
+    # kept on purpose — sorting here would diverge from the live oracle on every
+    # multi-element set. A deliberate divergence later is a fidelity-policy
+    # decision, not a drive-by.
     events = _collect_events(main_records, side_records)
     if not events:
         return None

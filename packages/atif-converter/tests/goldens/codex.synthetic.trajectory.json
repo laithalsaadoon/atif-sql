@@ -8,7 +8,7 @@
       },
       "originator": "codex-tui"
     },
-    "model_name": "bedrock-native/global.openai.gpt-6-astra",
+    "model_name": "openai/gpt-5.1-codex",
     "name": "codex",
     "version": "0.154.0"
   },
@@ -27,7 +27,7 @@
       "total_tokens": 1108
     },
     "total_completion_tokens": 8,
-    "total_cost_usd": 0.02565,
+    "total_cost_usd": 0.00198,
     "total_prompt_tokens": 1100,
     "total_steps": 4
   },
@@ -65,7 +65,7 @@
       "message": "",
       "metrics": {
         "completion_tokens": 40,
-        "cost_usd": 0.01425,
+        "cost_usd": 0.0005250000000000001,
         "extra": {
           "cache_write_input_tokens": 900,
           "reasoning_output_tokens": 0,
@@ -73,7 +73,7 @@
         },
         "prompt_tokens": 1000
       },
-      "model_name": "bedrock-native/global.openai.gpt-6-astra",
+      "model_name": "openai/gpt-5.1-codex",
       "observation": {
         "results": [
           {
@@ -104,7 +104,7 @@
       "message": "marker-ok",
       "metrics": {
         "completion_tokens": 8,
-        "cost_usd": 0.0114,
+        "cost_usd": 0.0014550000000000001,
         "extra": {
           "cache_write_input_tokens": 0,
           "reasoning_output_tokens": 0,
@@ -112,7 +112,7 @@
         },
         "prompt_tokens": 1100
       },
-      "model_name": "bedrock-native/global.openai.gpt-6-astra",
+      "model_name": "openai/gpt-5.1-codex",
       "source": "agent",
       "step_id": 4,
       "timestamp": "2026-09-11T17:27:03.000Z"

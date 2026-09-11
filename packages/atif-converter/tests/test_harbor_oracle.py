@@ -67,9 +67,12 @@ class TestFreeze:
 class TestFrozenGoldens:
     """The live oracle and the frozen one must agree, or the freeze is stale.
 
-    A diff here means harbor changed conversion behavior under the pin. The
-    response is a decision, not a re-freeze: either the port follows upstream
-    (re-freeze and port the change) or it deliberately does not (record why).
+    A diff here means harbor changed conversion behavior under the pin, OR
+    litellm's bundled pricing table changed a rate the fixtures price through
+    (``cost_usd`` paths only; conftest pins the table to the locked litellm, so
+    that arrives with a lockfile bump). The response is a decision, not a
+    re-freeze: either the port follows upstream (re-freeze and port the change)
+    or it deliberately does not (record why).
     """
 
     @pytest.mark.parametrize("name", ["claude_code.synthetic", "codex.synthetic"])

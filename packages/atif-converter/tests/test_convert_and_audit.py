@@ -220,3 +220,32 @@ class TestInputValidation:
         bogus.write_text("nope")
         with pytest.raises(InvalidSessionInput):
             convert_and_audit(bogus)
+
+
+class TestReaderErrors:
+    def test_unreadable_side_file_is_a_conversion_error_with_the_cause(
+        self, synthetic_session: Path
+    ) -> None:
+        """A side file the process cannot open fails the SESSION, classified.
+
+        The seam wraps the converter in ``ConversionError`` so materialize
+        records one per-session failure and continues; the original ``OSError``
+        rides along as ``__cause__`` so the log says which file and why.
+        """
+        import os
+        import stat
+
+        from atif_converter.domain.errors import ConversionError
+        from atif_converter.infrastructure.harbor_adapter import convert_session
+
+        if os.geteuid() == 0:  # pragma: no cover — root reads a 000 file anyway
+            pytest.skip("permission bits do not bind root")
+        side_dir = synthetic_session.parent / synthetic_session.stem
+        side_file = next(side_dir.rglob("*.jsonl"))
+        side_file.chmod(0)
+        try:
+            with pytest.raises(ConversionError) as excinfo:
+                convert_session(synthetic_session)
+        finally:
+            side_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        assert isinstance(excinfo.value.__cause__, OSError)
