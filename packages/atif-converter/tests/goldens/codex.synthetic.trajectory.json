@@ -1,0 +1,121 @@
+{
+  "agent": {
+    "extra": {
+      "cwd": "/home/alice/proj",
+      "git": {
+        "branch": "main",
+        "commit_hash": "abc1234"
+      },
+      "originator": "codex-tui"
+    },
+    "model_name": "bedrock-native/global.openai.gpt-6-astra",
+    "name": "codex",
+    "version": "0.154.0"
+  },
+  "final_metrics": {
+    "extra": {
+      "last_token_usage": {
+        "cache_write_input_tokens": 0,
+        "cached_input_tokens": 0,
+        "input_tokens": 1100,
+        "output_tokens": 8,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 1108
+      },
+      "reasoning_output_tokens": 0,
+      "total_cache_write_input_tokens": 0,
+      "total_tokens": 1108
+    },
+    "total_completion_tokens": 8,
+    "total_cost_usd": 0.02565,
+    "total_prompt_tokens": 1100,
+    "total_steps": 4
+  },
+  "schema_version": "ATIF-v1.7",
+  "session_id": "01a09182-2858-7f42-936b-7f027b341fdf",
+  "steps": [
+    {
+      "message": "<skills_instructions>use them",
+      "source": "system",
+      "step_id": 1,
+      "timestamp": "2026-09-11T17:27:01.400Z"
+    },
+    {
+      "message": "read marker.txt with a shell command",
+      "source": "user",
+      "step_id": 2,
+      "timestamp": "2026-09-11T17:27:01.500Z"
+    },
+    {
+      "extra": {
+        "api_call_id": "api_call_1",
+        "codex_turn_id": "turn-1",
+        "tool_call_details": {
+          "call_1": {
+            "item_type": "function_call",
+            "metadata": {
+              "exit_code": 0
+            },
+            "raw_arguments": "{\"cmd\":\"cat marker.txt\"}",
+            "status": "completed"
+          }
+        }
+      },
+      "llm_call_count": 1,
+      "message": "",
+      "metrics": {
+        "completion_tokens": 40,
+        "cost_usd": 0.01425,
+        "extra": {
+          "cache_write_input_tokens": 900,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1040
+        },
+        "prompt_tokens": 1000
+      },
+      "model_name": "bedrock-native/global.openai.gpt-6-astra",
+      "observation": {
+        "results": [
+          {
+            "content": "marker-ok",
+            "source_call_id": "call_1"
+          }
+        ]
+      },
+      "source": "agent",
+      "step_id": 3,
+      "timestamp": "2026-09-11T17:27:02.100Z",
+      "tool_calls": [
+        {
+          "arguments": {
+            "cmd": "cat marker.txt"
+          },
+          "function_name": "exec_command",
+          "tool_call_id": "call_1"
+        }
+      ]
+    },
+    {
+      "extra": {
+        "api_call_id": "api_call_2",
+        "codex_turn_id": "turn-1"
+      },
+      "llm_call_count": 1,
+      "message": "marker-ok",
+      "metrics": {
+        "completion_tokens": 8,
+        "cost_usd": 0.0114,
+        "extra": {
+          "cache_write_input_tokens": 0,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1108
+        },
+        "prompt_tokens": 1100
+      },
+      "model_name": "bedrock-native/global.openai.gpt-6-astra",
+      "source": "agent",
+      "step_id": 4,
+      "timestamp": "2026-09-11T17:27:03.000Z"
+    }
+  ]
+}
