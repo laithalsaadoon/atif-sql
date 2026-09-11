@@ -27,16 +27,41 @@ proofs are out of scope for the workspace.
                                    #  message_id, type, ts, is_sidechain,
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
     meta.json                      # {session_id, source_mtime_ns, source_files: [...],
-                                   #  harbor_version, converter_version, materialized_at}
+                                   #  harbor_version, converter_version, materialized_at,
+                                   #  agent}
   watermark.json                   # {path: mtime_ns} across source corpus
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
+  One key is reserved and not hashed: `codex` names the Codex CLI corpus.
+- meta.agent: the AgentSource value ("claude-code" or "codex") the session was
+  materialized from. A corpus written before this key existed reads as NULL and
+  is still valid; nothing may require it to be present.
+- One corpus holds ONE agent. Mixing agents under one corpus_root is not a
+  supported state, and per-agent default roots exist so it cannot happen by
+  accident.
 - Source discovery MUST include subagents/agent-*.jsonl AND
   subagents/workflows/wf_*/agent-*.jsonl (and any deeper future nesting: use
   rglob over the session dir filtered to *.jsonl, excluding *.meta.json).
 - Quiescence: a session is (re)materialized when newest source mtime is older
   than quiesce_seconds (default 300) AND newer than its meta.source_mtime_ns.
   --force overrides.
+
+## Two agents (atif-converter converts, atif-corpus discovers)
+- AgentSource is a StrEnum in atif-converter with an AST-pinned twin in
+  atif-corpus (the packages may not import each other). Its VALUES are the wire
+  contract three ways: the `--agent` spellings, harbor's Trajectory.agent.name,
+  and meta.agent above.
+- Claude Code layout: <source_root>/<project>/<session>.jsonl, transcript depth
+  1, side files present (subagents/, *.meta.json).
+- Codex layout: $CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl,
+  transcript depth 3, no side files. session_id is the trailing UUID of the
+  rollout filename, so it survives the date nesting.
+- A Codex rollout is staged ALONE into its own temp dir before conversion,
+  because harbor converts every rollout it can see in a directory into one
+  trajectory.
+- Codex fidelity gaps are their own enum (CodexFidelityGap), all values
+  namespaced `codex_*` so one loss_report.gaps_observed array can carry both
+  agents' gaps without collision.
 
 ## Converter enrichment (atif-converter owns; wrap-local, NO upstream patches)
 1. Staging fix: per-FILE symlinks; workflow-nested agent files staged flat into
@@ -46,12 +71,21 @@ proofs are out of scope for the workspace.
      (join on assistant message.id / tool_use_id; user steps via content match order).
    - step.extra["is_compact_summary"] when the source record had it.
    - trajectory.extra["cache_creation_total"] surfaced from final_metrics.extra.
+   - Codex enrichment attributes agent steps by a re-derived api_call_id rather
+     than by message text, because harbor drops empty text parts and an empty
+     assistant message can never be placed by matching. Tool records join on
+     call_id; user and system steps are positional with a text cross-check that
+     stops at the first mismatch and records enrichment_truncated_at_step.
 3. Census + edges are derived from RAW jsonl (never from the trajectory).
 4. Validation: TrajectoryValidator MUST pass post-enrichment (extra is free-form).
 
 ## atif-duck (reads corpus_root; NEVER imports atif-corpus/atif-converter)
 - register(con, corpus_root): TEMP-table raw readers over trajectory.json
   (read_json), edges.jsonl, loss_report.json, meta.json + derived views above.
+- sessions view carries `agent` and `agent_version` from trajectory.agent, and
+  coalesces the two shapes harbor emits for working directory and git branch
+  (cwds[0]/cwd, git_branches[0]/git.branch). The steps view coalesces
+  cache_creation_input_tokens with the Codex spelling cache_write_input_tokens.
 - messages-parity view name: `steps` (one row per ATIF step) PLUS a `messages`
   compatibility view reconstructed from edges (uuid-keyed: uuid, parent_uuid,
   session_id, ts, type, is_sidechain, is_compact_summary, role via join).
@@ -59,9 +93,9 @@ proofs are out of scope for the workspace.
 - Macro signatures are pinned against the DDL by a drift test.
 
 ## CLI (atif-cli composes; the only package importing the other five)
-atif-sql convert <session.jsonl|dir>   # one-shot, prints trajectory path + loss summary
-atif-sql materialize [--force] [--quiesce-seconds N]  # sync corpus
-atif-sql status                        # corpus freshness, counts, watermark age
+atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
+atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...]  # sync corpus
+atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
 atif-sql schema                        # static, <50ms, no duckdb bind
 
@@ -83,4 +117,8 @@ repo neither declares nor provides.
 
 ## Settings (env prefix ATIF_SQL_)
 source_root (default CLAUDE_CONFIG_DIR~/.claude /projects), corpus_root,
-quiesce_seconds=300. _default_*() factories read env at call time.
+quiesce_seconds=300, agent=claude-code. _default_*() factories read env at call
+time. With agent=codex the two roots re-derive to $CODEX_HOME (default
+~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
+ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that
+re-derivation.

@@ -28,6 +28,16 @@ RUN that only plans and estimates, a bare ``embed`` exits 64 rather than
 choosing a scope for the caller, and ``search`` embeds exactly one query
 string per invocation.
 
+Two agents
+----------
+``convert``, ``materialize`` and ``status`` take ``--agent claude-code|codex``.
+The flag picks three things at once and they must move together: which harbor
+adapter converts a transcript, which discovery layout finds one, and which
+source root and corpus slug the settings default to. One corpus root therefore
+holds exactly one agent's sessions, which is what lets everything downstream —
+the DuckDB views, the analytics pipelines, the embedding store — stay unaware
+that a second agent exists.
+
 Agent-friendly defaults
 -----------------------
 * ``--format auto`` emits a human table on a TTY and JSON on a pipe.
@@ -203,7 +213,11 @@ def _harden_query_connection(
     con.execute("SET lock_configuration=true")
 
 
-def _corpus_settings(source_root: Path | None, corpus_root: Path | None) -> Any:
+def _corpus_settings(
+    source_root: Path | None,
+    corpus_root: Path | None,
+    agent: str | None = None,
+) -> Any:
     """Resolve CorpusSettings, letting explicit flags override env/defaults.
 
     When ``--source-root`` is given without ``--corpus-root``, the corpus
@@ -211,13 +225,22 @@ def _corpus_settings(source_root: Path | None, corpus_root: Path | None) -> Any:
     the source can never write into another source's corpus. An explicit
     ``ATIF_SQL_CORPUS_ROOT`` in the env wins over that re-derivation, because
     a pinned root is a deliberate statement about where artifacts belong.
+
+    ``agent`` is applied at CONSTRUCTION rather than copied in afterwards,
+    because it is what the settings' own defaults for both roots derive from:
+    a copy would leave a Codex run pointed at the Claude Code source root.
     """
     import os
 
+    from atif_corpus.domain.agents import AgentSource as CorpusAgentSource
     from atif_corpus.domain.slug import corpus_slug
     from atif_corpus.infrastructure.settings import CorpusSettings
 
-    settings = CorpusSettings()
+    settings = (
+        CorpusSettings(agent=_resolve_agent(agent, CorpusAgentSource))
+        if agent is not None
+        else CorpusSettings()
+    )
     if source_root is not None:
         resolved_corpus = corpus_root
         if resolved_corpus is None and "ATIF_SQL_CORPUS_ROOT" not in os.environ:
@@ -233,6 +256,23 @@ def _corpus_settings(source_root: Path | None, corpus_root: Path | None) -> Any:
     return settings
 
 
+def _resolve_agent(value: str, agent_enum: Any) -> Any:
+    """Parse an ``--agent`` value, or exit 64 naming the accepted spellings.
+
+    cyclopts would coerce a StrEnum parameter itself, but the enum lives behind
+    a DEFERRED import (it comes from atif-converter, which drags harbor), and
+    the lean-import test pins that harbor stays out of the fast path. So the
+    flag is typed ``str`` at the signature and parsed here, inside the command
+    body, with the same exit code an unparseable path would get.
+    """
+    try:
+        return agent_enum(value)
+    except ValueError:
+        accepted = ", ".join(member.value for member in agent_enum)
+        print(f"error: unknown --agent {value!r} (expected one of: {accepted})", file=sys.stderr)
+        raise SystemExit(EXIT_CODES["invalid_input"]) from None
+
+
 # ---------------------------------------------------------------------------
 # convert
 # ---------------------------------------------------------------------------
@@ -242,10 +282,11 @@ def _corpus_settings(source_root: Path | None, corpus_root: Path | None) -> Any:
 def convert(
     session_jsonl: Path,
     *,
+    agent: str = "claude-code",
     include_subagents: Annotated[bool, cyclopts.Parameter(negative="--no-subagents")] = True,
     trajectory_out: Path | None = None,
 ) -> None:
-    """Convert one Claude Code session JSONL to ATIF + loss report + edges.
+    """Convert one agent transcript (Claude Code session or Codex rollout) to ATIF.
 
     One-shot convert-and-audit (CONTRACT §CLI). With ``--trajectory-out``,
     the ENRICHED trajectory is written there, ``edges.jsonl`` lands next to
@@ -257,16 +298,27 @@ def convert(
     Parameters
     ----------
     session_jsonl
-        Path to the session transcript (``~/.claude/projects/<proj>/<session>.jsonl``).
+        Path to the transcript: a Claude Code session
+        (``~/.claude/projects/<proj>/<session>.jsonl``) or a Codex rollout
+        (``~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl``).
+    agent
+        Which agent wrote it: ``claude-code`` (default) or ``codex``. It
+        selects the harbor adapter, the record taxonomy and the fidelity
+        policy the loss report is written against.
     include_subagents
-        Stage ``<session>/subagents/**.jsonl`` side-files alongside the main chain.
+        Stage ``<session>/subagents/**.jsonl`` side-files alongside the main
+        chain. Claude Code only — a Codex rollout has no side-files, so the
+        flag is accepted and ignored there.
     trajectory_out
         Write the trajectory JSON here (plus ``edges.jsonl`` beside it)
         instead of stdout.
 
-    Exit codes: 0 ok, 2 empty session, 64 invalid input, 65 validation, 70 conversion.
+    Exit codes: 0 ok, 2 empty session, 64 invalid input or unknown agent,
+    65 validation, 70 conversion, 127 the pinned private harbor method is gone.
     """
     from atif_converter.application.convert_and_audit import convert_and_audit
+    from atif_converter.application.convert_codex import convert_codex_and_audit
+    from atif_converter.domain.agents import AgentSource
     from atif_converter.domain.errors import (
         DomainError,
         EmptySessionError,
@@ -274,8 +326,12 @@ def convert(
         InvalidSessionInput,
     )
 
+    resolved_agent = _resolve_agent(agent, AgentSource)
     try:
-        result, report = convert_and_audit(session_jsonl, include_subagents=include_subagents)
+        if resolved_agent is AgentSource.CODEX:
+            result, report = convert_codex_and_audit(session_jsonl)
+        else:
+            result, report = convert_and_audit(session_jsonl, include_subagents=include_subagents)
     except InvalidSessionInput as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(EXIT_CODES["invalid_input"]) from exc
@@ -367,6 +423,7 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
 @app.command
 def materialize(
     *,
+    agent: str | None = None,
     force: bool = False,
     quiesce_seconds: int | None = None,
     source_root: Path | None = None,
@@ -383,13 +440,20 @@ def materialize(
 
     Parameters
     ----------
+    agent
+        Which agent's transcripts to discover and convert: ``claude-code``
+        (default) or ``codex``. It selects the discovery layout, the converter,
+        and — unless a root is given explicitly — both default roots, so
+        ``--agent codex`` alone materializes ``<CODEX_HOME>/sessions`` into its
+        own corpus without touching the Claude Code one.
     force
         Re-materialize every quiescent session regardless of the watermark.
     quiesce_seconds
         Source-silence threshold; default from settings (contract: 300).
     source_root
-        Override the raw transcript root (default: env ``ATIF_SQL_SOURCE_ROOT``
-        or ``<CLAUDE_CONFIG_DIR>/projects``).
+        Override the raw transcript root (default: env ``ATIF_SQL_SOURCE_ROOT``,
+        or ``<CLAUDE_CONFIG_DIR>/projects`` / ``<CODEX_HOME>/sessions`` per
+        ``--agent``).
     corpus_root
         Override the materialized corpus root (default: env or
         ``~/.atif-sql/corpus/<slug>``).
@@ -405,8 +469,10 @@ def materialize(
         SuspiciousEmptyScanError,
         materialize as materialize_use_case,
     )
+    from atif_corpus.domain.source_layout import layout_for
 
-    settings = _corpus_settings(source_root, corpus_root)
+    settings = _corpus_settings(source_root, corpus_root, agent)
+    source_layout = layout_for(settings.agent)
     session_filter = (
         [s for s in (part.strip() for part in sessions.split(",")) if s]
         if sessions is not None
@@ -416,7 +482,8 @@ def materialize(
         report = materialize_use_case(
             source_root=settings.source_root,
             corpus_root=settings.corpus_root,
-            converter=RealConverter(),
+            converter=RealConverter(agent=settings.agent),
+            source_layout=source_layout,
             materialized_at=_now_iso(),
             harbor_version=_version_of("harbor"),
             converter_version=_version_of("atif-converter"),
@@ -459,6 +526,7 @@ def _dir_bytes(root: Path) -> int:
 @app.command
 def status(
     *,
+    agent: str | None = None,
     source_root: Path | None = None,
     corpus_root: Path | None = None,
     quiesce_seconds: int | None = None,
@@ -470,15 +538,21 @@ def status(
     planning decision ``materialize`` would make (quiescence + watermark),
     without converting anything. The staleness summary is therefore exactly
     "what would a materialize pass do right now".
+
+    ``--agent`` selects which corpus is reported, resolving the same way
+    ``materialize`` resolves it, so the two commands always describe the same
+    pair of roots. The JSON payload carries the resolved agent, which is what
+    lets an unattended lane confirm it ticked the corpus it meant to.
     """
     import time
 
     from atif_corpus.application.materialize import read_watermark
     from atif_corpus.domain.layout import CorpusLayout
     from atif_corpus.domain.sessions import QuiescencePolicy, build_plan
+    from atif_corpus.domain.source_layout import layout_for
     from atif_corpus.infrastructure.scanner import scan_source_root
 
-    settings = _corpus_settings(source_root, corpus_root)
+    settings = _corpus_settings(source_root, corpus_root, agent)
     layout = CorpusLayout(corpus_root=settings.corpus_root)
     quiesce = quiesce_seconds if quiesce_seconds is not None else settings.quiesce_seconds
 
@@ -488,7 +562,7 @@ def status(
     if layout.watermark_path.exists():
         watermark_age_seconds = round((now_ns - layout.watermark_path.stat().st_mtime_ns) / 1e9, 1)
 
-    source_sessions = scan_source_root(settings.source_root)
+    source_sessions = scan_source_root(settings.source_root, layout_for(settings.agent))
     plan = build_plan(
         source_sessions,
         watermark=watermark,
@@ -508,6 +582,7 @@ def status(
         "live": len(plan.skipped_live),
     }
     if resolve_format(fmt) is OutputFormat.TABLE:
+        print(f"agent:        {settings.agent.value}")
         print(f"source root:  {settings.source_root}")
         print(f"corpus root:  {settings.corpus_root}")
         age = "never materialized" if watermark_age_seconds is None else f"{watermark_age_seconds}s"
@@ -523,6 +598,7 @@ def status(
     else:
         emit_json(
             {
+                "agent": settings.agent.value,
                 "source_root": str(settings.source_root),
                 "corpus_root": str(settings.corpus_root),
                 "watermark_age_seconds": watermark_age_seconds,
@@ -549,6 +625,7 @@ def query(
     examples_flag: Annotated[bool, cyclopts.Parameter(name="--examples")] = False,
     category: str | None = None,
     requires: str | None = None,
+    agent: str | None = None,
     corpus_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
@@ -608,6 +685,11 @@ def query(
         atif-sql query 'SELECT count(*) FROM sessions'
         atif-sql query 'SELECT * FROM tool_rank(14)' --format json
         atif-sql query --examples --requires core
+        atif-sql query --agent codex 'SELECT agent, count(*) FROM sessions GROUP BY 1'
+
+    ``--agent codex`` selects the Codex corpus root the way ``materialize``
+    selects it, so the corpus a Codex materialize wrote is queryable without
+    spelling its path. One corpus holds one agent; ``--corpus-root`` still wins.
     """
     if examples_flag:
         examples(category=category, requires=requires, fmt=fmt)
@@ -631,7 +713,7 @@ def query(
     from atif_duck.infrastructure.registry import register
     from atif_embed.infrastructure.settings import EmbedSettings
 
-    settings = _corpus_settings(None, corpus_root)
+    settings = _corpus_settings(None, corpus_root, agent)
     embed_settings = EmbedSettings()
     expected_model, expected_dim = embed_settings.expected_embedding_identity()
     lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)

@@ -94,6 +94,24 @@ def _stage_session(session_jsonl: Path, staging: Path, *, include_subagents: boo
     return session_dir
 
 
+def require_transcript_file(path: Path) -> None:
+    """Refuse anything that is not an existing ``.jsonl`` transcript.
+
+    Called at the TOP of each use case, before the fingerprint snapshot: the
+    snapshot stats every discovered file, so a path that does not exist reached
+    ``OSError`` from inside the snapshot and surfaced as an uncaught
+    ``FileNotFoundError`` — exit 1 from the CLI, indistinguishable from a crash
+    — instead of the terminal input verdict the caller can act on.
+
+    Raises
+    ------
+        InvalidSessionInput: the path is absent, or not a ``.jsonl`` file.
+    """
+    if path.suffix != ".jsonl" or not path.is_file():
+        msg = f"not a session JSONL file: {path}"
+        raise InvalidSessionInput(msg)
+
+
 def validate_trajectory(trajectory: dict[str, Any]) -> tuple[str, ...]:
     """Run harbor's ``TrajectoryValidator``; return its errors (empty = valid).
 
@@ -160,10 +178,7 @@ def convert_session(
     # harbor has no py.typed, so these imports are untyped by construction.
     from harbor.agents.installed.claude_code import ClaudeCode  # type: ignore[import-untyped]
 
-    if session_jsonl.suffix != ".jsonl" or not session_jsonl.is_file():
-        msg = f"not a session JSONL file: {session_jsonl}"
-        raise InvalidSessionInput(msg)
-
+    require_transcript_file(session_jsonl)
     assert_harbor_private_api()
 
     with tempfile.TemporaryDirectory(prefix="atif-convert-") as scratch:

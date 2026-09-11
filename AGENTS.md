@@ -1,21 +1,31 @@
 # atif-sql — operating manual
 
-ATIF-native analytics over Claude Code agent trajectories.
-Instead of SQL views over raw `~/.claude/projects` JSONL, this stack converts
-sessions to ATIF (Harbor's Agent Trajectory Interchange Format), materializes a
-corpus of ATIF documents, and layers DuckDB views on top.
+ATIF-native analytics over agent trajectories, from two agents: Claude Code
+(`~/.claude/projects/**/*.jsonl`) and Codex CLI
+(`~/.codex/sessions/**/rollout-*.jsonl`).
+Instead of SQL views over raw JSONL, this stack converts sessions to ATIF
+(Harbor's Agent Trajectory Interchange Format), materializes a corpus of ATIF
+documents, and layers DuckDB views on top. One corpus holds one agent, and
+`sessions.agent` names it.
 
 ## Workspace layout
 
 uv WORKSPACE (virtual root, members under `packages/*`):
 
-- `packages/atif-converter` — wraps harbor's `ClaudeCode` adapter; owns the
-  fidelity policy (the seven known upstream conversion gaps live as types in
-  `atif_converter.domain.fidelity`). Layered: `application` >
-  `infrastructure` > `domain`.
+- `packages/atif-converter` — wraps harbor's `ClaudeCode` and `Codex`
+  adapters; owns the fidelity policy per agent (the seven known Claude Code
+  gaps in `atif_converter.domain.fidelity`, the seven Codex ones in
+  `atif_converter.domain.codex_fidelity`, whose values are namespaced
+  `codex_*` so one `gaps_observed` array carries both). `domain.agents`
+  holds the `AgentSource` enum, whose VALUES are the wire contract for the
+  `--agent` flag, harbor's `Trajectory.agent.name`, and `meta.agent`.
+  Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
-  quiescence, atomic artifact writes. Layered: `application` >
-  `infrastructure` > `domain`.
+  quiescence, atomic artifact writes. Per-agent discovery lives in
+  `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
+  Codex's `<YYYY>/<MM>/<DD>` nesting), and `domain.agents` is an AST-pinned
+  twin of the converter's enum, because the two packages may not import each
+  other. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-duck` — DuckDB views + macros over the materialized corpus:
   16 core views and 9 macros, plus 12 analytics views and 13 analytics
   macros, all declared in a static drift-tested catalog. Layered:
@@ -45,11 +55,17 @@ Rules of the road:
 - Inter-package deps: declare in the member's `[project.dependencies]` AND
   `[tool.uv.sources] <pkg> = { workspace = true }`.
 - harbor is pinned `>=0.22.0,<0.23` — we call the private
-  `ClaudeCode._convert_events_to_trajectory`, verified against 0.22.0 only.
+  `ClaudeCode._convert_events_to_trajectory` and
+  `Codex._convert_events_to_trajectory`, verified against 0.22.0 only. A
+  Codex rollout is staged ALONE into its own temp dir, because harbor folds
+  every rollout in a directory into one trajectory.
   The unit tests in atif-converter pin upstream behavior and are the drift
   alarm for version bumps.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
-- Settings via pydantic-settings, env prefix `ATIF_SQL_`.
+- Settings via pydantic-settings, env prefix `ATIF_SQL_`. `agent` is applied
+  at CONSTRUCTION, not copied in afterwards: both default roots derive from
+  it, and only roots absent from `model_fields_set` re-derive, so an explicit
+  `ATIF_SQL_SOURCE_ROOT` or `ATIF_SQL_CORPUS_ROOT` still wins.
 
 ## Agent query workflow
 
@@ -65,7 +81,8 @@ For an LLM agent driving `atif-sql`, the discovery loop is three commands:
    output is JSON `{note, examples: [{name, sql, description, requires,
    category}]}`; filter with `--requires core|analytics|vss` and
    `--category view|table-macro|scalar-macro`.
-3. `atif-sql query '<sql>'` — run it. Copy an example verbatim (the `sid`
+3. `atif-sql query '<sql>'` — run it. `--agent codex` points it at the Codex
+   corpus without spelling the path. Copy an example verbatim (the `sid`
    exemplar is a subquery over `sessions`, so it works on any corpus) or
    adapt it. `requires: analytics` needs `atif-sql analyze` to have run;
    `requires: vss` needs `atif-sql embed --all --no-dry-run` (a bare `embed`

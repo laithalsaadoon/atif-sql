@@ -141,6 +141,13 @@ _META_COLUMNS: dict[str, str] = {
     "harbor_version": "VARCHAR",
     "converter_version": "VARCHAR",
     "materialized_at": "VARCHAR",
+    # Which agent wrote the transcript. Added 2026-09-11 with Codex support, so
+    # a session materialized before then has no such key and reads as NULL —
+    # an explicit ``columns=`` projection nulls a missing key rather than
+    # failing, which is what lets a corpus predating the change still register.
+    # Queries read ``sessions.agent`` (from the trajectory) instead; this
+    # column is provenance for an operator reading meta.json directly.
+    "agent": "VARCHAR",
 }
 
 
@@ -349,6 +356,11 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         #   cache_creation); ``cached_tokens`` is the cache-read subset;
         #   ``cache_creation`` is dug out of ``metrics.extra`` because
         #   harbor only preserves the creation split there (fidelity gap 6).
+        #   The two adapters spell that key differently —
+        #   ``cache_creation_input_tokens`` for Claude Code,
+        #   ``cache_write_input_tokens`` for Codex — so the column coalesces
+        #   them: one name reaches SQL, and a cost query does not branch on
+        #   which agent wrote the session.
         # * ``is_sidechain`` / ``is_compact_summary`` / ``source_uuids``
         #   come from ``step.extra`` per the CONTRACT enrichment pass.
         con.execute(
@@ -382,8 +394,10 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
                                                                      AS completion_tokens,
                 json_extract(step, '$.metrics.cached_tokens')::BIGINT
                                                                      AS cached_tokens,
-                json_extract(step, '$.metrics.extra.cache_creation_input_tokens')::BIGINT
-                                                                     AS cache_creation,
+                coalesce(
+                    json_extract(step, '$.metrics.extra.cache_creation_input_tokens'),
+                    json_extract(step, '$.metrics.extra.cache_write_input_tokens')
+                )::BIGINT                                            AS cache_creation,
                 json_extract(step, '$.llm_call_count')::BIGINT       AS llm_call_count,
                 json_extract(step, '$.extra.source_uuids')           AS source_uuids
             FROM v_raw_trajectories t,
@@ -392,19 +406,35 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         )
         logger.debug("Registered view: steps")
 
-        # One row per materialized session. cwd / git_branch come from the
-        # harbor adapter's ``agent.extra`` sets (cwds / git_branches); the
-        # first element is representative because a session rarely spans more
-        # than one cwd or branch. A session that does spans them silently: the
-        # column reports one, so treat it as indicative, not exhaustive.
+        # One row per materialized session. ``agent`` / ``agent_version`` come
+        # from the trajectory's own ``agent`` struct, which harbor stamps per
+        # adapter — ``claude-code`` with the Claude Code version, ``codex`` with
+        # the codex-cli version. That is the ONE place the producing agent is
+        # recorded inside an artifact, so every agent-aware query reads this
+        # column rather than inferring the agent from a corpus path.
+        #
+        # cwd / git_branch come from the harbor adapter's ``agent.extra``; the
+        # key differs per agent and both are read here because ``agent.extra``
+        # is free-form: Claude Code writes SETS (``cwds`` / ``git_branches``,
+        # first element representative) while Codex writes one ``cwd`` string
+        # and a ``git`` struct. A Claude Code session spanning two cwds reports
+        # one of them silently, so treat the column as indicative, not
+        # exhaustive.
         con.execute(
             """
             CREATE OR REPLACE VIEW sessions AS
             SELECT
                 t.session_id_path                                     AS session_id,
-                json_extract_string(t.agent.extra, '$.cwds[0]')       AS cwd,
-                json_extract_string(t.agent.extra, '$.git_branches[0]')
-                                                                      AS git_branch,
+                t.agent.name                                          AS agent,
+                t.agent.version                                       AS agent_version,
+                coalesce(
+                    json_extract_string(t.agent.extra, '$.cwds[0]'),
+                    json_extract_string(t.agent.extra, '$.cwd')
+                )                                                     AS cwd,
+                coalesce(
+                    json_extract_string(t.agent.extra, '$.git_branches[0]'),
+                    json_extract_string(t.agent.extra, '$.git.branch')
+                )                                                     AS git_branch,
                 s.started_at,
                 s.ended_at,
                 s.agent_steps,

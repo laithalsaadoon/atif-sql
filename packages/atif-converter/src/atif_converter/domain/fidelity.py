@@ -7,12 +7,20 @@ upstream gaps (verified empirically against harbor==0.22.0 on 2026-08-22)
 rather than fixing them; the converter's job today is honest loss accounting,
 not repair. The unit tests pin each gap so a harbor version bump that changes
 behavior trips the suite.
+
+Codex CLI has its own taxonomy and its own gaps, in
+:mod:`atif_converter.domain.codex_fidelity`. :class:`LossReport` is shared by
+both: it holds whichever agent's record types and gaps it was built with, and
+``to_json()`` flattens either family to the same ``loss_report.json`` shape,
+so atif-duck reads one projection for every agent.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+
+from atif_converter.domain.codex_fidelity import CodexFidelityGap, CodexRecordType
 
 
 class RecordType(Enum):
@@ -79,6 +87,17 @@ class FidelityGap(Enum):
     UUID_NOT_PRESERVED = "uuid_not_preserved"
 
 
+#: Either agent's raw-record taxonomy. ``LossReport.record_counts`` is keyed
+#: by one of these, and ``to_json()`` reads only ``.value``, so a report built
+#: from Codex records serializes to the same shape as a Claude Code one.
+type AnyRecordType = RecordType | CodexRecordType
+
+#: Either agent's gap taxonomy. The two enums' values are disjoint (the Codex
+#: members are namespaced ``codex_*``), so a mixed ``gaps_observed`` array
+#: stays unambiguous about which policy each entry came from.
+type AnyFidelityGap = FidelityGap | CodexFidelityGap
+
+
 @dataclass(frozen=True, slots=True)
 class LossReport:
     """Per-session loss accounting: raw-side census vs converted output.
@@ -98,10 +117,10 @@ class LossReport:
     scoped to ``subagents/`` alone.
     """
 
-    record_counts: dict[RecordType, int] = field(default_factory=dict)
+    record_counts: dict[AnyRecordType, int] = field(default_factory=dict)
     records_converted: int = 0
     records_dropped: int = 0
-    gaps_observed: frozenset[FidelityGap] = frozenset()
+    gaps_observed: frozenset[AnyFidelityGap] = frozenset()
     subagent_files_found: int = 0
     subagent_files_convertible: int = 0
     workflow_subagent_files_found: int = 0

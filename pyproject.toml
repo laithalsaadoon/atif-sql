@@ -329,11 +329,12 @@ python-platform = "linux"
 python = ".venv"
 root = [
     "./packages/atif-converter/src",
-    "./packages/atif-corpus/src",
     # Tests import shared fixtures via uniquely-named fixture modules
-    # (corpus_fixtures / duck_fixtures / cli_fixtures) so multiple tests
-    # dirs can be roots; the conftest.py files themselves are never
-    # imported by name, so they do not collide in ty.
+    # (codex_fixtures / corpus_fixtures / duck_fixtures / cli_fixtures) so
+    # multiple tests dirs can be roots; the conftest.py files themselves are
+    # never imported by name, so they do not collide in ty.
+    "./packages/atif-converter/tests",
+    "./packages/atif-corpus/src",
     "./packages/atif-corpus/tests",
     "./packages/atif-duck/src",
     "./packages/atif-models/src",

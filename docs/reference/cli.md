@@ -6,18 +6,21 @@ Three conventions hold across every subcommand. `--format` takes `auto`, `table`
 
 `analyze`, `embed`, and `search` call Amazon Bedrock and spend money; the other seven are offline.
 
+Four subcommands take `--agent`, which selects the transcript format and, with it, the default source and corpus roots: `convert`, `materialize`, `status`, and `query`. The accepted spellings are `claude-code` (the default) and `codex`, and an unknown one exits `64` naming both (`packages/atif-cli/src/atif_cli/app.py:257`). `codex` moves the source root to `$CODEX_HOME` (default `~/.codex`) `/sessions` and the corpus root to `~/.atif-sql/corpus/codex`; an explicit flag or `ATIF_SQL_*` env var still wins (`packages/atif-corpus/src/atif_corpus/infrastructure/settings.py`).
+
 ## convert
 
 ```
 atif-sql convert [OPTIONS] SESSION-JSONL
 ```
 
-Convert one Claude Code session JSONL to ATIF plus a loss report and edges.
-`packages/atif-cli/src/atif_cli/app.py:226`
+Convert one Claude Code session JSONL or one Codex CLI rollout JSONL to ATIF plus a loss report and edges.
+`packages/atif-cli/src/atif_cli/app.py:282`
 
 Flags:
 
-- `SESSION-JSONL` / `--session-jsonl` — required path to the session transcript, `~/.claude/projects/<proj>/<session>.jsonl`. `:226`
+- `SESSION-JSONL` / `--session-jsonl` — required path to the transcript: `~/.claude/projects/<proj>/<session>.jsonl`, or `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl` under `--agent codex`. `:283`
+- `--agent` — `claude-code` (default) or `codex`; picks the converter and the fidelity policy. `:284`
 - `--include-subagents` / `--no-subagents` — stage `<session>/subagents/**.jsonl` side-files alongside the main chain; default `True`, with the negative form named explicitly. `:228`
 - `--trajectory-out` — write the trajectory JSON here and `edges.jsonl` beside it, instead of stdout. `:229`
 
@@ -34,6 +37,7 @@ Sync the materialized corpus with the raw transcript corpus in one scan-plan-con
 
 Flags:
 
+- `--agent` — `claude-code` (default) or `codex`; picks the discovery layout and the default roots. `:426`
 - `--force` / `--no-force` — re-materialize every quiescent session regardless of the watermark; default `False`. `:341`
 - `--quiesce-seconds` — source-silence threshold; defaults from settings (contract: 300). `:342`
 - `--source-root` — override the raw transcript root, otherwise `ATIF_SQL_SOURCE_ROOT` or `<CLAUDE_CONFIG_DIR>/projects`. `:343`
@@ -54,6 +58,7 @@ Report corpus freshness: watermark age, counts, bytes, staleness.
 
 Flags:
 
+- `--agent` — `claude-code` (default) or `codex`; the scan and the reported `agent` field follow it. `:529`
 - `--source-root` — override the raw transcript root. `:414`
 - `--corpus-root` — override the materialized corpus root. `:415`
 - `--quiesce-seconds` — source-silence threshold used to replay `materialize`'s planning decision. `:416`
@@ -76,6 +81,7 @@ Flags:
 - `--examples` — short-circuit to the `examples` listing, honoring `--category` and `--requires`, without opening DuckDB. `:501`
 - `--category` — forwarded to the `examples` listing. `:502`
 - `--requires` — forwarded to the `examples` listing. `:503`
+- `--agent` — `claude-code` (default) or `codex`; selects which corpus the statement reads. `:628`
 - `--corpus-root` — override the materialized corpus root. `:504`
 - `--format` — `table` on a TTY, a JSON array of row objects on a pipe. `:505`
 

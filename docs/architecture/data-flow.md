@@ -23,7 +23,9 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
 2. One pass through the corpus use case runs scan, plan, convert, and write in that order and
    returns a `MaterializationReport` — `packages/atif-corpus/src/atif_corpus/application/materialize.py:476`.
 3. The scanner discovers every session under the raw transcript root and separates unreadable
-   sessions from absent ones, so a `stat` failure is never mistaken for a deletion — `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:143`.
+   sessions from absent ones, so a `stat` failure is never mistaken for a deletion — `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:143`. It walks whichever layout the
+   agent selects, descending exactly `transcript_depth` directories and reporting an unlistable one at
+   any level — `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:154`.
 4. The pure planner partitions the scan into to-materialize, up-to-date, and skipped-live using
    the previous watermark and the quiescence policy; `force` overrides staleness but never
    liveness — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`.
@@ -32,12 +34,14 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
 6. The adapter that satisfies `ConverterPort` lives in atif-cli because the independence contract
    forbids atif-corpus from importing atif-converter; it raises rather than returning an invalid
    trajectory — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`.
-7. `convert_and_audit` snapshots the source files, stages the session into harbor's expected
+7. Under `--agent codex` the same step runs `convert_codex_and_audit`, which stages the one rollout
+   alone so harbor cannot fold a directory's rollouts into a single trajectory — `packages/atif-converter/src/atif_converter/application/convert_codex.py:128`.
+8. `convert_and_audit` snapshots the source files, stages the session into harbor's expected
    directory shape and calls harbor's pinned private method
    (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`), then builds
    the loss report and edges from the raw records, enriches the trajectory, and refuses the result
    if any source moved mid-pass — `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`.
-8. The four artifacts are written under `.staging/` with `meta.json` last, then the whole directory
+9. The four artifacts are written under `.staging/` with `meta.json` last, then the whole directory
    swaps into `sessions/<id>/` so a reader sees one complete generation or the other
    (`packages/atif-corpus/src/atif_corpus/application/materialize.py:240`); the watermark advances
    only for sessions that succeeded — `:608`.

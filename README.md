@@ -9,12 +9,14 @@
 
 ATIF-native analytics over agent trajectories.
 
-Claude Code sessions (`~/.claude/projects/**/*.jsonl`) are converted to ATIF
-(Harbor's Agent Trajectory Interchange Format, see the Harbor ATIF RFC:
-RFC-0001 in <https://github.com/laude-institute/harbor>), materialized as a
-corpus, and queried through DuckDB views. Converting once at the boundary —
-with an explicit, tested fidelity policy for what upstream drops — beats
-re-deriving trajectory semantics inside every SQL view.
+Claude Code sessions (`~/.claude/projects/**/*.jsonl`) and Codex CLI rollouts
+(`~/.codex/sessions/**/rollout-*.jsonl`) are converted to ATIF (Harbor's Agent
+Trajectory Interchange Format, see the Harbor ATIF RFC: RFC-0001 in
+<https://github.com/laude-institute/harbor>), materialized as a corpus, and
+queried through DuckDB views. Converting once at the boundary — with an
+explicit, tested fidelity policy for what upstream drops — beats re-deriving
+trajectory semantics inside every SQL view. Both agents land in the same views,
+and `sessions.agent` says which one a row came from.
 
 ## Install
 
@@ -46,7 +48,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 
 | Directory | What |
 | --- | --- |
-| `atif-converter` | Harbor `ClaudeCode` adapter wrapper + fidelity policy (loss accounting per session) |
+| `atif-converter` | Harbor `ClaudeCode` and `Codex` adapter wrappers + per-agent fidelity policy (loss accounting per session) |
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM client; no other package hardcodes a model id |
@@ -65,6 +67,24 @@ atif-sql query 'SELECT * FROM sessions LIMIT 5'
 ```
 
 For one session at a time, `atif-sql convert <session.jsonl>` converts and audits it in place.
+
+### Codex CLI transcripts
+
+`convert`, `materialize`, and `status` all take `--agent claude-code|codex`,
+defaulting to `claude-code`. Pick `codex` and both roots move with it: the source
+becomes `$CODEX_HOME` (default `~/.codex`) `/sessions`, and the corpus becomes
+`~/.atif-sql/corpus/codex`. An explicit `--source-root`, `--corpus-root`, or the
+matching `ATIF_SQL_*` env var still wins.
+
+```bash
+atif-sql materialize --agent codex
+atif-sql status --agent codex
+atif-sql query "SELECT agent, count(*) FROM sessions GROUP BY 1"
+```
+
+One corpus holds one agent, so a Codex corpus and a Claude Code corpus stay
+separate directories, and one `query` reads one of them. Pass `--corpus-root` to
+pick which, or `--agent codex` to get the Codex default.
 
 Working on `atif-sql` itself is a different setup — a clone, `mise`, and `mise run check` as the
 definition of done. `CONTRIBUTING.md` has it.

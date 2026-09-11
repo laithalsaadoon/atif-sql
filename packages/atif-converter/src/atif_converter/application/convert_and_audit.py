@@ -32,6 +32,7 @@ from atif_converter.domain.enrichment import enrich_trajectory
 from atif_converter.domain.errors import SourceMutatedDuringConversion
 from atif_converter.domain.fidelity import (
     CONVERTIBLE_RECORD_TYPES,
+    AnyRecordType,
     FidelityGap,
     LossReport,
 )
@@ -39,6 +40,7 @@ from atif_converter.infrastructure.census import SessionCensus, census_from_snap
 from atif_converter.infrastructure.harbor_adapter import (
     ConversionResult,
     convert_session,
+    require_transcript_file,
     validate_trajectory,
 )
 from atif_converter.infrastructure.raw_records import (
@@ -75,8 +77,13 @@ def _loss_report(census: SessionCensus) -> LossReport:
     if census.workflow_subagent_files:
         gaps.add(FidelityGap.WORKFLOW_SUBAGENTS_MISSED)
 
+    # Named rather than inlined: LossReport is shared by both agents, so its
+    # key type is the UNION of the two record taxonomies and a same-typed dict
+    # of one agent's members does not match the constructor overload without
+    # being widened here.
+    record_counts: dict[AnyRecordType, int] = {**census.record_counts}
     return LossReport(
-        record_counts=dict(census.record_counts),
+        record_counts=record_counts,
         records_converted=converted,
         records_dropped=total - converted,
         gaps_observed=frozenset(gaps),
@@ -126,10 +133,14 @@ def convert_and_audit(
 
     Raises
     ------
+        InvalidSessionInput: ``session_jsonl`` is not an existing ``.jsonl`` file.
         SourceMutatedDuringConversion: a source file changed anywhere between
             the snapshot and the end of the raw parse, so the artifacts would
             disagree with each other.
     """
+    # BEFORE the snapshot: the snapshot stats the file, so an absent path would
+    # raise FileNotFoundError from inside it rather than this terminal verdict.
+    require_transcript_file(session_jsonl)
     snapshot = take_session_snapshot(session_jsonl)
     result = convert_session(session_jsonl, include_subagents=include_subagents)
     _refuse_if_mutated(snapshot)
