@@ -7,7 +7,8 @@ so this adapter reads the CONTRACT corpus layout
 (``<corpus_root>/sessions/<id>/trajectory.json``) directly with its OWN
 DuckDB connection + ``read_json`` — the same move atif-corpus made with
 ``ConverterPort``: depend on the contract's artifact shapes, not on a
-sibling package's registry.
+sibling package's registry. The trajectory paths reach ``read_json`` as a
+bound list parameter, never as statement text.
 
 Selection semantics (CONTRACT-V2 §VSS):
 
@@ -34,7 +35,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from atif_embed.domain.sql_literal import sql_literal
 from atif_embed.domain.text_stamp import PendingText, text_hash
 
 if TYPE_CHECKING:
@@ -60,8 +60,13 @@ _FETCH_PAGE_ROWS = 512
 _BATCH_MAX_BYTES = 4 * 1024 * 1024
 
 
-def _step_texts_sql(paths: list[str]) -> str:
+def _step_texts_sql() -> str:
     """SQL selecting ``(uuid, text_content)`` from ONE BATCH of trajectories.
+
+    The batch's paths are NOT in this text: ``read_json(?)`` takes them as one
+    bound list parameter at execute time, so a path is data to DuckDB and
+    never part of the statement. The only interpolations are the two integer
+    constants below.
 
     One trajectory document per file -> ``format='auto'`` (NOT NDJSON). The
     explicit ``columns`` projection is a strict filter AND it skips JSON
@@ -73,7 +78,6 @@ def _step_texts_sql(paths: list[str]) -> str:
     identical to reading the batch's files one at a time, so batch boundaries
     cannot change which rows a ``--limit`` run picks.
     """
-    path_list = ", ".join(sql_literal(p) for p in paths)
     return f"""
         WITH step_texts AS (
             SELECT
@@ -91,7 +95,7 @@ def _step_texts_sql(paths: list[str]) -> str:
                      ELSE json_extract_string(step, '$.message')
                 END                                                  AS text_content
             FROM read_json(
-                     [{path_list}],
+                     ?,
                      format='auto',
                      filename=true,
                      columns={{steps: 'JSON[]'}},
@@ -105,7 +109,7 @@ def _step_texts_sql(paths: list[str]) -> str:
           AND text_content IS NOT NULL
           AND length(text_content) >= {MIN_TEXT_CHARS}
         ORDER BY filename, step_id
-        """  # noqa: S608 — trajectory paths escaped by sql_literal; both limits are int constants
+        """  # noqa: S608  # nosec B608 - paths are a bound parameter; both limits are int constants
 
 
 def _complete_trajectory_paths(corpus_root: Path) -> list[tuple[str, int]]:
@@ -208,7 +212,7 @@ class DuckDbTextRows:
             for batch in batches:
                 if limit is not None and yielded >= limit:
                     return
-                result = con.execute(_step_texts_sql(batch))
+                result = con.execute(_step_texts_sql(), [batch])
                 while True:
                     if limit is not None and yielded >= limit:
                         return

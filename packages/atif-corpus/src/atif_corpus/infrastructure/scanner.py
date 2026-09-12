@@ -11,7 +11,12 @@ shape. Discovery follows CONTRACT.md exactly:
   root: ``<source_root>/<project>/<session>.jsonl`` for Claude Code,
   ``<source_root>/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl`` for Codex;
 * the session id comes from the FILENAME via ``layout.session_id`` — the whole
-  stem for Claude Code, the trailing uuid for a Codex rollout;
+  stem for Claude Code, the trailing uuid for a Codex rollout — and must pass
+  :func:`~atif_corpus.domain.session_id.session_id_rejection` before it is
+  used for anything: it becomes a directory name in the corpus and, from
+  there, part of the paths atif-duck opens. A name that fails is REJECTED:
+  skipped this pass, logged with the reason, and reported in
+  :attr:`SourceScan.rejected_session_ids` so the skip is visible;
 * side-files are found by ``rglob`` over the session dir (the directory
   named after the session stem) filtered to ``*.jsonl`` — the rglob
   deliberately does NOT hardcode ``subagents/`` vs
@@ -38,6 +43,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from atif_corpus.domain.session_id import session_id_rejection
 from atif_corpus.domain.sessions import SessionSource
 from atif_corpus.domain.source_layout import CLAUDE_CODE_LAYOUT, SourceLayout
 
@@ -68,6 +74,11 @@ class SourceScan:
     #: directory is reported instead and the caller resolves it to session ids
     #: through the watermark.
     unlistable_dirs: tuple[str, ...] = ()
+    #: Transcript names whose derived session id failed the boundary check
+    #: (:mod:`atif_corpus.domain.session_id`), sorted. Nothing from them is
+    #: materialized, they are never ghosted, and they are reported so an
+    #: operator can see why a transcript is missing from the corpus.
+    rejected_session_ids: tuple[str, ...] = ()
 
     @property
     def unreadable_session_ids(self) -> frozenset[str]:
@@ -87,6 +98,7 @@ class SourceScan:
             sessions=self.sessions,
             unreadable=MappingProxyType({**self.unreadable, **extra}),
             unlistable_dirs=self.unlistable_dirs,
+            rejected_session_ids=self.rejected_session_ids,
         )
 
 
@@ -185,7 +197,7 @@ def scan_sources(
     source_root: Path,
     layout: SourceLayout = CLAUDE_CODE_LAYOUT,
 ) -> SourceScan:
-    """Discover every session under ``source_root``, separating unreadable ones.
+    """Discover every session under ``source_root``, separating unreadable and rejected ones.
 
     Sessions come back sorted by session id so the scan itself is
     deterministic input to :func:`atif_corpus.domain.sessions.build_plan`.
@@ -210,6 +222,7 @@ def scan_sources(
 
     sessions: list[SessionSource] = []
     unreadable: dict[str, str] = {}
+    rejected: list[str] = []
     for transcript_dir in transcript_dirs:
         transcripts = _transcripts(transcript_dir, layout)
         if transcripts is None:
@@ -223,6 +236,20 @@ def scan_sources(
                     main_jsonl,
                     layout.agent.value,
                 )
+                continue
+            rejection = session_id_rejection(session_id)
+            if rejection is not None:
+                # The one outside influence on a corpus path. A name that fails
+                # here never becomes a directory, a watermark key, or a SQL
+                # parameter; it is reported instead of guessed at.
+                logger.warning(
+                    "scan: rejecting session name {!r} from {} ({}); nothing from it "
+                    "is materialized",
+                    session_id,
+                    main_jsonl,
+                    rejection,
+                )
+                rejected.append(session_id)
                 continue
             try:
                 mtimes = _session_mtimes(main_jsonl, layout)
@@ -246,10 +273,11 @@ def scan_sources(
             )
     sessions.sort(key=lambda s: s.session_id)
     logger.debug(
-        "scan: {} sessions ({} unreadable, {} unlistable dirs) under {} as {}",
+        "scan: {} sessions ({} unreadable, {} unlistable dirs, {} rejected names) under {} as {}",
         len(sessions),
         len(unreadable),
         len(unlistable),
+        len(rejected),
         source_root,
         layout.agent.value,
     )
@@ -257,6 +285,7 @@ def scan_sources(
         sessions=tuple(sessions),
         unreadable=MappingProxyType(dict(unreadable)),
         unlistable_dirs=tuple(unlistable),
+        rejected_session_ids=tuple(sorted(rejected)),
     )
 
 

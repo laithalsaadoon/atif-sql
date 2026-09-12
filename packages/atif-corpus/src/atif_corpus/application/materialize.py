@@ -191,6 +191,12 @@ class MaterializationReport:
     #: deliberately never ghosted. Without this field the pass reports all
     #: zeroes and an operator sees a corpus that looks idle and complete.
     unreadable_session_ids: tuple[str, ...] = ()
+    #: Transcript names the scan REJECTED because the session id they carry
+    #: fails the boundary in :mod:`atif_corpus.domain.session_id`. The same
+    #: kind of silence as ``unreadable``: such a session is never materialized,
+    #: never up_to_date, never skipped_live, never failed, and never ghosted,
+    #: so it has to be reported here or it vanishes without a trace.
+    rejected_session_ids: tuple[str, ...] = ()
 
     @property
     def failed_count(self) -> int:
@@ -206,6 +212,11 @@ class MaterializationReport:
     def unreadable_count(self) -> int:
         """Number of sessions the scan could not read this pass."""
         return len(self.unreadable_session_ids)
+
+    @property
+    def rejected_count(self) -> int:
+        """Number of transcript names the scan rejected this pass."""
+        return len(self.rejected_session_ids)
 
 
 def read_watermark(path: Path) -> dict[str, int]:
@@ -702,6 +713,7 @@ def _remove_ghost_sessions(
     layout: CorpusLayout,
     scanned_session_ids: Collection[str],
     unreadable_session_ids: Collection[str],
+    rejected_session_ids: Collection[str] = (),
 ) -> tuple[str, ...]:
     """Delete corpus session dirs whose source vanished; return removed ids.
 
@@ -710,8 +722,11 @@ def _remove_ghost_sessions(
     left behind. A session in ``unreadable_session_ids`` is NOT a ghost —
     the scan failed to stat it (EIO, ESTALE, a permission blip) rather than
     finding it deleted, and deleting a live session's artifacts over a
-    transient error is unrecoverable from here. Callers must run the
-    suspicious-empty-scan guard first.
+    transient error is unrecoverable from here. A session in
+    ``rejected_session_ids`` is not a ghost either: its source is present,
+    the scan declined it by policy, and a corpus dir under that name (one an
+    older version wrote) is left for the operator rather than removed by a
+    rule change. Callers must run the suspicious-empty-scan guard first.
     """
     sessions_dir = layout.sessions_dir
     if not sessions_dir.is_dir():
@@ -722,6 +737,13 @@ def _remove_ghost_sessions(
             continue
         session_id = session_dir.name
         if session_id in scanned_session_ids:
+            continue
+        if session_id in rejected_session_ids:
+            logger.warning(
+                "materialize: keeping session dir {!r} — its name fails the session id "
+                "boundary, so this version neither writes nor reads it; remove it by hand",
+                session_id,
+            )
             continue
         if session_id in unreadable_session_ids:
             logger.warning(
@@ -932,6 +954,7 @@ def materialize(
             layout,
             {s.session_id for s in sessions},
             scan.unreadable_session_ids,
+            scan.rejected_session_ids,
         )
 
     planned_sessions = sessions
@@ -992,17 +1015,19 @@ def materialize(
         artifact_seconds=artifact_seconds,
         removed_session_ids=removed_ids,
         unreadable_session_ids=tuple(sorted(scan.unreadable)),
+        rejected_session_ids=scan.rejected_session_ids,
         workers=workers_used,
     )
     logger.info(
         "materialize: {} written, {} current, {} live, {} failed, {} removed, "
-        "{} unreadable in {:.2f}s",
+        "{} unreadable, {} rejected in {:.2f}s",
         report.materialized_count,
         report.up_to_date_count,
         report.skipped_live_count,
         report.failed_count,
         report.sessions_removed,
         report.unreadable_count,
+        report.rejected_count,
         report.total_seconds,
     )
     return report

@@ -30,7 +30,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
   Codex's `<YYYY>/<MM>/<DD>` nesting), and `domain.agents` is an AST-pinned
   twin of the converter's enum, because the two packages may not import each
-  other. Layered: `application` > `infrastructure` > `domain`.
+  other. `domain.session_id` is the boundary a transcript's id must pass
+  before it becomes a corpus path (rejected ids are reported, never
+  written); atif-duck carries the twin. Layered: `application` >
+  `infrastructure` > `domain`.
 - `packages/atif-duck` — DuckDB views + macros over the materialized corpus:
   16 core views and 9 macros, plus 12 analytics views and 13 analytics
   macros, all declared in a static drift-tested catalog. Also the
@@ -84,6 +87,21 @@ Rules of the road:
   litellm bump still means re-running that test and reading its failures as
   upstream-pricing reports.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
+- SQL text is constants only. No corpus path may be spliced into a statement:
+  `read_json(?)` takes globs and file lists as bound parameters, parquet file
+  lists go through `con.read_parquet(files).create_view(...)`, and the two
+  statements DuckDB won't prepare (`ATTACH`, the producer's session row) go
+  through `sql_literal`. Helpers that build SQL take and return `SqlFragment`
+  (`atif_duck.domain.sql_literal`). Every site that still interpolates
+  carries `# noqa: S608  # nosec B608 - <what it interpolates>` (ruff reads
+  the first marker, Bandit only the second; never blanket-skip B608 in
+  `[tool.bandit]`), and `packages/atif-duck/tests/test_sql_text_boundaries.py`
+  runs an AST audit over `registry.py`, `columnar.py`, `analytics.py` and
+  atif-embed's `corpus_text_rows.py` that fails on any placeholder that isn't
+  a constant, a projection call, or `sql_literal(...)`. Session ids are the
+  one outside text that becomes a path; they're validated at the boundary
+  (`domain.session_id` in atif-corpus and atif-duck, twinned) rather than
+  escaped downstream.
 - Settings via pydantic-settings, env prefix `ATIF_SQL_`. `agent` is applied
   at CONSTRUCTION, not copied in afterwards: both default roots derive from
   it, and only roots absent from `model_fields_set` re-derive, so an explicit

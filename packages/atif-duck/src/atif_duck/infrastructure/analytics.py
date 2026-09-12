@@ -34,8 +34,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from atif_duck.domain.sql_literal import sql_literal
-
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -44,6 +42,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Artifact layout (pinned against atif-analytics' AnalyticsLayout — contract)
 # ---------------------------------------------------------------------------
+
+#: Prefix of the per-view parquet reader each analytics view selects from.
+#: ``CREATE VIEW`` cannot take a bound parameter, so the parquet paths go
+#: through the connection's ``read_parquet`` relation API (a Python value, not
+#: statement text), the relation is registered under ``<prefix><view_name>``,
+#: and the view itself interpolates constants only.
+_ANALYTICS_READER_PREFIX: str = "v_raw_analytics_"
 
 #: view name -> path relative to <corpus_root>/analytics/. Directory entries
 #: are sharded caches (part-*.parquet); file entries are single parquets.
@@ -143,14 +148,21 @@ def register_analytics(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> set
         projection = _VIEW_PROJECTIONS.get(view_name, "*")
         qualify = _VIEW_QUALIFY.get(view_name)
         qualify_clause = f" QUALIFY {qualify}" if qualify else ""
-        path_literals = ", ".join(sql_literal(str(p)) for p in parts)
+        reader = f"{_ANALYTICS_READER_PREFIX}{view_name}"
         try:
+            # The parquet paths never enter SQL text: the relation API takes
+            # them as a Python list, and the relation is registered as the
+            # view's reader. It stays a lazy read_parquet scan (the optimizer
+            # inlines the reader into the view), so the file is still opened
+            # per query. Not ``con.sql("... read_parquet(?)", params=...)``:
+            # that shape measured about 3x the memory of a plain view.
+            con.read_parquet([str(p) for p in parts]).create_view(reader, replace=True)
             # View name, projection and qualify clause are module constants
-            # (_ANALYTICS_SOURCES / _VIEW_PROJECTIONS / _VIEW_QUALIFY); every parquet
-            # path reaches the DDL through sql_literal, which doubles embedded quotes.
+            # (_ANALYTICS_SOURCES / _VIEW_PROJECTIONS / _VIEW_QUALIFY); the reader
+            # name is a constant prefix plus that view name.
             con.execute(
-                f"CREATE OR REPLACE VIEW {view_name} AS "  # noqa: S608
-                f"SELECT {projection} FROM read_parquet([{path_literals}])"
+                f"CREATE OR REPLACE VIEW {view_name} AS "  # noqa: S608  # nosec B608 - constants only; paths are bound into the reader relation
+                f"SELECT {projection} FROM {reader}"
                 f"{qualify_clause};"
             )
             logger.debug("Registered analytics view: {}", view_name)
