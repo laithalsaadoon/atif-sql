@@ -33,7 +33,9 @@ atif-sql materialize [OPTIONS]
 ```
 
 Sync the materialized corpus with the raw transcript corpus in one scan-plan-convert-write pass.
-`packages/atif-cli/src/atif_cli/app.py:352`
+`packages/atif-cli/src/atif_cli/app.py:448`
+
+The convert-write stage runs across a process pool by default. Each worker builds its own converter once and writes through the same per-session staging directory and atomic swap the single-process path uses, so the artifacts are byte-identical either way and a crash still costs at most the session in flight. `--workers 1` is the single-process reference path. The report's `convert_seconds` is the per-session sum, so with several workers it can exceed `total_seconds`, which stays the wall clock; `workers` in the report is the pool size the pass actually used, which is never more than the number of sessions planned (`packages/atif-corpus/src/atif_corpus/application/materialize.py:385`).
 
 Flags:
 
@@ -43,7 +45,16 @@ Flags:
 - `--source-root` — override the raw transcript root, otherwise `ATIF_SQL_SOURCE_ROOT` or `<CLAUDE_CONFIG_DIR>/projects`. `:343`
 - `--corpus-root` — override the materialized corpus root, otherwise env or `~/.atif-sql/corpus/<slug>`. `:344`
 - `--sessions` — comma-separated session-id filter; only these sessions are planned this pass. `:345`
+- `--workers` — processes for the convert-write stage; default `ATIF_SQL_MATERIALIZE_WORKERS`, else `min(8, cpu_count)`. `1` is the single-process path. `:455`
 - `--format` — report format. `:346`
+
+Exit codes: `0` ok, `64` `--workers` below `1`; `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
+- `--columnar` / `--no-columnar` — write the typed columnar artifacts (`session.parquet`, `steps.parquet`, `tool_calls.parquet`, `tool_results.parquet`) beside the four JSON artifacts, staged and swapped with them; default `True`. `--no-columnar` writes exactly the contract's JSON artifacts and `query` reads those sessions from `trajectory.json`. `packages/atif-cli/src/atif_cli/app.py:452`
+- `--format` — report format. `:346`
+
+The report carries `convert_seconds` and `artifact_seconds` (the time spent writing the columnar files; `0.0` under `--no-columnar`), printed as `columnar: N.NNs` in the table form.
+
+What the artifacts cost, measured on a 300-session, 1.6 GB Claude Code corpus (frozen snapshot, one machine, `/usr/bin/time`): a full `--force` pass took 91 s at a 797 MB peak with them and 55 s at a 670 MB peak without, and they add 455 MB on disk. Most of the extra memory is the producer's DuckDB and pyarrow imports (about 90 MB) plus a bounded working set; most of the extra time is the typed conversion of tool results. Every `query` after that reads typed columns: the three panel statements dropped from 2.5 to 8 s and 4.5 to 8.6 GB peak to about 0.9 s and 490 MB each. `--no-columnar` is the right call for a corpus that's written far more often than it's queried.
 
 Exit codes: `0` ok, `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
 
@@ -66,6 +77,8 @@ Flags:
 
 Both roots resolve through `_corpus_settings` (`:433`), so a `--source-root` given without `--corpus-root` re-derives the corpus root from the overridden source's slug unless `ATIF_SQL_CORPUS_ROOT` is set (`:206`).
 
+The report also says how `query` will read this corpus. The table form prints `query path: columnar|json|mixed|empty (N of M complete sessions carry typed columnar artifacts)`; the JSON form carries `query_path`, `columnar_sessions`, and `json_sessions`. `columnar` means every complete session has current parquet artifacts, `json` means none does (a corpus materialized before the artifacts existed, or with `--no-columnar`), and `mixed` means the registry will union the two. `status` applies the same per-session predicate the registry does (`meta.columnar_schema` current and all four files present and non-empty), so it can't report `columnar` for a session `query` would read from JSON. `packages/atif-cli/src/atif_cli/app.py:639`
+
 ## query
 
 ```
@@ -86,6 +99,8 @@ Flags:
 - `--format` — `table` on a TTY, a JSON array of row objects on a pipe. `:505`
 
 The statement runs against a hardened connection: reads reach the registered views and nothing else, and the only writable path is the query engine's own spill directory `<corpus_root>/.duckdb_tmp`. `:601`
+
+Sessions that carry current columnar artifacts are served from their parquet files, so no JSON is parsed for them at query time; the rest are read from `trajectory.json`, and the views union the two. The per-session parquet files the registry bound are granted to the sandbox the same way the analytics parquets are (as individual `allowed_paths` entries, `packages/atif-cli/src/atif_cli/app.py:221`), and they're written read-only (`0444`), so a `COPY ... TO` at one of them fails at the filesystem even though DuckDB's grant is read-write. `atif-sql status` says which path a corpus takes.
 
 Exit codes: `64` parse error, `65` catalog error, `65` embedding mismatch, `70` runtime error. `:550`
 

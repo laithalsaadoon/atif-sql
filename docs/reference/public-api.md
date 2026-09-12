@@ -273,13 +273,19 @@ def materialize(
     force: bool = False,
     now_ns: int | None = None,
     session_ids: Collection[str] | None = None,
+    source_layout: SourceLayout = CLAUDE_CODE_LAYOUT,
+    workers: int = 1,
+    worker_setup: Callable[[], None] | None = None,
 ) -> MaterializationReport:
 ```
 
 Runs one materialization pass over the raw transcript corpus, taking conversion as an injected
 `ConverterPort` so tests substitute a fake and atif-cli injects the harbor-backed adapter.
+`workers` above `1` runs the convert+write stage on a spawn-context process pool that pickles
+`converter` into each worker; `worker_setup` is the composition root's per-process hook (atif-cli
+uses it to install its stderr log sink). The default `1` is the inline path.
 
-`packages/atif-corpus/src/atif_corpus/application/materialize.py:476-645`
+`packages/atif-corpus/src/atif_corpus/application/materialize.py:707-917`
 
 ### MaterializationReport
 
@@ -288,9 +294,11 @@ Runs one materialization pass over the raw transcript corpus, taking conversion 
 class MaterializationReport:
 ```
 
-What one materialization pass did, for logs and the CLI status line.
+What one materialization pass did, for logs and the CLI status line. `convert_seconds` is the
+per-session sum and `workers` the pool size the pass used, so with several workers
+`convert_seconds` can exceed `total_seconds`, the wall clock.
 
-`packages/atif-corpus/src/atif_corpus/application/materialize.py:117-157`
+`packages/atif-corpus/src/atif_corpus/application/materialize.py:148-194`
 
 ### ModelSpec
 

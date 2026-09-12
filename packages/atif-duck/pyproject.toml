@@ -19,6 +19,10 @@ classifiers = [
 dependencies = [
     "duckdb>=1.5.2,<2",
     "loguru>=0.7.3",
+    # The columnar producer streams a session's steps into DuckDB as Arrow
+    # record batches (atif_duck.infrastructure.columnar); imported lazily, so
+    # the query and status paths never load it.
+    "pyarrow>=23.0.1",
     # DuckDB's Python client imports pytz to materialize TIMESTAMPTZ values
     # (the analytics views carry tz-aware ts/classified_at/detected_at
     # columns); without it every fetch of those columns raises.

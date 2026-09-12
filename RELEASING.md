@@ -219,7 +219,10 @@ stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `crypto
 only (the conversion itself is ours since the port away from harbor's private methods). That
 is 57% of the dependency roster and 13% of the bytes (155 MiB): a CLI that converts JSONL
 ships a web server and a database client to do it. It is a supply-chain and install-weight
-question, not a release blocker, and it does not change the shape of a release. The port
+question, not a release blocker, and it does not change the shape of a release. `litellm` in
+particular is no longer imported on the conversion hot path (`atif_converter.domain.pricing`
+reads its bundled price table directly and matches `cost_per_token` bit for bit; the import is
+now a fallback), which removed about four seconds from every convert process. The port
 makes the next step tractable: the eleven pydantic models and the validator are small enough
 to vendor or to depend on a slimmer distribution, should upstream publish one.
 

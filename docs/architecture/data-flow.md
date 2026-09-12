@@ -30,7 +30,9 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
    the previous watermark and the quiescence policy; `force` overrides staleness but never
    liveness — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`.
 5. For each planned session the use case calls `converter.convert` across the port; one session's
-   exception is caught and recorded so a single bad transcript cannot abort the sync — `packages/atif-corpus/src/atif_corpus/application/materialize.py:599`.
+   exception is caught and recorded so a single bad transcript cannot abort the sync — `packages/atif-corpus/src/atif_corpus/application/materialize.py:310`.
+   By default the sessions are spread over a process pool (`--workers`, default `min(8, cpu_count)`)
+   whose workers each hold a pickled copy of the adapter; the pool changes no output byte — `:385`.
 6. The adapter that satisfies `ConverterPort` lives in atif-cli because the independence contract
    forbids atif-corpus from importing atif-converter; it raises rather than returning an invalid
    trajectory — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`.
@@ -41,8 +43,11 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
    (validated by harbor's public `TrajectoryValidator`, `:68`), then builds
    the loss report and edges from the raw records, enriches the trajectory, and refuses the result
    if any source moved mid-pass — `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`.
-9. The four artifacts are written under `.staging/` with `meta.json` last, then the whole directory
-   swaps into `sessions/<id>/` so a reader sees one complete generation or the other
+9. The three JSON artifacts are written under `.staging/`, then the `ArtifactProducer` (atif-duck's
+   `ColumnarArtifactProducer`, plugged in by the CLI unless `--no-columnar`) writes the four typed
+   parquet files beside them and hands back the `columnar_schema` key for `meta.json`; `meta.json`
+   is written last and the whole directory swaps into `sessions/<id>/`, so a reader sees one
+   complete generation or the other
    (`packages/atif-corpus/src/atif_corpus/application/materialize.py:240`); the watermark advances
    only for sessions that succeeded — `:608`.
 
@@ -52,9 +57,10 @@ sequenceDiagram
     participant Corpus as atif-corpus
     participant Conv as atif-converter
     participant Harbor as harbor
+    participant Producer as atif-duck producer
     participant Disk as corpus disk
 
-    CLI->>Corpus: materialize(source_root, corpus_root, ConverterPort)
+    CLI->>Corpus: materialize(source_root, corpus_root, ConverterPort, ArtifactProducer)
     Corpus->>Disk: read_watermark + scan_sources
     Disk-->>Corpus: SessionSource list, prior mtimes
     Corpus->>Corpus: build_plan -> stale / current / live
@@ -63,7 +69,10 @@ sequenceDiagram
         Conv->>Harbor: pinned private converter(session_dir)
         Harbor-->>Conv: ATIF trajectory
         Conv-->>Corpus: ConversionOutput
-        Corpus->>Disk: stage 4 artifacts, meta.json last, swap dir
+        Corpus->>Disk: stage trajectory, loss report, edges
+        Corpus->>Producer: ArtifactProducer.produce(staged dir, trajectory)
+        Producer->>Disk: 4 typed parquet files (0444)
+        Corpus->>Disk: meta.json last (with columnar_schema), swap dir
     end
     Corpus->>Disk: write watermark.json
     Corpus-->>CLI: MaterializationReport
@@ -79,9 +88,13 @@ sequenceDiagram
 3. Registration builds the whole catalog on that connection in a fixed order — raw TEMP tables,
    base views, VSS, macros, analytics views, analytics macros — because each later stage binds
    against the earlier one at `CREATE` time — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`.
-4. The raw readers materialize the four corpus artifact kinds as TEMP TABLEs over globs into
-   `<corpus_root>/sessions/`, which is where the cost of a `query` invocation lives: O(corpus) per
-   connection — `:196`.
+4. The raw readers materialize `meta.json`, `edges.jsonl`, and `loss_report.json` as TEMP TABLEs
+   over globs into `<corpus_root>/sessions/`. The trajectory is split per session: a session whose
+   `meta.columnar_schema` is current and whose four parquet files are present is read lazily with
+   `read_parquet` (typed columns, no JSON parsed at query time), and every other session is parsed
+   from `trajectory.json` into a TEMP TABLE over an explicit path list; the two sets are unioned
+   into one raw view per surface. The parse cost of a `query` invocation is therefore O(sessions
+   without artifacts) per connection — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:402`.
 5. Trajectory, edges, and loss readers are semi-joined against the meta table, so a session
    directory missing its `meta.json` contributes nothing rather than a partial artifact set. This
    is the read-side half of flow 1's meta-last write ordering — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:221`.
@@ -110,6 +123,7 @@ sequenceDiagram
     Duck->>DB: CREATE TEMP TABLE raw readers over corpus globs
     DB->>Disk: read_json sessions/*/meta.json then the rest
     Disk-->>DB: rows from meta-bearing session dirs only
+    Duck->>DB: read_parquet per columnar session, read_json for the rest, UNION ALL
     Duck->>DB: ATTACH lance_store (TYPE LANCE)
     DB->>Lance: SELECT model, dim LIMIT 1
     Lance-->>Duck: stamped identity

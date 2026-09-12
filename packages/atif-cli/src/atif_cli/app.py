@@ -72,6 +72,8 @@ from atif_cli.output import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from atif_corpus.application.materialize import MaterializationReport
 
 app = cyclopts.App(
@@ -149,13 +151,16 @@ _QUERY_UNLOCKED_CONFIGS: tuple[str, ...] = ("TimeZone",)
 
 
 def _lazy_read_paths(corpus_root: Path) -> list[Path]:
-    """Corpus files a registered view reads LAZILY, at caller-query time.
+    """Analytics parquets a registered view reads LAZILY, at caller-query time.
 
-    ``register_raw`` materializes the session artifacts into TEMP TABLEs, and
-    ``register_vss`` holds the Lance store open through an ATTACH, so both
-    survive the sandbox with no allowlist entry. The analytics views are
-    ``read_parquet`` over files on disk, bound but not read until the caller
-    selects from them — those paths are the ones that must stay reachable.
+    ``register_raw`` materializes the JSON session artifacts into TEMP
+    TABLEs, and ``register_vss`` holds the Lance store open through an
+    ATTACH, so both survive the sandbox with no allowlist entry. The
+    analytics views are ``read_parquet`` over files on disk, bound but not
+    read until the caller selects from them — those paths are the ones that
+    must stay reachable. The other lazily-read set, the per-session columnar
+    parquets, is reported by ``register`` itself (``RawSources.lazy_read_paths``)
+    because only the registry knows which sessions it bound that way.
     """
     return sorted(p for p in (corpus_root / "analytics").rglob("*.parquet") if p.is_file())
 
@@ -165,6 +170,7 @@ def _harden_query_connection(
     *,
     corpus_root: Path,
     temp_dir: Path,
+    columnar_paths: Sequence[Path] = (),
 ) -> None:
     """Sandbox a fully-registered connection before it runs caller SQL.
 
@@ -181,12 +187,18 @@ def _harden_query_connection(
       must accept writes for a query that exceeds ``memory_limit`` to
       complete at all. It sits inside the corpus root but holds no corpus
       data.
-    * ``allowed_paths`` holds the individual analytics parquets from
-      :func:`_lazy_read_paths`. A file grant lets ``read_parquet`` open that
-      exact path; because ``COPY`` writes through a sibling ``tmp_<name>``
-      file, which is a different path, the grant does not carry a write.
-      Nothing else under the corpus is named, so ``COPY`` over a
-      ``trajectory.json`` or into a new ``pwned.csv`` is refused.
+    * ``allowed_paths`` holds the individual files the views read lazily:
+      the analytics parquets from :func:`_lazy_read_paths` and the
+      per-session columnar parquets in ``columnar_paths`` (what
+      ``register`` bound this connection to). A file grant lets
+      ``read_parquet`` open that exact path; because ``COPY`` writes through
+      a sibling ``tmp_<name>`` file, which is a different path, the grant
+      does not carry a plain write. Nothing else under the corpus is named,
+      so ``COPY`` over a ``trajectory.json`` or into a new ``pwned.csv`` is
+      refused. The columnar parquets are additionally written read-only
+      (``0o444``) by their producer, which closes the ``USE_TMP_FILE false``
+      residual hole documented on :func:`query` for them: the open for
+      writing fails at the filesystem for any non-root user.
 
     Four ordering constraints, each one required:
 
@@ -205,7 +217,9 @@ def _harden_query_connection(
     con.execute(f"SET temp_directory={_sql_str(str(temp_dir))}")
     con.execute(f"SET memory_limit='{_query_memory_limit_bytes()}B'")
     con.execute(f"SET allowed_directories=[{_sql_str(str(temp_dir))}]")
-    lazy_paths = ", ".join(_sql_str(str(path)) for path in _lazy_read_paths(corpus_root))
+    lazy_paths = ", ".join(
+        _sql_str(str(path)) for path in (*columnar_paths, *_lazy_read_paths(corpus_root))
+    )
     con.execute(f"SET allowed_paths=[{lazy_paths}]")
     unlocked = ", ".join(_sql_str(name) for name in _QUERY_UNLOCKED_CONFIGS)
     con.execute(f"SET allowed_configs=[{unlocked}]")
@@ -403,6 +417,8 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         "unreadable_session_ids": list(report.unreadable_session_ids),
         "total_seconds": round(report.total_seconds, 3),
         "convert_seconds": round(report.convert_seconds, 3),
+        "workers": report.workers,
+        "artifact_seconds": round(report.artifact_seconds, 3),
     }
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(
@@ -413,13 +429,36 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
             f"removed: {report.sessions_removed}  "
             f"unreadable: {report.unreadable_count}"
         )
-        print(f"total: {report.total_seconds:.2f}s  (convert: {report.convert_seconds:.2f}s)")
+        print(
+            f"total: {report.total_seconds:.2f}s  "
+            f"(convert: {report.convert_seconds:.2f}s summed over {report.workers} worker(s))"
+            f"total: {report.total_seconds:.2f}s  (convert: {report.convert_seconds:.2f}s, "
+            f"columnar: {report.artifact_seconds:.2f}s)"
+        )
         for failure in report.failures:
             print(f"  FAILED {failure.session_id}: {failure.error}", file=sys.stderr)
         for session_id in report.unreadable_session_ids:
             print(f"  UNREADABLE {session_id}", file=sys.stderr)
     else:
         emit_json(payload, fmt)
+
+
+def _materialize_worker_setup() -> None:
+    """Give a materialize pool worker the stderr sink :func:`main` gives the parent.
+
+    A spawned worker starts with loguru's default DEBUG sink, so without this
+    every debug line the converter or the atomic writer emits in a worker
+    would land on the CLI's stderr in a format the parent never uses. Reads
+    :data:`LOG_LEVEL_ENV` the same way, because the environment is what a
+    spawned child inherits. Module-level so the executor can pickle it.
+    """
+    from loguru import logger
+
+    logger.remove()
+    try:
+        logger.add(sys.stderr, level=_stderr_log_level())
+    except ValueError:
+        logger.add(sys.stderr, level=DEFAULT_LOG_LEVEL)
 
 
 @app.command
@@ -431,13 +470,16 @@ def materialize(
     source_root: Path | None = None,
     corpus_root: Path | None = None,
     sessions: str | None = None,
+    workers: int | None = None,
+    columnar: Annotated[bool, cyclopts.Parameter(negative="--no-columnar")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Sync the materialized corpus with the raw transcript corpus.
 
     Runs one scan → plan → convert → write pass through atif-corpus's
     materialize use case, with atif-converter's real converter adapted
-    behind the ConverterPort (see :mod:`atif_cli.converter_adapter`). The
+    behind the ConverterPort (see :mod:`atif_cli.converter_adapter`) and
+    atif-duck's columnar producer behind the ArtifactProducer port. The
     CLI owns the wall clock and the version pins stamped into ``meta.json``.
 
     Parameters
@@ -463,6 +505,19 @@ def materialize(
         Comma-separated session-id filter — only these sessions are planned
         this pass (contract-compatible extension; other sessions' watermark
         entries are left untouched).
+    workers
+        Processes for the convert+write stage. Default from
+        ``ATIF_SQL_MATERIALIZE_WORKERS``, else ``min(8, cpu_count)``. ``1``
+        is the single-process reference path; above that a process pool
+        converts sessions in parallel and writes byte-identical artifacts.
+        Below ``1`` exits 64.
+    columnar
+        Write the typed columnar artifacts (``session.parquet``,
+        ``steps.parquet``, ``tool_calls.parquet``, ``tool_results.parquet``)
+        beside the four JSON artifacts, so ``query`` reads typed columns
+        instead of parsing ``trajectory.json``. Default on;
+        ``--no-columnar`` writes exactly the four contract artifacts, and
+        ``query`` then takes the JSON path for those sessions.
     fmt
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
@@ -473,6 +528,7 @@ def materialize(
         materialize as materialize_use_case,
     )
     from atif_corpus.domain.source_layout import layout_for
+    from atif_duck.infrastructure.columnar import ColumnarArtifactProducer
 
     settings = _corpus_settings(source_root, corpus_root, agent)
     source_layout = layout_for(settings.agent)
@@ -481,6 +537,18 @@ def materialize(
         if sessions is not None
         else None
     )
+    worker_count = workers if workers is not None else settings.materialize_workers
+    if worker_count < 1:
+        emit_error(
+            ClassifiedError(
+                kind="invalid_input",
+                exit_code=EXIT_CODES["invalid_input"],
+                message=f"--workers must be >= 1, got {worker_count}",
+                hint="pass --workers 1 for the single-process path",
+            ),
+            fmt,
+        )
+        raise SystemExit(EXIT_CODES["invalid_input"])
     try:
         report = materialize_use_case(
             source_root=settings.source_root,
@@ -495,6 +563,9 @@ def materialize(
             ),
             force=force,
             session_ids=session_filter,
+            workers=worker_count,
+            worker_setup=_materialize_worker_setup,
+            artifact_producer=ColumnarArtifactProducer() if columnar else None,
         )
     except CorpusAgentMismatchError as exc:
         # One corpus holds one agent. Nothing was removed and nothing written —
@@ -560,6 +631,14 @@ def status(
     ``materialize`` resolves it, so the two commands always describe the same
     pair of roots. The JSON payload carries the resolved agent, which is what
     lets an unattended lane confirm it ticked the corpus it meant to.
+
+    ``query path`` says how ``query`` will read this corpus: ``columnar``
+    when every complete session carries the typed parquet artifacts,
+    ``json`` when none does, ``mixed`` when some do (the rest were
+    materialized before the artifacts existed, or with ``--no-columnar``;
+    ``materialize --force`` brings them over). It applies the same
+    per-session predicate the registry does, so it cannot say ``columnar``
+    while ``query`` silently parses JSON.
     """
     import time
 
@@ -568,6 +647,7 @@ def status(
     from atif_corpus.domain.sessions import QuiescencePolicy, build_plan
     from atif_corpus.domain.source_layout import layout_for
     from atif_corpus.infrastructure.scanner import scan_source_root
+    from atif_duck.infrastructure.columnar import columnar_coverage
 
     settings = _corpus_settings(source_root, corpus_root, agent)
     layout = CorpusLayout(corpus_root=settings.corpus_root)
@@ -598,6 +678,7 @@ def status(
         "up_to_date": len(plan.up_to_date),
         "live": len(plan.skipped_live),
     }
+    coverage = columnar_coverage(settings.corpus_root)
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(f"agent:        {settings.agent.value}")
         print(f"source root:  {settings.source_root}")
@@ -612,6 +693,11 @@ def status(
             f"staleness:    {staleness['stale']} stale, "
             f"{staleness['up_to_date']} up-to-date, {staleness['live']} live"
         )
+        print(
+            f"query path:   {coverage.query_path}  "
+            f"({coverage.columnar_sessions} of {coverage.total_sessions} complete sessions "
+            "carry typed columnar artifacts)"
+        )
     else:
         emit_json(
             {
@@ -624,6 +710,9 @@ def status(
                 "materialized_sessions": len(materialized_dirs),
                 "corpus_bytes": corpus_bytes,
                 "staleness": staleness,
+                "columnar_sessions": coverage.columnar_sessions,
+                "json_sessions": coverage.json_sessions,
+                "query_path": coverage.query_path,
             },
             fmt,
         )
@@ -738,7 +827,7 @@ def query(
     con = duckdb.connect()
     try:
         try:
-            register(
+            sources = register(
                 con,
                 settings.corpus_root,
                 lance_uri=lance_uri,
@@ -749,6 +838,7 @@ def query(
                 con,
                 corpus_root=settings.corpus_root,
                 temp_dir=settings.corpus_root / ".duckdb_tmp",
+                columnar_paths=sources.lazy_read_paths,
             )
             cursor = con.execute(sql)
         except REGISTRATION_ERRORS as exc:

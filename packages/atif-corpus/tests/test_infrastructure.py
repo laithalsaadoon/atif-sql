@@ -4,14 +4,20 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from corpus_fixtures import SESSION_A, STALE_NS, write_session
+from pydantic import ValidationError
 
 from atif_corpus.domain.agents import AgentSource
 from atif_corpus.infrastructure.scanner import scan_source_root
-from atif_corpus.infrastructure.settings import CorpusSettings
+from atif_corpus.infrastructure.settings import (
+    MAX_DEFAULT_MATERIALIZE_WORKERS,
+    CorpusSettings,
+    default_materialize_workers,
+)
 
 
 class TestScanner:
@@ -70,6 +76,25 @@ class TestSettings:
     def test_the_default_agent_is_claude_code(self) -> None:
         """Every caller predating Codex support observes exactly the old defaults."""
         assert CorpusSettings().agent is AgentSource.CLAUDE_CODE
+
+    def test_materialize_workers_defaults_to_min_eight_and_cpu_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATIF_SQL_MATERIALIZE_WORKERS", raising=False)
+        expected = max(1, min(MAX_DEFAULT_MATERIALIZE_WORKERS, os.cpu_count() or 1))
+        assert CorpusSettings().materialize_workers == expected == default_materialize_workers()
+        assert 1 <= expected <= 8
+
+    def test_materialize_workers_reads_the_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATIF_SQL_MATERIALIZE_WORKERS", "3")
+        assert CorpusSettings().materialize_workers == 3
+
+    def test_materialize_workers_below_one_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_MATERIALIZE_WORKERS", "0")
+        with pytest.raises(ValidationError):
+            CorpusSettings()
 
     def test_codex_takes_the_codex_home_and_its_own_corpus(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

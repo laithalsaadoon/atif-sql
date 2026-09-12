@@ -27,6 +27,22 @@ One pass = sweep → scan → plan → convert → write → advance watermark:
    is the "this session's artifacts are complete" marker, and atif-duck
    gates its readers on meta presence, so it must never exist beside a
    partial artifact set.
+
+   With ``workers > 1`` this stage runs across a
+   :class:`concurrent.futures.ProcessPoolExecutor`: each worker builds its
+   own copy of the converter once (the injected instance is pickled into the
+   pool initializer) and runs the SAME :func:`_write_session` the serial
+   path runs, so the per-session staging dir and atomic swap stay the
+   crash-safety unit, only now the staging name carries the worker's pid.
+   Every worker outcome is folded back in PLAN order, so the report reads
+   the same regardless of which worker finished first. ``workers == 1`` is
+   the reference path and runs everything inline in this process.
+   partial artifact set. An optional
+   :class:`~atif_corpus.domain.ports.ArtifactProducer` runs between the
+   three JSON artifacts and ``meta.json`` and may add files to the same
+   temp dir (atif-cli plugs in atif-duck's typed columnar writer here), so
+   its files publish in the same swap and under the same marker; the keys
+   it returns land in ``meta.json`` beside the contract's own.
 4. Remove ghost sessions: a corpus session dir whose main JSONL vanished
    from the source scan is DELETED, not tombstoned — the raw source is
    gone, so a retained artifact could never be re-derived or checked
@@ -56,10 +72,12 @@ for the quiescence "now" when the caller does not supply one, and
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import re
 import shutil
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -67,7 +85,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Callable, Collection, Mapping, Sequence
 
 from atif_corpus.domain.layout import (
     EDGES_FILENAME,
@@ -91,7 +109,9 @@ from atif_corpus.infrastructure.atomic import (
 from atif_corpus.infrastructure.scanner import scan_sources
 
 if TYPE_CHECKING:
-    from atif_corpus.domain.ports import ConverterPort
+    from typing import Any
+
+    from atif_corpus.domain.ports import ArtifactProducer, ConverterPort
     from atif_corpus.domain.sessions import SessionSource
     from atif_corpus.infrastructure.scanner import SourceScan
 
@@ -147,10 +167,22 @@ class MaterializationReport:
     failures: tuple[MaterializationFailure, ...]
     #: Wall seconds for the whole pass (scan + plan + convert + write).
     total_seconds: float
-    #: Wall seconds spent inside ``ConverterPort.convert`` calls.
+    #: Seconds spent inside ``ConverterPort.convert`` calls, SUMMED over
+    #: sessions. With one worker this is a slice of ``total_seconds``; with
+    #: several it is the work the pool did in parallel and can exceed the wall
+    #: clock, which is the point of the pool.
     convert_seconds: float
     #: Ghost session dirs removed (source vanished from the scan).
     removed_session_ids: tuple[str, ...] = ()
+    #: How many processes converted this pass: 1 for the inline reference
+    #: path, otherwise the pool size actually used (never more than the number
+    #: of sessions planned).
+    workers: int = 1
+    #: Wall seconds spent inside ``ArtifactProducer.produce`` calls (0.0 when
+    #: no producer was injected). Reported separately from ``convert_seconds``
+    #: because the extra artifacts are a cost the operator opted into and may
+    #: want to see on its own.
+    artifact_seconds: float = 0.0
     #: Sessions the scan could not stat, so they appear in no other counter.
     #:
     #: A transient stat error resolves itself next pass. A PERMANENT one (a
@@ -206,6 +238,46 @@ def read_watermark(path: Path) -> dict[str, int]:
         return {}
 
 
+#: The keys ``meta.json`` always carries. An artifact producer may add keys
+#: but never these: a producer that could overwrite ``session_id`` or
+#: ``agent`` could silently relabel a session, so a collision is an error.
+_META_CONTRACT_KEYS: frozenset[str] = frozenset(
+    {
+        "session_id",
+        "source_mtime_ns",
+        "source_files",
+        "harbor_version",
+        "converter_version",
+        "materialized_at",
+        "agent",
+    }
+)
+
+
+def _produce_extra_artifacts(
+    producer: ArtifactProducer | None,
+    staging: Path,
+    session_id: str,
+    trajectory: dict[str, Any],
+) -> tuple[dict[str, Any], float]:
+    """Run the optional producer in ``staging``; return (meta extras, seconds).
+
+    The extras are checked against :data:`_META_CONTRACT_KEYS` here, before
+    ``meta.json`` is assembled, so a colliding producer fails the session
+    with a clear message instead of publishing a relabeled one.
+    """
+    if producer is None:
+        return {}, 0.0
+    started = time.perf_counter()
+    extras = dict(producer.produce(staging, session_id=session_id, trajectory=trajectory))
+    elapsed = time.perf_counter() - started
+    collisions = sorted(_META_CONTRACT_KEYS & extras.keys())
+    if collisions:
+        msg = f"artifact producer returned meta keys reserved by the contract: {collisions}"
+        raise ValueError(msg)
+    return extras, elapsed
+
+
 def _write_session(
     layout: CorpusLayout,
     session: SessionSource,
@@ -215,10 +287,11 @@ def _write_session(
     harbor_version: str,
     converter_version: str,
     agent: str,
-) -> float:
-    """Convert one session and write its four artifacts; returns convert seconds.
+    artifact_producer: ArtifactProducer | None = None,
+) -> tuple[float, float]:
+    """Convert one session and write its artifacts; returns (convert, artifact) seconds.
 
-    All four artifacts are written into a staging dir under
+    All artifacts are written into a staging dir under
     ``<corpus_root>/.staging/`` (outside every reader glob), then the whole
     dir is swapped into ``sessions/<id>/`` via
     :func:`~atif_corpus.infrastructure.atomic.replace_dir_atomic` — a crash
@@ -226,10 +299,12 @@ def _write_session(
     and internally consistent; readers never see a torn artifact set. A kill
     INSIDE the swap window leaves the session dir missing rather than torn,
     and :func:`_unmaterialized_session_ids` replans it next pass. Within
-    staging the write order stays trajectory → loss_report → edges → meta,
-    ``meta.json`` last as belt-and-braces (atif-duck gates its readers on
-    meta presence), and each artifact is fsynced before its rename so the
-    ordering holds across power loss too.
+    staging the write order stays trajectory → loss_report → edges →
+    (producer's extra artifacts) → meta, ``meta.json`` last as
+    belt-and-braces (atif-duck gates its readers on meta presence), and each
+    artifact is fsynced before its rename so the ordering holds across power
+    loss too. The producer sees the staged ``trajectory.json`` already on
+    disk and the same dict in memory; whatever it writes rides the same swap.
     """
     convert_started = time.perf_counter()
     output = converter.convert(Path(session.session_jsonl))
@@ -244,6 +319,9 @@ def _write_session(
         write_text_atomic(
             staging / EDGES_FILENAME,
             "".join(f"{line}\n" for line in output.edges_lines),
+        )
+        extras, artifact_elapsed = _produce_extra_artifacts(
+            artifact_producer, staging, session.session_id, output.trajectory_dict
         )
         write_json_atomic(
             staging / META_FILENAME,
@@ -261,6 +339,7 @@ def _write_session(
                 # keeps saying what it is, and an operator reading one
                 # meta.json does not have to infer the agent from a path shape.
                 "agent": agent,
+                **extras,
             },
         )
         layout.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -268,7 +347,176 @@ def _write_session(
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    return convert_elapsed
+    return convert_elapsed, artifact_elapsed
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionOutcome:
+    """What one convert+write attempt produced, shaped to cross a process boundary.
+
+    A worker never lets the converter's exception escape: the executor would
+    pickle it, and an exception class whose ``__init__`` signature differs
+    from its ``args`` (``TrajectoryValidationError(list)`` is one) fails to
+    rebuild in the parent and surfaces as a pickling error in its place. The
+    worker formats the failure line exactly as the serial path does, so the
+    report carries the same text either way.
+    """
+
+    session_id: str
+    convert_seconds: float
+    error: str | None
+    artifact_seconds: float = 0.0
+
+
+def _attempt_session(
+    layout: CorpusLayout,
+    session: SessionSource,
+    converter: ConverterPort,
+    *,
+    materialized_at: str,
+    harbor_version: str,
+    converter_version: str,
+    agent: str,
+    artifact_producer: ArtifactProducer | None = None,
+) -> _SessionOutcome:
+    """Run :func:`_write_session` and fold any exception into the outcome."""
+    try:
+        elapsed, produced = _write_session(
+            layout,
+            session,
+            converter,
+            materialized_at=materialized_at,
+            harbor_version=harbor_version,
+            converter_version=converter_version,
+            agent=agent,
+            artifact_producer=artifact_producer,
+        )
+    except Exception as error:  # noqa: BLE001 — one bad session must not abort the sync
+        return _SessionOutcome(
+            session_id=session.session_id,
+            convert_seconds=0.0,
+            error=f"{type(error).__name__}: {error}",
+        )
+    return _SessionOutcome(
+        session_id=session.session_id,
+        convert_seconds=elapsed,
+        error=None,
+        artifact_seconds=produced,
+    )
+
+
+#: The converter a pool worker builds once in :func:`_worker_init` and reuses
+#: for every session it is handed. Module state because the executor gives a
+#: task function nothing else to reach it through.
+_worker_converter: ConverterPort | None = None
+#: The artifact producer handed to the same worker, or ``None`` when none was injected.
+_worker_artifact_producer: ArtifactProducer | None = None
+
+
+def _worker_init(
+    converter: ConverterPort,
+    setup: Callable[[], None] | None,
+    artifact_producer: ArtifactProducer | None = None,
+) -> None:
+    """Pool initializer: run the caller's process setup, then adopt the converter.
+
+    ``converter`` arrives pickled from the parent — for the real adapter that
+    is a small spec (agent, flags) whose unpickling imports the converter
+    stack once per worker. ``setup`` is the composition root's hook for
+    per-process concerns the use case must not know about, such as
+    installing the same log sink the parent runs.
+    """
+    global _worker_converter, _worker_artifact_producer  # noqa: PLW0603 — the executor offers no other channel
+    if setup is not None:
+        setup()
+    _worker_converter = converter
+    _worker_artifact_producer = artifact_producer
+
+
+def _worker_attempt(
+    layout: CorpusLayout,
+    session: SessionSource,
+    *,
+    materialized_at: str,
+    harbor_version: str,
+    converter_version: str,
+    agent: str,
+) -> _SessionOutcome:
+    """Pool task: convert and write one session with this worker's converter."""
+    if _worker_converter is None:
+        msg = "pool worker used before its initializer ran"
+        raise RuntimeError(msg)
+    return _attempt_session(
+        layout,
+        session,
+        _worker_converter,
+        materialized_at=materialized_at,
+        harbor_version=harbor_version,
+        converter_version=converter_version,
+        agent=agent,
+        artifact_producer=_worker_artifact_producer,
+    )
+
+
+def _attempt_sessions(
+    layout: CorpusLayout,
+    sessions: Sequence[SessionSource],
+    converter: ConverterPort,
+    *,
+    workers: int,
+    worker_setup: Callable[[], None] | None,
+    materialized_at: str,
+    harbor_version: str,
+    converter_version: str,
+    agent: str,
+    artifact_producer: ArtifactProducer | None = None,
+) -> tuple[list[_SessionOutcome], int]:
+    """Convert and write every planned session; return outcomes in PLAN order.
+
+    ``workers == 1`` is the reference path: every session runs inline, in
+    order, in this process. Above that a spawn-context
+    :class:`~concurrent.futures.ProcessPoolExecutor` of
+    ``min(workers, len(sessions))`` processes does the same work, and the
+    outcomes are read back in submission order so completion order can never
+    reorder the report. A pass with a single planned session runs inline
+    whatever ``workers`` says: a pool of one buys nothing and costs a process
+    start plus a converter import.
+
+    ``spawn`` rather than the platform default, deliberately: a forked child
+    inherits whatever threads and locks the parent holds, which is the class
+    of bug that shows up once a month and never under a test. Each spawned
+    worker imports the converter once, and that cost is paid once per worker,
+    not per session.
+
+    The second value is the worker count actually used, for the report.
+    """
+    if workers < 1:
+        msg = f"workers must be >= 1, got {workers}"
+        raise ValueError(msg)
+    provenance = {
+        "materialized_at": materialized_at,
+        "harbor_version": harbor_version,
+        "converter_version": converter_version,
+        "agent": agent,
+    }
+    pool_size = min(workers, len(sessions))
+    if pool_size <= 1:
+        return [
+            _attempt_session(
+                layout, session, converter, artifact_producer=artifact_producer, **provenance
+            )
+            for session in sessions
+        ], 1
+    with ProcessPoolExecutor(
+        max_workers=pool_size,
+        mp_context=multiprocessing.get_context("spawn"),
+        initializer=_worker_init,
+        initargs=(converter, worker_setup, artifact_producer),
+    ) as pool:
+        futures = [
+            pool.submit(_worker_attempt, layout, session, **provenance) for session in sessions
+        ]
+        return [future.result() for future in futures], pool_size
 
 
 #: Every ``.tmp-<pid>`` / ``.old-<pid>`` marker a staging entry name carries.
@@ -317,6 +565,12 @@ def _sweep_staging(layout: CorpusLayout) -> None:
     A pid can be recycled onto an unrelated process, which only makes the
     sweep skip debris it could have removed — the next pass whose pid table
     has moved on collects it. Erring that direction is deliberate.
+
+    Pool workers change nothing here. A worker stages under ITS pid, so a
+    concurrent pass's in-flight entries name pids that are alive and are kept,
+    and a pass that died takes its workers with it (a spawned worker exits
+    when the parent's queue closes), so its entries name pids that are gone
+    and are swept — the same two answers the single-process pass gets.
     """
     staging = layout.staging_dir
     if not staging.is_dir():
@@ -543,6 +797,9 @@ def materialize(
     now_ns: int | None = None,
     session_ids: Collection[str] | None = None,
     source_layout: SourceLayout = CLAUDE_CODE_LAYOUT,
+    workers: int = 1,
+    worker_setup: Callable[[], None] | None = None,
+    artifact_producer: ArtifactProducer | None = None,
 ) -> MaterializationReport:
     """Run one materialization pass; see the module docstring for the shape.
 
@@ -555,6 +812,12 @@ def materialize(
     converter
         The conversion port; atif-cli injects the real adapter, tests inject
         :class:`~atif_corpus.infrastructure.fake_converter.FakeConverter`.
+    artifact_producer
+        Optional :class:`~atif_corpus.domain.ports.ArtifactProducer` run per
+        session inside the staged dir, between the three JSON artifacts and
+        ``meta.json``; its extra files publish in the same directory swap and
+        its returned keys land in ``meta.json``. ``None`` (the default) writes
+        exactly the four contract artifacts.
     materialized_at
         ISO-8601 UTC instant to stamp into every ``meta.json`` this pass.
     harbor_version, converter_version
@@ -580,12 +843,27 @@ def materialize(
         entry of every session that did not succeed. Ghost removal keys off
         the FULL scan, so an unfiltered session is never removed just
         because it wasn't planned.
+    workers
+        Processes for the convert+write stage. ``1`` (the default) is the
+        inline reference path. Above ``1``, a spawn-context process pool of
+        at most this many workers converts the planned sessions, each worker
+        holding its own copy of ``converter`` (which must therefore be
+        picklable) and writing through the same per-session staging dir and
+        atomic swap. Artifacts are byte-identical to the inline path; the
+        report's ``convert_seconds`` is the per-session sum either way.
+    worker_setup
+        Optional picklable callable each pool worker runs once before it
+        builds its converter — the composition root's hook for per-process
+        setup such as installing the log sink the parent uses. Ignored on
+        the inline path.
 
     Raises
     ------
     SuspiciousEmptyScanError
         The scan found zero sessions while the corpus holds materialized
         ones — almost always a wrong ``source_root``. Nothing is removed.
+    ValueError
+        ``workers`` is below ``1``.
     """
     pass_started = time.perf_counter()
     effective_now_ns = time.time_ns() if now_ns is None else now_ns
@@ -671,29 +949,31 @@ def materialize(
         ),
     )
 
+    outcomes, workers_used = _attempt_sessions(
+        layout,
+        plan.to_materialize,
+        converter,
+        workers=workers,
+        worker_setup=worker_setup,
+        materialized_at=materialized_at,
+        harbor_version=harbor_version,
+        converter_version=converter_version,
+        agent=source_layout.agent.value,
+        artifact_producer=artifact_producer,
+    )
     succeeded: list[SessionSource] = []
     failures: list[MaterializationFailure] = []
     convert_seconds = 0.0
-    for session in plan.to_materialize:
-        try:
-            convert_seconds += _write_session(
-                layout,
-                session,
-                converter,
-                materialized_at=materialized_at,
-                harbor_version=harbor_version,
-                converter_version=converter_version,
-                agent=source_layout.agent.value,
-            )
-        except Exception as error:  # noqa: BLE001 — one bad session must not abort the sync
-            logger.warning("materialize: session {} failed: {}", session.session_id, error)
+    artifact_seconds = 0.0
+    for session, outcome in zip(plan.to_materialize, outcomes, strict=True):
+        if outcome.error is not None:
+            logger.warning("materialize: session {} failed: {}", session.session_id, outcome.error)
             failures.append(
-                MaterializationFailure(
-                    session_id=session.session_id,
-                    error=f"{type(error).__name__}: {error}",
-                )
+                MaterializationFailure(session_id=session.session_id, error=outcome.error)
             )
         else:
+            convert_seconds += outcome.convert_seconds
+            artifact_seconds += outcome.artifact_seconds
             succeeded.append(session)
 
     layout.corpus_root.mkdir(parents=True, exist_ok=True)
@@ -709,8 +989,10 @@ def materialize(
         failures=tuple(failures),
         total_seconds=time.perf_counter() - pass_started,
         convert_seconds=convert_seconds,
+        artifact_seconds=artifact_seconds,
         removed_session_ids=removed_ids,
         unreadable_session_ids=tuple(sorted(scan.unreadable)),
+        workers=workers_used,
     )
     logger.info(
         "materialize: {} written, {} current, {} live, {} failed, {} removed, "

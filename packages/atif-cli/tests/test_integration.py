@@ -90,6 +90,49 @@ class TestEndToEnd:
         assert (corpus_root / "sessions" / SESSION_A).is_dir()
         assert not (corpus_root / "sessions" / SESSION_B).exists()
 
+    def test_pooled_pass_writes_the_same_bytes_through_the_real_converter(
+        self,
+        tiny_corpus: tuple[Path, Path],
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``RealConverter`` pickles into a spawned worker and converts the same bytes.
+
+        ``meta.json`` is compared minus ``materialized_at``: the CLI stamps the
+        wall clock per pass, and this is two passes.
+        """
+        source_root, corpus_root = tiny_corpus
+        monkeypatch.delenv("ATIF_SQL_CORPUS_ROOT", raising=False)
+        pooled_root = tmp_path / "corpus-pooled"
+
+        materialize(
+            source_root=source_root, corpus_root=corpus_root, workers=1, fmt=OutputFormat.JSON
+        )
+        inline = json.loads(capsys.readouterr().out)
+        materialize(
+            source_root=source_root, corpus_root=pooled_root, workers=2, fmt=OutputFormat.JSON
+        )
+        pooled = json.loads(capsys.readouterr().out)
+
+        assert inline["workers"] == 1
+        assert pooled["workers"] == 2
+        assert inline["materialized"] == pooled["materialized"] == 2
+        assert pooled["failures"] == []
+        for session_id in (SESSION_A, SESSION_B):
+            for name in ("trajectory.json", "edges.jsonl", "loss_report.json"):
+                assert (pooled_root / "sessions" / session_id / name).read_bytes() == (
+                    corpus_root / "sessions" / session_id / name
+                ).read_bytes(), f"{session_id}/{name}"
+            meta_inline = json.loads(
+                (corpus_root / "sessions" / session_id / "meta.json").read_text()
+            )
+            meta_pooled = json.loads(
+                (pooled_root / "sessions" / session_id / "meta.json").read_text()
+            )
+            del meta_inline["materialized_at"], meta_pooled["materialized_at"]
+            assert meta_pooled == meta_inline
+
     def test_query_classifies_unknown_view_as_catalog_error(
         self,
         tiny_corpus: tuple[Path, Path],

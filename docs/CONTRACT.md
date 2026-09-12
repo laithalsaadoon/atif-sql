@@ -28,7 +28,11 @@ proofs are out of scope for the workspace.
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
     meta.json                      # {session_id, source_mtime_ns, source_files: [...],
                                    #  harbor_version, converter_version, materialized_at,
-                                   #  agent}
+                                   #  agent, columnar_schema}
+    session.parquet                # typed columnar artifacts (optional, see below):
+    steps.parquet                  #  the trajectory header and the steps, tool_calls,
+    tool_calls.parquet             #  tool_results views' rows for this one session,
+    tool_results.parquet           #  written 0444, claimed by meta.columnar_schema
   watermark.json                   # {path: mtime_ns} across source corpus
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
@@ -48,6 +52,24 @@ proofs are out of scope for the workspace.
 - Quiescence: a session is (re)materialized when newest source mtime is older
   than quiesce_seconds (default 300) AND newer than its meta.source_mtime_ns.
   --force overrides.
+- Parallel convert: the convert+write stage may run across a process pool
+  (--workers N, default min(8, cpu_count)). The pool changes no artifact byte:
+  each worker writes the same four files through the same per-session
+  .staging/ dir and atomic rename, so a session is still the crash-safety
+  unit, and the watermark still advances only for sessions that succeeded.
+  --workers 1 is the single-process reference path.
+- Columnar artifacts: the four parquet files are a query-time cache of what the
+  views compute from trajectory.json, never a source of truth. materialize
+  writes them by default through the ArtifactProducer port (atif-corpus
+  declares the port, atif-duck implements it, atif-cli plugs them together);
+  they're staged and swapped with the JSON artifacts, so a session has all of
+  them or none. meta.columnar_schema names the schema version they were
+  written against (currently 1). A reader takes the columnar path for a session
+  only when meta.columnar_schema equals its own version AND all four files are
+  present and non-empty; otherwise it reads trajectory.json for that session.
+  A corpus written before this key existed, or with --no-columnar, stays valid
+  and answers every query from JSON. Whatever the path, every view and macro
+  returns the same rows. `atif-sql status` reports which path a corpus takes.
 
 ## Two agents (atif-converter converts, atif-corpus discovers)
 - AgentSource is a StrEnum in atif-converter with an AST-pinned twin in
@@ -92,6 +114,13 @@ proofs are out of scope for the workspace.
 ## atif-duck (reads corpus_root; NEVER imports atif-corpus/atif-converter)
 - register(con, corpus_root): TEMP-table raw readers over trajectory.json
   (read_json), edges.jsonl, loss_report.json, meta.json + derived views above.
+  Sessions carrying current columnar artifacts are read with read_parquet
+  instead of read_json, per session, and the two sets are unioned; the
+  returned RawSources says which sessions took which path.
+- ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
+  ArtifactProducer implementation: a pure function of the trajectory that
+  writes the four parquet files with the views' own projection expressions,
+  so the JSON columns are normalized exactly as read_json would.
 - sessions view carries `agent` and `agent_version` from trajectory.agent, and
   coalesces the two shapes harbor emits for working directory and git branch
   (cwds[0]/cwd, git_branches[0]/git.branch). The steps view coalesces
@@ -105,7 +134,7 @@ proofs are out of scope for the workspace.
 ## CLI (atif-cli composes; the only package importing the other five)
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
-atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...]  # sync corpus
+atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N]  # sync corpus
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
 atif-sql schema                        # static, <50ms, no duckdb bind
@@ -128,8 +157,9 @@ repo neither declares nor provides.
 
 ## Settings (env prefix ATIF_SQL_)
 source_root (default CLAUDE_CONFIG_DIR~/.claude /projects), corpus_root,
-quiesce_seconds=300, agent=claude-code (every --agent command reads it). _default_*() factories read env at call
-time. With agent=codex the two roots re-derive to $CODEX_HOME (default
+quiesce_seconds=300, agent=claude-code (every --agent command reads it),
+materialize_workers=min(8, cpu_count) (materialize's pool size; 1 = single process).
+_default_*() factories read env at call time. With agent=codex the two roots re-derive to $CODEX_HOME (default
 ~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that
 re-derivation.

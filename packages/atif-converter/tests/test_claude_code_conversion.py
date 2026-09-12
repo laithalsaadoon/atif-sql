@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from harbor_oracle import diff_paths, harbor_claude_code_trajectory, harbor_has_private_api
 
-from atif_converter.domain import claude_code_conversion
+from atif_converter.domain import claude_code_conversion, pricing
 from atif_converter.domain.claude_code_conversion import convert_claude_code_records
 from atif_converter.infrastructure.claude_code_converter import (
     convert_claude_code_session,
@@ -691,17 +691,29 @@ class TestCost:
         assert out["final_metrics"]["extra"]["cost_source"] == "litellm_estimate"
         assert isinstance(out["final_metrics"]["total_cost_usd"], float)
 
-    def test_litellm_error_or_absence_yields_no_cost(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_pricing_failure_or_missing_litellm_yields_no_cost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """harbor swallowed every litellm error into "no estimate"; the fallback path still does.
+
+        The fast path is forced to decline so every call reaches litellm, first
+        raising and then absent altogether.
+        """
         records = [
             _user("u1", "01", "go"),
             _assistant("a1", "02", "x", usage={"input_tokens": 5, "output_tokens": 1}),
         ]
         import litellm
 
+        def decline(**_: Any) -> tuple[float, float]:
+            msg = "forced"
+            raise pricing.FastPathUnsupported(msg)
+
         def boom(**_: Any) -> tuple[float, float]:
             msg = "no such model"
             raise ValueError(msg)
 
+        monkeypatch.setattr(pricing, "fast_cost_per_token", decline)
         monkeypatch.setattr(litellm, "cost_per_token", boom)
         out = convert_claude_code_records(records)
         assert out is not None
@@ -714,6 +726,45 @@ class TestCost:
         assert out is not None
         assert out.final_metrics is not None
         assert out.final_metrics.total_cost_usd is None
+
+    def test_estimate_prices_without_importing_litellm(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The estimate path never reaches ``import litellm`` for a corpus-shaped model."""
+        monkeypatch.setitem(sys.modules, "litellm", None)
+        out = convert_claude_code_records(
+            [
+                _user("u1", "01", "go"),
+                _assistant(
+                    "a1",
+                    "02",
+                    "x",
+                    model="claude-opus-5",
+                    usage={
+                        "input_tokens": 1234,
+                        "output_tokens": 567,
+                        "cache_creation_input_tokens": 8901,
+                        "cache_read_input_tokens": 23456,
+                        "service_tier": "standard",
+                    },
+                ),
+            ]
+        )
+        assert out is not None
+        assert out.final_metrics is not None
+        # The step's prompt_tokens carries input + both cache counts (33591), so the
+        # priced text tokens are the 1234 uncached ones; litellm sees the same shape.
+        prompt_cost, completion_cost = pricing.fast_cost_per_token(
+            model="claude-opus-5",
+            prompt_tokens=33591,
+            completion_tokens=567,
+            cache_creation_input_tokens=8901,
+            cache_read_input_tokens=23456,
+            service_tier="standard",
+        )
+        assert out.final_metrics.total_cost_usd == prompt_cost + completion_cost
+        assert out.final_metrics.total_cost_usd == 0.08770424999999998
+        assert (out.final_metrics.extra or {})["cost_source"] == "litellm_estimate"
 
     def test_cache_totals_come_from_metrics_extra(self) -> None:
         """Only int-typed cache fields add to the totals; a float lands in the step but not the sum."""

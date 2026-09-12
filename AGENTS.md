@@ -19,16 +19,24 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `codex_*` so one `gaps_observed` array carries both). `domain.agents`
   holds the `AgentSource` enum, whose VALUES are the wire contract for the
   `--agent` flag, harbor's `Trajectory.agent.name`, and `meta.agent`.
-  Layered: `application` > `infrastructure` > `domain`.
+  `domain.pricing` prices each step (`total_cost_usd`, Codex `cost_usd`) from
+  litellm's bundled price table without importing litellm, and hands any
+  shape it doesn't cover to litellm itself. Layered: `application` >
+  `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
-  quiescence, atomic artifact writes. Per-agent discovery lives in
+  quiescence, atomic artifact writes, and the `ArtifactProducer` port that
+  lets the composition root add per-session files (atif-duck's columnar
+  parquets) to the same atomic swap. Per-agent discovery lives in
   `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
   Codex's `<YYYY>/<MM>/<DD>` nesting), and `domain.agents` is an AST-pinned
   twin of the converter's enum, because the two packages may not import each
   other. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-duck` — DuckDB views + macros over the materialized corpus:
   16 core views and 9 macros, plus 12 analytics views and 13 analytics
-  macros, all declared in a static drift-tested catalog. Layered:
+  macros, all declared in a static drift-tested catalog. Also the
+  `ColumnarArtifactProducer` that writes each session's typed parquet
+  artifacts at materialize time, and the registry that reads them instead of
+  `trajectory.json` when they're current (falling back per session). Layered:
   `infrastructure` > `domain`.
 - `packages/atif-models` — model alias registry + structured-output LLM
   client. No other package hardcodes a Bedrock model id. Layered:
@@ -64,6 +72,17 @@ Rules of the road:
   frozen goldens under `tests/goldens/` and a live-corpus parity test.
   A harbor bump is a lockfile edit plus reading the converter suite's failures
   as upstream-behavior reports (see CONTRIBUTING).
+- litellm stays a declared dependency but is OFF the conversion hot path:
+  `import litellm` took about four of the five seconds a 76 MB session
+  needed, so `atif_converter.domain.pricing` reads litellm's own bundled
+  `model_prices_and_context_window_backup.json` (found through
+  `importlib.util.find_spec`, never `import litellm`) and repeats
+  `litellm.cost_per_token`'s arithmetic in the same float order. The output
+  is bit for bit identical; `packages/atif-converter/tests/test_pricing_identity.py`
+  proves it against litellm over every covered table key and the corpus
+  models. A shape the fast path doesn't replicate falls back to litellm, so a
+  litellm bump still means re-running that test and reading its failures as
+  upstream-pricing reports.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - Settings via pydantic-settings, env prefix `ATIF_SQL_`. `agent` is applied
   at CONSTRUCTION, not copied in afterwards: both default roots derive from
@@ -72,6 +91,14 @@ Rules of the road:
   also the one way to aim a pass at the other agent's corpus, which
   `meta.agent` catches: materialize refuses (exit 78) rather than deleting the
   other agent's sessions as ghosts.
+- `materialize` runs its convert+write stage on a spawn-context process pool
+  (`--workers N` / `ATIF_SQL_MATERIALIZE_WORKERS`, default `min(8, cpu_count)`).
+  `--workers 1` is the single-process reference path and must stay
+  byte-identical to the pool; the pool tests in
+  `packages/atif-corpus/tests/test_materialize_parallel.py` pin that, and
+  read worker pids back off disk so a pool that silently ran inline fails.
+  The `ConverterPort` instance is pickled into each worker, so an adapter
+  has to stay picklable.
 
 ## Agent query workflow
 

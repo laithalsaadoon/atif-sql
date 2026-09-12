@@ -263,6 +263,7 @@ source = { editable = "packages/atif-duck" }
 dependencies = [
     { name = "duckdb" },
     { name = "loguru" },
+    { name = "pyarrow" },
     { name = "pytz" },
 ]
 
@@ -270,6 +271,7 @@ dependencies = [
 requires-dist = [
     { name = "duckdb", specifier = ">=1.5.2,<2" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "pyarrow", specifier = ">=23.0.1" },
     { name = "pytz", specifier = ">=2024.1" },
 ]
 

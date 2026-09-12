@@ -11,6 +11,8 @@ instead of drifting in a conftest.
 from __future__ import annotations
 
 import json
+import os
+import time
 from typing import TYPE_CHECKING, Any
 
 from atif_corpus.domain.ports import ConversionOutput
@@ -26,11 +28,31 @@ class FakeConverter:
     session stem, records every call in ``converted``, and raises for any
     session listed in ``fail_sessions`` — which is how the "a failing
     session is recorded and skipped" behavior gets exercised.
+
+    Two knobs exist for the process-pool tests. ``record_pid`` stamps the
+    converting process's pid into the trajectory as ``worker_pid``, so a test
+    can read back from disk WHICH process converted each session — a pool
+    that quietly ran inline shows the parent's pid on every one.
+    ``delay_seconds`` holds each conversion open long enough for the pool's
+    other workers to start and take a session of their own; without it one
+    fast worker can drain a small fixture before the second exists. Both are
+    off by default, and ``converted`` is only meaningful on the inline path:
+    a pool worker's copy of this object never comes back.
     """
 
-    def __init__(self, *, fail_sessions: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        *,
+        fail_sessions: frozenset[str] = frozenset(),
+        record_pid: bool = False,
+        delay_seconds: float = 0.0,
+    ) -> None:
         #: Session ids whose conversion should raise.
         self.fail_sessions = fail_sessions
+        #: Stamp ``os.getpid()`` into the trajectory as ``worker_pid``.
+        self.record_pid = record_pid
+        #: Seconds each conversion sleeps before returning.
+        self.delay_seconds = delay_seconds
         #: Every session path convert() was asked about, in call order.
         self.converted: list[Path] = []
 
@@ -41,11 +63,15 @@ class FakeConverter:
         if session_id in self.fail_sessions:
             msg = f"scripted failure for {session_id}"
             raise RuntimeError(msg)
+        if self.delay_seconds:
+            time.sleep(self.delay_seconds)
         trajectory: dict[str, Any] = {
             "schema_version": "ATIF-v1.7",
             "session_id": session_id,
             "steps": [],
         }
+        if self.record_pid:
+            trajectory["worker_pid"] = os.getpid()
         loss_report: dict[str, Any] = {
             "records_converted": 0,
             "records_dropped": 0,
