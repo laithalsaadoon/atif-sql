@@ -66,9 +66,21 @@ Contracts are ordered by confirmed consumer count, descending.
                                    #  message_id, type, ts, is_sidechain,
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
     meta.json                      # {session_id, source_mtime_ns, source_files: [...],
-                                   #  harbor_version, converter_version, materialized_at}
+                                   #  harbor_version, converter_version, materialized_at,
+                                   #  agent, columnar_schema}
+    session.parquet                # optional typed columnar artifacts: the views' rows
+    steps.parquet                  #  for this session, written 0444 by atif-duck's
+    tool_calls.parquet             #  ColumnarArtifactProducer at materialize time and
+    tool_results.parquet           #  claimed by meta.columnar_schema (currently 1)
   watermark.json                   # {path: mtime_ns} across source corpus
 ```
+
+The parquet files are a cache of what the views compute from `trajectory.json`, never a source of
+truth: atif-duck reads them only when `meta.columnar_schema` matches its own version and all four
+are present and non-empty (`packages/atif-duck/src/atif_duck/infrastructure/columnar.py`), and
+falls back to `trajectory.json` per session otherwise. The names and the schema version live in
+`packages/atif-duck/src/atif_duck/domain/columnar.py`; atif-corpus never learns them, it runs the
+producer through the `ArtifactProducer` port and merges the returned keys into `meta.json`.
 
 **Assumptions consumers make:**
 

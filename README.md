@@ -66,6 +66,10 @@ atif-sql status                        # corpus freshness, read-only
 atif-sql query 'SELECT * FROM sessions LIMIT 5'
 ```
 
+`materialize` also writes typed columnar artifacts (four parquet files per session) beside the
+JSON ones, so `query` parses no JSON for those sessions; `--no-columnar` skips them, older corpora
+keep working from `trajectory.json`, and `status` prints which path a corpus takes as `query path`.
+
 For one session at a time, `atif-sql convert <session.jsonl>` converts and audits it in place.
 
 `materialize` converts sessions across a process pool, `min(8, cpu_count)` workers by default.

@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""The converter port: what materialization NEEDS from a converter.
+"""The ports materialization needs filled: a converter and, optionally, an artifact producer.
 
-atif-corpus may never import atif-converter (import-linter independence
-contract), and the converter's real signature is changing on a sibling
-branch — so this Protocol is typed to CONTRACT.md's artifact shapes, not to
-converter internals. atif-cli adapts the real converter to this port later;
-tests use :class:`atif_corpus.infrastructure.fake_converter.FakeConverter`.
+atif-corpus may never import atif-converter or atif-duck (import-linter
+independence contract), so both Protocols are typed to CONTRACT.md's artifact
+shapes rather than to either package's internals. atif-cli adapts the real
+converter and the real columnar producer to these ports; tests use
+:class:`atif_corpus.infrastructure.fake_converter.FakeConverter` and a fake
+producer of their own.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
 
@@ -48,4 +50,35 @@ class ConverterPort(Protocol):
 
     def convert(self, session_jsonl: Path) -> ConversionOutput:
         """Convert one session (main JSONL + its side-files) to artifacts."""
+        ...
+
+
+class ArtifactProducer(Protocol):
+    """Anything that writes EXTRA per-session artifacts beside the four contract ones.
+
+    The materialize use case calls :meth:`produce` once per session, inside
+    the staged session directory, after ``trajectory.json`` /
+    ``loss_report.json`` / ``edges.jsonl`` are written and before
+    ``meta.json`` is. Whatever the producer writes therefore publishes
+    atomically with the four contract artifacts (the whole directory is
+    swapped into place) and is covered by the same completeness marker.
+
+    The producer returns extra keys for ``meta.json``. They must not collide
+    with the contract's own keys; the use case treats a collision as a
+    programming error and fails the session.
+
+    Implementations may raise any exception: the use case records the
+    failure against the session, never publishes the staged directory, and
+    retries the session next pass, exactly as it does for a converter
+    failure.
+    """
+
+    def produce(
+        self,
+        session_dir: Path,
+        *,
+        session_id: str,
+        trajectory: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Write extra artifacts for ``session_id`` into ``session_dir``; return meta extras."""
         ...

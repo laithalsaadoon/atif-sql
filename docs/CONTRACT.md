@@ -28,7 +28,11 @@ proofs are out of scope for the workspace.
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
     meta.json                      # {session_id, source_mtime_ns, source_files: [...],
                                    #  harbor_version, converter_version, materialized_at,
-                                   #  agent}
+                                   #  agent, columnar_schema}
+    session.parquet                # typed columnar artifacts (optional, see below):
+    steps.parquet                  #  the trajectory header and the steps, tool_calls,
+    tool_calls.parquet             #  tool_results views' rows for this one session,
+    tool_results.parquet           #  written 0444, claimed by meta.columnar_schema
   watermark.json                   # {path: mtime_ns} across source corpus
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
@@ -54,6 +58,18 @@ proofs are out of scope for the workspace.
   .staging/ dir and atomic rename, so a session is still the crash-safety
   unit, and the watermark still advances only for sessions that succeeded.
   --workers 1 is the single-process reference path.
+- Columnar artifacts: the four parquet files are a query-time cache of what the
+  views compute from trajectory.json, never a source of truth. materialize
+  writes them by default through the ArtifactProducer port (atif-corpus
+  declares the port, atif-duck implements it, atif-cli plugs them together);
+  they're staged and swapped with the JSON artifacts, so a session has all of
+  them or none. meta.columnar_schema names the schema version they were
+  written against (currently 1). A reader takes the columnar path for a session
+  only when meta.columnar_schema equals its own version AND all four files are
+  present and non-empty; otherwise it reads trajectory.json for that session.
+  A corpus written before this key existed, or with --no-columnar, stays valid
+  and answers every query from JSON. Whatever the path, every view and macro
+  returns the same rows. `atif-sql status` reports which path a corpus takes.
 
 ## Two agents (atif-converter converts, atif-corpus discovers)
 - AgentSource is a StrEnum in atif-converter with an AST-pinned twin in
@@ -98,6 +114,13 @@ proofs are out of scope for the workspace.
 ## atif-duck (reads corpus_root; NEVER imports atif-corpus/atif-converter)
 - register(con, corpus_root): TEMP-table raw readers over trajectory.json
   (read_json), edges.jsonl, loss_report.json, meta.json + derived views above.
+  Sessions carrying current columnar artifacts are read with read_parquet
+  instead of read_json, per session, and the two sets are unioned; the
+  returned RawSources says which sessions took which path.
+- ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
+  ArtifactProducer implementation: a pure function of the trajectory that
+  writes the four parquet files with the views' own projection expressions,
+  so the JSON columns are normalized exactly as read_json would.
 - sessions view carries `agent` and `agent_version` from trajectory.agent, and
   coalesces the two shapes harbor emits for working directory and git branch
   (cwds[0]/cwd, git_branches[0]/git.branch). The steps view coalesces

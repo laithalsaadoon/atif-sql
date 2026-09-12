@@ -516,3 +516,194 @@ def build_corpus(root: Path) -> Path:
 def corpus_root(tmp_path: Path) -> Path:
     """Write the two-session contract-shaped corpus; return its root."""
     return build_corpus(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# A Codex session, in harbor's Codex shape (no dependency on atif-converter).
+# Shared by test_codex_views (which pins the SQL's reading of that shape) and
+# test_columnar (which needs the Codex cache-write key and an empty assistant
+# message in its equivalence corpus).
+# ---------------------------------------------------------------------------
+
+CODEX_SESSION_ID = "01a09182-2858-7f42-936b-7f027b341fdf"
+
+#: Codex's cache-creation spelling in ``metrics.extra`` — the one the Claude
+#: Code adapter does NOT use, which is why the steps view coalesces both.
+CODEX_CACHE_WRITE_KEY = "cache_write_input_tokens"
+
+
+def codex_trajectory() -> dict[str, Any]:
+    """One Codex session: a user turn, a tool bundle, and a final answer."""
+    return {
+        "schema_version": "ATIF-v1.7",
+        "session_id": CODEX_SESSION_ID,
+        "agent": {
+            "name": "codex",
+            "version": "0.154.0",
+            "model_name": "bedrock-native/global.openai.gpt-6-astra",
+            # Codex writes ONE cwd string and a git STRUCT; Claude Code writes
+            # sets under different keys. The sessions view reads both shapes.
+            "extra": {
+                "originator": "codex-tui",
+                "cwd": "/home/alice/proj",
+                "git": {"branch": "feature/x", "commit_hash": "abc1234"},
+            },
+        },
+        "steps": [
+            {
+                "step_id": 1,
+                "timestamp": "2026-09-11T17:27:01.500Z",
+                "source": "user",
+                "message": "read marker.txt",
+                "extra": {"source_uuids": ["msg_user_1"]},
+            },
+            {
+                "step_id": 2,
+                "timestamp": "2026-09-11T17:27:02.300Z",
+                "source": "agent",
+                "message": "",
+                "model_name": "bedrock-native/global.openai.gpt-6-astra",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_1",
+                        "function_name": "exec_command",
+                        "arguments": {"cmd": "cat marker.txt"},
+                    }
+                ],
+                "observation": {"results": [{"source_call_id": "call_1", "content": "marker-ok"}]},
+                "metrics": {
+                    "prompt_tokens": 1_000,
+                    "completion_tokens": 40,
+                    "cached_tokens": 0,
+                    "extra": {CODEX_CACHE_WRITE_KEY: 900, "total_tokens": 1_040},
+                },
+                "llm_call_count": 1,
+                "extra": {
+                    "api_call_id": "api_call_1",
+                    "codex_turn_id": "turn-1",
+                    "source_uuids": ["fc_1", "response_item:L10", "msg_agent_empty"],
+                },
+            },
+            {
+                "step_id": 3,
+                "timestamp": "2026-09-11T17:27:03.000Z",
+                "source": "agent",
+                "message": "marker-ok",
+                "model_name": "bedrock-native/global.openai.gpt-6-astra",
+                "metrics": {
+                    "prompt_tokens": 1_100,
+                    "completion_tokens": 8,
+                    "cached_tokens": 1_000,
+                    "extra": {CODEX_CACHE_WRITE_KEY: 0},
+                },
+                "llm_call_count": 1,
+                "extra": {"api_call_id": "api_call_2", "source_uuids": ["msg_agent_final"]},
+            },
+        ],
+        "final_metrics": {
+            "total_prompt_tokens": 2_100,
+            "total_completion_tokens": 48,
+            "total_cached_tokens": 1_000,
+            "total_cost_usd": 0.0256,
+            "total_steps": 3,
+            "extra": {"total_cache_write_input_tokens": 900},
+        },
+        "extra": {"cache_creation_total": 900, "codex_compaction_count": 1},
+    }
+
+
+def codex_edges() -> list[dict[str, Any]]:
+    """One line per raw rollout record, in the contract shape."""
+
+    def edge(
+        uuid: str,
+        *,
+        type_: str,
+        ts: str,
+        message_id: str | None = None,
+        compact: bool = False,
+        tool_use_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "uuid": uuid,
+            # A rollout is a flat log: no parent pointer exists to record.
+            "parent_uuid": None,
+            "message_id": message_id,
+            "type": type_,
+            "ts": ts,
+            "is_sidechain": False,
+            "is_compact_summary": compact,
+            "source_file": f"rollout-2026-09-11T17-27-01-{CODEX_SESSION_ID}.jsonl",
+            "tool_use_ids": tool_use_ids or [],
+        }
+
+    return [
+        edge("msg_dev_1", type_="developer", ts="2026-09-11T17:27:01.400Z", message_id="msg_dev_1"),
+        edge("msg_user_1", type_="user", ts="2026-09-11T17:27:01.500Z", message_id="msg_user_1"),
+        edge("rs_1", type_="reasoning", ts="2026-09-11T17:27:02.000Z"),
+        edge(
+            "msg_agent_empty",
+            type_="assistant",
+            ts="2026-09-11T17:27:02.100Z",
+            message_id="msg_agent_empty",
+        ),
+        edge("fc_1", type_="function_call", ts="2026-09-11T17:27:02.200Z", tool_use_ids=["call_1"]),
+        edge(
+            "response_item:L10",
+            type_="function_call_output",
+            ts="2026-09-11T17:27:02.300Z",
+            tool_use_ids=["call_1"],
+        ),
+        edge(
+            "msg_agent_final",
+            type_="assistant",
+            ts="2026-09-11T17:27:03.000Z",
+            message_id="msg_agent_final",
+        ),
+        edge("compacted:L17", type_="compacted", ts="2026-09-11T17:27:03.200Z", compact=True),
+    ]
+
+
+def write_codex_session(root: Path) -> Path:
+    """Write the one Codex session under ``root/sessions/``; return its directory."""
+    session_dir = root / "sessions" / CODEX_SESSION_ID
+    session_dir.mkdir(parents=True)
+    (session_dir / "trajectory.json").write_text(
+        json.dumps(codex_trajectory(), separators=(",", ":"))
+    )
+    (session_dir / "edges.jsonl").write_text(
+        "\n".join(json.dumps(edge) for edge in codex_edges()) + "\n"
+    )
+    (session_dir / "loss_report.json").write_text(
+        json.dumps(
+            {
+                "record_counts": {"response_item": 8, "event_msg": 4},
+                "records_total": 12,
+                "records_converted": 6,
+                "records_dropped": 6,
+                "gaps_observed": [
+                    "codex_item_ids_not_preserved",
+                    "codex_reasoning_encrypted_dropped",
+                ],
+                "subagent_files_found": 0,
+                "subagent_files_convertible": 0,
+                "workflow_subagent_files_found": 0,
+            },
+            separators=(",", ":"),
+        )
+    )
+    (session_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "session_id": CODEX_SESSION_ID,
+                "source_mtime_ns": 1_789_000_000_000_000_000,
+                "source_files": [f"rollout-2026-09-11T17-27-01-{CODEX_SESSION_ID}.jsonl"],
+                "harbor_version": "0.22.0",
+                "converter_version": "0.1.0",
+                "materialized_at": "2026-09-11T18:00:00Z",
+                "agent": "codex",
+            },
+            separators=(",", ":"),
+        )
+    )
+    return session_dir
