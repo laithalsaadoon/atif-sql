@@ -103,10 +103,47 @@ members = ["packages/*"]
 [tool.uv]
 required-version = ">=0.11.7"
 resolution = "highest"
+# Dependency cooldown (Semgrep `uv-missing-dependency-cooldown`): the resolver ignores any
+# release younger than seven days, so a package taken over or published broken is usually
+# pulled before it can land here. The rule accepts only a relative window of at least seven
+# days. uv records the window in uv.lock, so adding it re-resolves the graph, and on the day
+# it landed (2026-09-12) that would have moved 21 packages (the exclude-newer-package table
+# below; ruff and ty among them, which the gates run on) DOWN to their week-old releases.
+# Each of those is exempted up to the instant the window landed, which keeps every pin in
+# uv.lock exactly where it was; the exemptions are no-ops once those releases are a week old
+# and can be deleted in the next `uv lock --upgrade`. A fresh CVE fix inside the window gets
+# the same per-package treatment, never a shorter window. No square bracket may appear in
+# this comment: the Semgrep rule reads the table as everything up to the next one.
+exclude-newer = "7 days"
 python-preference = "only-managed"
 python-downloads = "automatic"
 compile-bytecode = true
 link-mode = "clone"
+
+# See the cooldown note above: the packages the seven-day window would have moved on the day
+# it landed, exempted up to that instant so uv.lock stayed as it was.
+[tool.uv.exclude-newer-package]
+boto3 = "2026-09-12T21:16:20Z"
+botocore = "2026-09-12T21:16:20Z"
+cyclopts = "2026-09-12T21:16:20Z"
+filelock = "2026-09-12T21:16:20Z"
+grimp = "2026-09-12T21:16:20Z"
+huggingface-hub = "2026-09-12T21:16:20Z"
+hypothesis = "2026-09-12T21:16:20Z"
+litellm = "2026-09-12T21:16:20Z"
+multidict = "2026-09-12T21:16:20Z"
+narwhals = "2026-09-12T21:16:20Z"
+numpy = "2026-09-12T21:16:20Z"
+platformdirs = "2026-09-12T21:16:20Z"
+polars = "2026-09-12T21:16:20Z"
+polars-runtime-32 = "2026-09-12T21:16:20Z"
+pyjwt = "2026-09-12T21:16:20Z"
+regex = "2026-09-12T21:16:20Z"
+ruff = "2026-09-12T21:16:20Z"
+scikit-learn = "2026-09-12T21:16:20Z"
+tqdm = "2026-09-12T21:16:20Z"
+ty = "2026-09-12T21:16:20Z"
+wrapt = "2026-09-12T21:16:20Z"
 
 [dependency-groups]
 dev = [

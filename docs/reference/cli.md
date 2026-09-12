@@ -35,6 +35,8 @@ atif-sql materialize [OPTIONS]
 Sync the materialized corpus with the raw transcript corpus in one scan-plan-convert-write pass.
 `packages/atif-cli/src/atif_cli/app.py:448`
 
+A transcript whose session id fails the boundary in `packages/atif-corpus/src/atif_corpus/domain/session_id.py` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, at most 255 characters) is skipped with a logged reason and counted: the report carries `rejected` and `rejected_session_ids` beside `unreadable` and `unreadable_session_ids`, and the table form prints one `REJECTED` line per name on stderr. Nothing from such a session is written, and a corpus directory an older version wrote under that name is kept rather than removed as a ghost.
+
 The convert-write stage runs across a process pool by default. Each worker builds its own converter once and writes through the same per-session staging directory and atomic swap the single-process path uses, so the artifacts are byte-identical either way and a crash still costs at most the session in flight. `--workers 1` is the single-process reference path. The report's `convert_seconds` is the per-session sum, so with several workers it can exceed `total_seconds`, which stays the wall clock; `workers` in the report is the pool size the pass actually used, which is never more than the number of sessions planned (`packages/atif-corpus/src/atif_corpus/application/materialize.py:385`).
 
 Flags:
@@ -99,6 +101,8 @@ Flags:
 - `--format` — `table` on a TTY, a JSON array of row objects on a pipe. `:505`
 
 The statement runs against a hardened connection: reads reach the registered views and nothing else, and the only writable path is the query engine's own spill directory `<corpus_root>/.duckdb_tmp`. `:601`
+
+The views themselves carry no corpus path as statement text. The registry hands its globs and file lists to `read_json(?)` as bound parameters and builds the parquet readers through DuckDB's relation API, so a corpus root such as `o'brien ?; --$1` and transcript content carrying SQL text both register as data (`packages/atif-duck/src/atif_duck/infrastructure/registry.py`). A session directory whose name fails the session id boundary (`packages/atif-duck/src/atif_duck/domain/session_id.py`) registers nothing and is logged once.
 
 Sessions that carry current columnar artifacts are served from their parquet files, so no JSON is parsed for them at query time; the rest are read from `trajectory.json`, and the views union the two. The per-session parquet files the registry bound are granted to the sandbox the same way the analytics parquets are (as individual `allowed_paths` entries, `packages/atif-cli/src/atif_cli/app.py:221`), and they're written read-only (`0444`), so a `COPY ... TO` at one of them fails at the filesystem even though DuckDB's grant is read-write. `atif-sql status` says which path a corpus takes.
 

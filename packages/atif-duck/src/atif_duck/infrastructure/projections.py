@@ -19,11 +19,16 @@ per-result projections (a ``call`` or ``res`` column always holds one whole
 tool call or observation result as JSON on both paths).
 
 Pure string building. No duckdb import; the callers own the connection.
+Every expression comes back typed :data:`~atif_duck.domain.sql_literal.SqlFragment`:
+this module is one of the three producers of SQL text (with the catalog and
+``sql_literal``), and nothing here reads a value from outside the process.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from atif_duck.domain.sql_literal import SqlFragment
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,20 +44,20 @@ class StepMemberAccess:
     #: Column holding the whole step, or ``None`` when each member is its own column.
     whole_step_column: str | None
 
-    def json(self, member: str, path: str = "") -> str:
+    def json(self, member: str, path: str = "") -> SqlFragment:
         """SQL for ``json_extract`` of ``member`` (optionally a sub-path below it)."""
         column, root = self._locate(member)
-        return f"json_extract({column}, '{root}{path}')"
+        return SqlFragment(f"json_extract({column}, '{root}{path}')")
 
-    def string(self, member: str, path: str = "") -> str:
+    def string(self, member: str, path: str = "") -> SqlFragment:
         """SQL for ``json_extract_string`` of ``member`` (optionally a sub-path)."""
         column, root = self._locate(member)
-        return f"json_extract_string({column}, '{root}{path}')"
+        return SqlFragment(f"json_extract_string({column}, '{root}{path}')")
 
-    def type_of(self, member: str) -> str:
+    def type_of(self, member: str) -> SqlFragment:
         """SQL for ``json_type`` of ``member``."""
         column, root = self._locate(member)
-        return f"json_type({column}, '{root}')"
+        return SqlFragment(f"json_type({column}, '{root}')")
 
     def _locate(self, member: str) -> tuple[str, str]:
         if self.whole_step_column is not None:
@@ -163,9 +168,9 @@ RESULT_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
-def render(columns: tuple[tuple[str, str], ...]) -> str:
+def render(columns: tuple[tuple[str, str], ...]) -> SqlFragment:
     """Join ``(expression, alias)`` pairs into a SELECT list body."""
-    return ",\n    ".join(f"{expression} AS {alias}" for expression, alias in columns)
+    return SqlFragment(",\n    ".join(f"{expression} AS {alias}" for expression, alias in columns))
 
 
 __all__ = [

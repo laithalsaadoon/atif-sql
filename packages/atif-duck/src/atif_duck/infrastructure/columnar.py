@@ -73,7 +73,8 @@ from atif_duck.domain.columnar import (
     columnar_paths,
     is_current_columnar_schema,
 )
-from atif_duck.domain.sql_literal import sql_literal
+from atif_duck.domain.session_id import session_id_rejection
+from atif_duck.domain.sql_literal import SqlFragment, sql_literal
 from atif_duck.infrastructure.projections import (
     CALL_COLUMNS,
     MEMBER_COLUMNS,
@@ -158,7 +159,9 @@ def columnar_coverage(corpus_root: Path) -> ColumnarCoverage:
         return ColumnarCoverage(columnar_sessions=0, json_sessions=0)
     columnar = json_only = 0
     for session_dir in sorted(sessions_dir.iterdir()):
-        if not session_dir.is_dir():
+        if not session_dir.is_dir() or session_id_rejection(session_dir.name) is not None:
+            # The registry registers nothing from a dir whose name fails the
+            # session id boundary, so the coverage count must not see it either.
             continue
         try:
             meta = json.loads((session_dir / "meta.json").read_text(encoding="utf-8"))
@@ -303,7 +306,7 @@ def _struct_spec(struct_type: str) -> str:
     return json.dumps(dict(_struct_members(struct_type)))
 
 
-def _session_row_sql(session_id_literal: str) -> str:
+def _session_row_sql(session_id_literal: SqlFragment) -> SqlFragment:
     """The one-row ``session.parquet`` projection over the registered batch.
 
     Each trajectory member arrives as JSON text; ``json_transform`` types the
@@ -322,7 +325,7 @@ def _session_row_sql(session_id_literal: str) -> str:
             typed.append(f"json_extract_string({name}, '$')::{sql_type} AS {name}")
     # Every name and type comes from SESSION_COLUMNS; the only literal is the
     # sql_literal-escaped session id.
-    return "SELECT " + ", ".join(typed) + f" FROM {_SOURCE}"  # noqa: S608
+    return SqlFragment("SELECT " + ", ".join(typed) + f" FROM {_SOURCE}")  # noqa: S608  # nosec B608 - SESSION_COLUMNS constants; the id came through sql_literal
 
 
 def _arrow_type(sql_type: str) -> Any:
@@ -360,7 +363,7 @@ def _arrow_schema(columns: Sequence[tuple[str, str]]) -> Any:
     return pa.schema([pa.field(name, _arrow_type(sql_type)) for name, sql_type in columns])
 
 
-def _fetch_select(columns: Sequence[tuple[str, str]], inner_sql: str) -> str:
+def _fetch_select(columns: Sequence[tuple[str, str]], inner_sql: SqlFragment) -> SqlFragment:
     """Wrap a projection so its rows cross into Python losslessly.
 
     Columns are picked by name in catalog order, so the file's column order is
@@ -381,7 +384,7 @@ def _fetch_select(columns: Sequence[tuple[str, str]], inner_sql: str) -> str:
             raise ValueError(msg)
         picks.append(f'"{name}"')
     # Column names are catalog constants; inner_sql is built from constants.
-    return f"SELECT {', '.join(picks)} FROM ({inner_sql})"  # noqa: S608
+    return SqlFragment(f"SELECT {', '.join(picks)} FROM ({inner_sql})")  # noqa: S608  # nosec B608 - catalog column names over a constant-built inner SELECT
 
 
 def _arrow_array(values: list[Any], sql_type: str) -> Any:
@@ -513,7 +516,9 @@ class ColumnarArtifactProducer:
         ColumnarArtifactProducer._write(
             con,
             _batches(_step_rows(session_id, step_list), steps_schema),
-            f"SELECT session_id, {render(step_columns(MEMBER_COLUMNS))} FROM {_SOURCE}",  # noqa: S608 — projections constants
+            SqlFragment(
+                f"SELECT session_id, {render(step_columns(MEMBER_COLUMNS))} FROM {_SOURCE}"  # noqa: S608  # nosec B608 - projections constants
+            ),
             COLUMNAR_SCHEMAS[STEPS_PARQUET],
             session_dir / STEPS_PARQUET,
         )
@@ -522,8 +527,10 @@ class ColumnarArtifactProducer:
         ColumnarArtifactProducer._write(
             con,
             _batches(_call_rows(session_id, step_list), calls_schema),
-            "SELECT session_id, "  # noqa: S608 — projections constants only
-            f"{render(step_key_columns(MEMBER_COLUMNS))}, {render(CALL_COLUMNS)} FROM {_SOURCE}",
+            SqlFragment(
+                "SELECT session_id, "  # noqa: S608  # nosec B608 - projections constants only
+                f"{render(step_key_columns(MEMBER_COLUMNS))}, {render(CALL_COLUMNS)} FROM {_SOURCE}"
+            ),
             COLUMNAR_SCHEMAS[TOOL_CALLS_PARQUET],
             session_dir / TOOL_CALLS_PARQUET,
         )
@@ -532,8 +539,10 @@ class ColumnarArtifactProducer:
         ColumnarArtifactProducer._write(
             con,
             _batches(_result_rows(session_id, step_list), results_schema),
-            "SELECT session_id, "  # noqa: S608 — projections constants only
-            f"{render(step_key_columns(MEMBER_COLUMNS))}, {render(RESULT_COLUMNS)} FROM {_SOURCE}",
+            SqlFragment(
+                "SELECT session_id, "  # noqa: S608  # nosec B608 - projections constants only
+                f"{render(step_key_columns(MEMBER_COLUMNS))}, {render(RESULT_COLUMNS)} FROM {_SOURCE}"
+            ),
             COLUMNAR_SCHEMAS[TOOL_RESULTS_PARQUET],
             session_dir / TOOL_RESULTS_PARQUET,
         )
@@ -542,7 +551,7 @@ class ColumnarArtifactProducer:
     def _write(
         con: duckdb.DuckDBPyConnection,
         batches: Iterator[Any],
-        select_sql: str,
+        select_sql: SqlFragment,
         columns: Sequence[tuple[str, str]],
         target: Path,
     ) -> None:

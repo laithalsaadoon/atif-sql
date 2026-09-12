@@ -403,7 +403,10 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
     An unreadable session lands in no other counter — not materialized, not
     up-to-date, not skipped-live, not failed, and never ghosted — so a pass
     that could only stat nothing prints all zeroes and reads as an idle,
-    complete corpus unless ``unreadable`` is shown alongside them.
+    complete corpus unless ``unreadable`` is shown alongside them. A rejected
+    session (a transcript whose name fails the session id boundary) is the
+    same kind of silence and gets the same treatment; its name is printed
+    ``repr``-quoted because the whole point is that it carries odd characters.
     """
     payload = {
         "materialized": report.materialized_count,
@@ -415,6 +418,8 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         "removed_session_ids": list(report.removed_session_ids),
         "unreadable": report.unreadable_count,
         "unreadable_session_ids": list(report.unreadable_session_ids),
+        "rejected": report.rejected_count,
+        "rejected_session_ids": list(report.rejected_session_ids),
         "total_seconds": round(report.total_seconds, 3),
         "convert_seconds": round(report.convert_seconds, 3),
         "workers": report.workers,
@@ -427,7 +432,8 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
             f"skipped-live: {report.skipped_live_count}  "
             f"failed: {report.failed_count}  "
             f"removed: {report.sessions_removed}  "
-            f"unreadable: {report.unreadable_count}"
+            f"unreadable: {report.unreadable_count}  "
+            f"rejected: {report.rejected_count}"
         )
         print(
             f"total: {report.total_seconds:.2f}s  "
@@ -439,6 +445,8 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
             print(f"  FAILED {failure.session_id}: {failure.error}", file=sys.stderr)
         for session_id in report.unreadable_session_ids:
             print(f"  UNREADABLE {session_id}", file=sys.stderr)
+        for session_name in report.rejected_session_ids:
+            print(f"  REJECTED {session_name!r}", file=sys.stderr)
     else:
         emit_json(payload, fmt)
 
@@ -1171,7 +1179,7 @@ def search(
             {session_filter}
             ORDER BY array_cosine_distance(me.embedding, (SELECT v FROM qv)) ASC
             LIMIT ?
-        """  # noqa: S608 — dim is len(vector); session_id, k and the vector are ?-bound
+        """  # noqa: S608  # nosec B608 - dim is len(vector); session_id, k and the vector are ?-bound
         try:
             cursor = con.execute(sql, params)
             columns = [d[0] for d in cursor.description or ()]

@@ -141,8 +141,8 @@ def _view_sql(name: str) -> str:
     ts_col = next((col for col, typ in schema if typ.startswith("TIMESTAMP")), None)
     if ts_col is not None:
         # The view name and its timestamp column both come from the static catalog.
-        return f"SELECT * FROM {name} ORDER BY {ts_col} DESC LIMIT 10"  # noqa: S608
-    return f"SELECT * FROM {name} LIMIT 10"  # noqa: S608
+        return f"SELECT * FROM {name} ORDER BY {ts_col} DESC LIMIT 10"  # noqa: S608  # nosec B608 - view name and column are VIEW_SCHEMA constants
+    return f"SELECT * FROM {name} LIMIT 10"  # noqa: S608  # nosec B608 - view name is a VIEW_SCHEMA constant
 
 
 def _macro_sql(name: str, params: tuple[str, ...]) -> str:
@@ -158,7 +158,7 @@ def _macro_sql(name: str, params: tuple[str, ...]) -> str:
         raise KeyError(msg) from exc
     if name in TABLE_MACRO_NAMES:
         # The macro name comes from MACRO_SIGNATURES and args from ARG_EXEMPLARS.
-        return f"SELECT * FROM {name}({args}) LIMIT 10"  # noqa: S608
+        return f"SELECT * FROM {name}({args}) LIMIT 10"  # noqa: S608  # nosec B608 - macro name from MACRO_SIGNATURES, args from ARG_EXEMPLARS
     return f"SELECT {name}({args}) AS {name}"
 
 

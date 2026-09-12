@@ -41,8 +41,18 @@ Design notes
   parquet the views will open, so the query sandbox can grant exactly those
   files.
 * All views use ``CREATE OR REPLACE`` so callers may safely re-register.
-* Globs are inlined into DDL via :func:`~atif_duck.domain.sql_literal.sql_literal` (DuckDB rejects prepared
-  parameters as table-function arguments).
+* No corpus path is ever part of a statement's text. The TEMP TABLE readers
+  take their glob or file list as a bound parameter (``read_json(?)``); the
+  parquet readers are relations built through the connection's
+  ``read_parquet`` API (the file list is a Python value) and registered as
+  views, because ``CREATE VIEW`` itself cannot be prepared. Every remaining interpolation is
+  a module constant, a catalog constant, or a projection expression, and the
+  AST test in ``tests/test_sql_text_boundaries.py`` fails on anything else.
+* A session directory whose name fails the boundary in
+  :mod:`atif_duck.domain.session_id` registers nothing: the name is the one
+  piece of outside text that becomes a path, so it is checked before any path
+  is built, once per registration, and reported in
+  :attr:`RawSources.rejected_session_ids`.
 * register-or-fail-loud: every registration function logs via
   ``logger.exception`` and re-raises on any DDL failure.
 
@@ -77,7 +87,8 @@ from atif_duck.domain.columnar import (
     TOOL_RESULTS_PARQUET,
 )
 from atif_duck.domain.embedding_guard import ensure_store_matches
-from atif_duck.domain.sql_literal import sql_literal
+from atif_duck.domain.session_id import session_id_rejection
+from atif_duck.domain.sql_literal import SqlFragment, sql_literal
 from atif_duck.infrastructure.columnar import ColumnarCoverage, session_has_columnar
 from atif_duck.infrastructure.projections import (
     CALL_COLUMNS,
@@ -116,6 +127,15 @@ _RAW_EDGES_TABLE: str = "v_raw_edges"
 _RAW_LOSS_REPORTS_TABLE: str = "v_raw_loss_reports"
 _RAW_META_TABLE: str = "v_raw_meta"
 
+#: The columnar branch's parquet readers: one parameterized ``read_parquet``
+#: relation per artifact kind, registered as a view under these names and
+#: selected from by the union views above. They exist only while at least one
+#: session is read from parquet.
+_RAW_SESSIONS_PARQUET_TABLE: str = "v_raw_sessions_parquet"
+_RAW_STEPS_PARQUET_TABLE: str = "v_raw_steps_parquet"
+_RAW_TOOL_CALLS_PARQUET_TABLE: str = "v_raw_tool_calls_parquet"
+_RAW_TOOL_RESULTS_PARQUET_TABLE: str = "v_raw_tool_results_parquet"
+
 
 @dataclass(frozen=True, slots=True)
 class RawSources:
@@ -133,6 +153,9 @@ class RawSources:
     json_session_ids: tuple[str, ...]
     #: Every parquet a registered raw reader opens at caller-query time.
     lazy_read_paths: tuple[Path, ...]
+    #: Session directory names that failed the session id boundary and so
+    #: contribute to no view (sorted). Logged once each at registration.
+    rejected_session_ids: tuple[str, ...] = ()
 
     @property
     def coverage(self) -> ColumnarCoverage:
@@ -226,39 +249,42 @@ _META_COLUMNS: dict[str, str] = {
 }
 
 
-def _typed_empty(columns: Sequence[tuple[str, str]]) -> str:
+def _typed_empty(columns: Sequence[tuple[str, str]]) -> SqlFragment:
     """A zero-row SELECT carrying the declared column names and types."""
     projected = ", ".join(f"CAST(NULL AS {sql_type}) AS {name}" for name, sql_type in columns)
-    return f"SELECT {projected} WHERE false"
+    return SqlFragment(f"SELECT {projected} WHERE false")
 
 
-def _typed_parquet_select(paths: Sequence[Path], columns: Sequence[tuple[str, str]]) -> str:
-    """SELECT the declared columns, cast to their declared types, from a parquet list.
+def _typed_parquet_select(reader: str, columns: Sequence[tuple[str, str]]) -> SqlFragment:
+    """SELECT the declared columns, cast to their declared types, from a parquet reader.
 
-    The casts are belt and braces: the producer wrote these exact types, and
-    a ``UNION ALL`` against the JSON branch needs both sides to agree on
-    every column, so the declared type is asserted here rather than inferred
-    from the first file.
+    ``reader`` is one of the ``_RAW_*_PARQUET_TABLE`` names bound by
+    :func:`_bind_parquet_reader`; the paths themselves never appear here. The
+    casts are belt and braces: the producer wrote these exact types, and a
+    ``UNION ALL`` against the JSON branch needs both sides to agree on every
+    column, so the declared type is asserted here rather than inferred from
+    the first file.
     """
-    files = ", ".join(sql_literal(str(path)) for path in paths)
     projected = ", ".join(f"CAST({name} AS {sql_type}) AS {name}" for name, sql_type in columns)
-    return f"SELECT {projected} FROM read_parquet([{files}])"  # noqa: S608 — paths via sql_literal; columns are catalog constants
+    return SqlFragment(f"SELECT {projected} FROM {reader}")  # noqa: S608  # nosec B608 - reader is a module constant; columns are catalog constants
 
 
-def _union_or_empty(branches: Sequence[str], columns: Sequence[tuple[str, str]]) -> str:
+def _union_or_empty(
+    branches: Sequence[SqlFragment], columns: Sequence[tuple[str, str]]
+) -> SqlFragment:
     """Join the present source branches, or an empty typed relation if none is."""
-    return "\nUNION ALL\n".join(branches) if branches else _typed_empty(columns)
+    return SqlFragment("\nUNION ALL\n".join(branches)) if branches else _typed_empty(columns)
 
 
-def _json_steps_select() -> str:
+def _json_steps_select() -> SqlFragment:
     """The JSON path's ``steps`` projection over ``v_raw_trajectories_json``."""
-    return (
-        f"SELECT t.session_id_path AS session_id,\n    {render(step_columns(WHOLE_STEP))}\n"
+    return SqlFragment(
+        f"SELECT t.session_id_path AS session_id,\n    {render(step_columns(WHOLE_STEP))}\n"  # nosec B608 - projection constants over a module-constant table
         f"FROM {_RAW_TRAJECTORIES_JSON_TABLE} t, UNNEST(t.steps) AS s(step)"
     )
 
 
-def _json_tool_calls_select() -> str:
+def _json_tool_calls_select() -> SqlFragment:
     """The JSON path's ``tool_calls`` projection.
 
     The inner query narrows each step to (ids, ts, calls list) BEFORE the
@@ -266,8 +292,8 @@ def _json_tool_calls_select() -> str:
     that inline subagent sidechains, and unnesting it directly replicates
     that string once per tool call.
     """
-    return (
-        f"SELECT session_id, step_id, ts, {render(CALL_COLUMNS)}\n"  # noqa: S608 — constants only
+    return SqlFragment(
+        f"SELECT session_id, step_id, ts, {render(CALL_COLUMNS)}\n"  # noqa: S608  # nosec B608 - constants only
         "FROM (\n"
         f"    SELECT t.session_id_path AS session_id, {render(step_key_columns(WHOLE_STEP))},\n"
         f"           {WHOLE_STEP.json('tool_calls', '[*]')} AS calls\n"
@@ -277,10 +303,10 @@ def _json_tool_calls_select() -> str:
     )
 
 
-def _json_tool_results_select() -> str:
+def _json_tool_results_select() -> SqlFragment:
     """The JSON path's ``tool_results`` projection (same early narrowing)."""
-    return (
-        f"SELECT session_id, step_id, ts, {render(RESULT_COLUMNS)}\n"  # noqa: S608 — constants only
+    return SqlFragment(
+        f"SELECT session_id, step_id, ts, {render(RESULT_COLUMNS)}\n"  # noqa: S608  # nosec B608 - constants only
         "FROM (\n"
         f"    SELECT t.session_id_path AS session_id, {render(step_key_columns(WHOLE_STEP))},\n"
         f"           {WHOLE_STEP.json('observation', '.results[*]')} AS results\n"
@@ -299,44 +325,71 @@ _TRAJECTORY_RELATION_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _json_trajectories_select() -> str:
+def _json_trajectories_select() -> SqlFragment:
     names = ", ".join(name for name, _ in _TRAJECTORY_RELATION_COLUMNS)
-    return f"SELECT {names} FROM {_RAW_TRAJECTORIES_JSON_TABLE}"  # noqa: S608 — constants only
+    return SqlFragment(f"SELECT {names} FROM {_RAW_TRAJECTORIES_JSON_TABLE}")  # noqa: S608  # nosec B608 - constants only
 
 
-def _columnar_trajectories_select(paths: Sequence[Path], sessions_dir: Path) -> str:
+def _columnar_trajectories_select() -> SqlFragment:
     """``session.parquet`` rows in ``v_raw_trajectories`` shape.
 
     ``trajectory_path`` is derived the way ``read_json(filename=true)``
     reports it (``<sessions_dir>/<id>/trajectory.json``), so the ``sessions``
-    view's path column reads the same whichever branch produced the row.
+    view's path column reads the same whichever branch produced the row. The
+    parquet reader carries each file's own ``filename``
+    (``<sessions_dir>/<id>/session.parquet``), so the trajectory path is that
+    string with its last component replaced: the corpus root never has to be
+    spliced into the statement.
     """
-    files = ", ".join(sql_literal(str(path)) for path in paths)
     casts = ", ".join(
         f"CAST({name} AS {sql_type}) AS {name}"
         for name, sql_type in SESSION_COLUMNS
         if name != "session_id_path"
     )
-    path_expr = f"{sql_literal(str(sessions_dir))} || '/' || session_id_path || '/trajectory.json'"
-    return (
-        f"SELECT {casts}, {path_expr} AS trajectory_path, session_id_path "  # noqa: S608 — paths and dir via sql_literal; columns are catalog constants
-        f"FROM read_parquet([{files}])"
+    path_expr = "regexp_replace(filename, '/[^/]+$', '/trajectory.json')"
+    return SqlFragment(
+        f"SELECT {casts}, {path_expr} AS trajectory_path, session_id_path "  # noqa: S608  # nosec B608 - catalog constants over a module-constant reader
+        f"FROM {_RAW_SESSIONS_PARQUET_TABLE}"
     )
 
 
-def _render_columns_clause(columns: dict[str, str]) -> str:
+def _render_columns_clause(columns: dict[str, str]) -> SqlFragment:
     """Render a ``columns={...}`` clause body for ``read_json``.
 
     Keys are bare DuckDB identifiers (no quoting); values are SQL type
     strings wrapped in single quotes. Both halves come from code-side
     constants — never user input — so escaping is defensive only.
     """
-    return ", ".join(f"{name}: {sql_literal(typ)}" for name, typ in columns.items())
+    return SqlFragment(", ".join(f"{name}: {sql_literal(typ)}" for name, typ in columns.items()))
 
 
-def _catalog_columns(view_name: str) -> str:
+def _catalog_columns(view_name: str) -> SqlFragment:
     """The catalog's column names for ``view_name``, comma-joined in catalog order."""
-    return ", ".join(name for name, _ in VIEW_SCHEMA[view_name])
+    return SqlFragment(", ".join(name for name, _ in VIEW_SCHEMA[view_name]))
+
+
+def _bind_parquet_reader(
+    con: duckdb.DuckDBPyConnection,
+    reader: str,
+    paths: Sequence[Path],
+    *,
+    with_filename: bool = False,
+) -> None:
+    """Register ``reader`` as a lazy ``read_parquet`` relation over ``paths``.
+
+    ``CREATE VIEW ... read_parquet(?)`` is refused ("this type of statement
+    can't be prepared"), so the file list goes through the connection's own
+    ``read_parquet`` relation API, which takes it as a Python value, and that
+    relation is registered as the view. It plans as the same ``PARQUET_SCAN``
+    a hand-written view would (projection and filter pushdown included) and
+    opens the files per query, not at registration. Measured on the 300
+    session panel corpus it matches the inlined-literal view on both wall
+    time and peak memory; a relation built from ``sql("... read_parquet(?)",
+    params=...)`` instead did NOT (about 3x the memory), so that shape is
+    deliberately not used here.
+    """
+    files = [str(path) for path in paths]
+    con.read_parquet(files, filename=with_filename).create_view(reader, replace=True)
 
 
 # ---------------------------------------------------------------------------
@@ -344,25 +397,49 @@ def _catalog_columns(view_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _warn_incomplete_session_dirs(con: duckdb.DuckDBPyConnection, sessions_dir: Path) -> None:
-    """Log every session dir excluded by the meta gate as skipped-incomplete.
+def _gate_session_dirs(con: duckdb.DuckDBPyConnection, sessions_dir: Path) -> tuple[str, ...]:
+    """Apply the two per-directory gates; return the names the boundary rejected.
 
-    The gate itself keeps torn dirs out of every view; this makes the
-    exclusion OBSERVABLE — a session silently missing from ``sessions`` is
-    much harder to diagnose than a logged skip.
+    Walks ``sessions_dir`` once, right after ``v_raw_meta`` is read and
+    before any per-session path is built:
+
+    * A directory whose name fails the session id boundary
+      (:mod:`atif_duck.domain.session_id`) is REJECTED: its row is deleted
+      from ``v_raw_meta`` (by bound parameter, so the offending name is data
+      even here), which keeps it out of every other reader through the meta
+      gate and out of :func:`_split_sources`, and it is logged once. A corpus
+      an older version wrote may hold such a dir; it is reported in
+      :attr:`RawSources.rejected_session_ids` and never read.
+    * A well-named directory without a ``meta.json`` is INCOMPLETE (torn
+      writer, partial cleanup). The meta gate already excludes it; this makes
+      the exclusion OBSERVABLE, because a session silently missing from
+      ``sessions`` is much harder to diagnose than a logged skip.
     """
     if not sessions_dir.is_dir():
-        return
+        return ()
     # The one interpolation is the module constant _RAW_META_TABLE.
-    rows = con.execute(f"SELECT session_id_path FROM {_RAW_META_TABLE}").fetchall()  # noqa: S608
+    rows = con.execute(f"SELECT session_id_path FROM {_RAW_META_TABLE}").fetchall()  # noqa: S608  # nosec B608 - module constant
     with_meta = {row[0] for row in rows}
+    rejected: list[str] = []
     for session_dir in sorted(sessions_dir.iterdir()):
-        if session_dir.is_dir() and session_dir.name not in with_meta:
+        if not session_dir.is_dir():
+            continue
+        name = session_dir.name
+        rejection = session_id_rejection(name)
+        if rejection is not None:
+            logger.warning(
+                "Rejecting session dir {!r} ({}); nothing from it is registered", name, rejection
+            )
+            con.execute(f"DELETE FROM {_RAW_META_TABLE} WHERE session_id_path = ?", [name])  # noqa: S608  # nosec B608 - module constant; the name is bound
+            rejected.append(name)
+            continue
+        if name not in with_meta:
             logger.warning(
                 "Skipping incomplete session dir {} (no meta.json — "
                 "crashed writer or partial cleanup); excluded from all views",
                 session_dir,
             )
+    return tuple(sorted(rejected))
 
 
 def _split_sources(
@@ -376,11 +453,14 @@ def _split_sources(
     failing the whole registration: ``read_json`` over an explicit path list
     errors on one missing file, and one broken session must not take the
     corpus offline.
+
+    Runs after :func:`_gate_session_dirs`, so every id read here has passed
+    the session id boundary and may become a path component.
     """
     # The one interpolation is the module constant _RAW_META_TABLE plus the
     # contract's meta key.
     rows = con.execute(
-        f"SELECT session_id_path, {META_COLUMNAR_KEY} FROM {_RAW_META_TABLE} ORDER BY 1"  # noqa: S608
+        f"SELECT session_id_path, {META_COLUMNAR_KEY} FROM {_RAW_META_TABLE} ORDER BY 1"  # noqa: S608  # nosec B608 - module constants
     ).fetchall()
     columnar_ids: list[str] = []
     json_ids: list[str] = []
@@ -403,19 +483,24 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     """Create the raw readers over ``corpus_root``.
 
     ``v_raw_meta`` / ``v_raw_edges`` / ``v_raw_loss_reports`` are TEMP TABLEs
-    over ``read_json`` globs of the CONTRACT corpus layout
+    over ``read_json`` of the CONTRACT corpus layout
     ``<corpus_root>/sessions/<session_id>/...``, with ``session_id_path``
-    derived from the directory component via regexp over ``filename``.
+    derived from the directory component via regexp over ``filename``. Each
+    glob is ONE bound parameter, never statement text. (A glob rather than an
+    explicit file list because DuckDB reads 300 small files about twice as
+    fast through a glob; the cost is that a corpus root containing a glob
+    metacharacter such as ``[`` or a backslash is not readable, which was already so.)
 
     ``v_raw_trajectories`` / ``v_raw_steps`` / ``v_raw_tool_calls`` /
     ``v_raw_tool_results`` are VIEWs that union up to two sources, chosen
     per session by :func:`_split_sources`: the session's parquet artifacts
-    (read lazily with ``read_parquet``, no JSON touched at query time) or
-    its ``trajectory.json`` (parsed once into the TEMP TABLE
-    ``v_raw_trajectories_json`` and unnested per query, as every version
-    before the columnar artifacts did). A corpus with no columnar session
-    registers exactly as before; a corpus with no JSON session never opens
-    a ``trajectory.json``.
+    (read lazily through the ``_RAW_*_PARQUET_TABLE`` readers, each a
+    ``read_parquet`` relation over a Python file list, no JSON touched at
+    query time) or its ``trajectory.json`` (parsed once into the TEMP TABLE
+    ``v_raw_trajectories_json`` from a bound file list and unnested per
+    query, as every version before the columnar artifacts did). A corpus
+    with no columnar session registers exactly as before; a corpus with no
+    JSON session never opens a ``trajectory.json``.
 
     TORN-SET GUARD: ``meta.json`` is written last by the corpus writer, so
     its presence marks a session dir as complete. Every other reader is
@@ -423,6 +508,12 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     from ``v_raw_meta``; edges and loss use a semi-join), so a session dir
     missing its meta (crashed writer) contributes nothing to any view
     instead of a partial artifact set.
+
+    SESSION ID BOUNDARY: a session dir whose name fails
+    :mod:`atif_duck.domain.session_id` is removed from ``v_raw_meta`` by
+    :func:`_gate_session_dirs` before any per-session path is built, so the
+    meta gate excludes it everywhere. A corpus an older version wrote may
+    hold such a dir; it is logged once and reported, never read.
 
     Parameters
     ----------
@@ -434,8 +525,8 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     Returns
     -------
     RawSources
-        Which sessions took which path, and every parquet the views open at
-        query time (for the sandbox's file allowlist).
+        Which sessions took which path, every parquet the views open at
+        query time (for the sandbox's file allowlist), and the rejected names.
 
     Raises
     ------
@@ -446,9 +537,9 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         ``logger.exception`` before re-raise.
     """
     sessions_dir = corpus_root / "sessions"
-    edges_glob = sql_literal(str(sessions_dir / "*" / "edges.jsonl"))
-    loss_glob = sql_literal(str(sessions_dir / "*" / "loss_report.json"))
-    meta_glob = sql_literal(str(sessions_dir / "*" / "meta.json"))
+    edges_glob = str(sessions_dir / "*" / "edges.jsonl")
+    loss_glob = str(sessions_dir / "*" / "loss_report.json")
+    meta_glob = str(sessions_dir / "*" / "meta.json")
 
     # meta.json is written LAST by atif-corpus — its presence marks a
     # session dir as COMPLETE. The edges and loss readers are restricted to
@@ -456,10 +547,11 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     # session dir (crashed writer, partial cleanup) is invisible to every
     # view rather than surfacing a partial artifact set.
     # The one interpolation is the module constant _RAW_META_TABLE.
-    meta_gate = f"session_id_path IN (SELECT session_id_path FROM {_RAW_META_TABLE})"  # noqa: S608
+    meta_gate = f"session_id_path IN (SELECT session_id_path FROM {_RAW_META_TABLE})"  # noqa: S608  # nosec B608 - module constant
 
     try:
-        # meta FIRST: every other reader derives from it.
+        # meta FIRST: every other reader derives from it. The glob is the
+        # statement's one parameter.
         con.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {_RAW_META_TABLE} AS
@@ -468,15 +560,16 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
                    regexp_extract(filename, '/sessions/([^/]+)/meta\\.json$', 1)
                        AS session_id_path
             FROM read_json(
-                {meta_glob},
+                ?,
                 format='auto',
                 filename=true,
                 columns={{{_render_columns_clause(_META_COLUMNS)}}}
             );
-            """  # noqa: S608 — meta glob escaped by sql_literal; table and columns are constants
+            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table and columns are constants
+            [meta_glob],
         )
         logger.debug("Registered {} from glob {}", _RAW_META_TABLE, meta_glob)
-        _warn_incomplete_session_dirs(con, sessions_dir)
+        rejected = _gate_session_dirs(con, sessions_dir)
 
         columnar_ids, json_ids = _split_sources(con, sessions_dir)
         logger.info(
@@ -485,43 +578,47 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
             len(json_ids),
         )
 
-        trajectory_branches: list[str] = []
-        steps_branches: list[str] = []
-        calls_branches: list[str] = []
-        results_branches: list[str] = []
+        trajectory_branches: list[SqlFragment] = []
+        steps_branches: list[SqlFragment] = []
+        calls_branches: list[SqlFragment] = []
+        results_branches: list[SqlFragment] = []
         lazy_paths: list[Path] = []
 
+        parquet_readers: tuple[tuple[str, str, bool], ...] = (
+            (_RAW_SESSIONS_PARQUET_TABLE, SESSION_PARQUET, True),
+            (_RAW_STEPS_PARQUET_TABLE, STEPS_PARQUET, False),
+            (_RAW_TOOL_CALLS_PARQUET_TABLE, TOOL_CALLS_PARQUET, False),
+            (_RAW_TOOL_RESULTS_PARQUET_TABLE, TOOL_RESULTS_PARQUET, False),
+        )
         if columnar_ids:
-            session_paths = [sessions_dir / sid / SESSION_PARQUET for sid in columnar_ids]
-            steps_paths = [sessions_dir / sid / STEPS_PARQUET for sid in columnar_ids]
-            calls_paths = [sessions_dir / sid / TOOL_CALLS_PARQUET for sid in columnar_ids]
-            results_paths = [sessions_dir / sid / TOOL_RESULTS_PARQUET for sid in columnar_ids]
-            trajectory_branches.append(_columnar_trajectories_select(session_paths, sessions_dir))
-            steps_branches.append(_typed_parquet_select(steps_paths, VIEW_SCHEMA["steps"]))
-            calls_branches.append(_typed_parquet_select(calls_paths, VIEW_SCHEMA["tool_calls"]))
-            results_branches.append(
-                _typed_parquet_select(results_paths, VIEW_SCHEMA["tool_results"])
+            for reader, artifact, with_filename in parquet_readers:
+                paths = [sessions_dir / sid / artifact for sid in columnar_ids]
+                _bind_parquet_reader(con, reader, paths, with_filename=with_filename)
+                lazy_paths.extend(paths)
+            trajectory_branches.append(_columnar_trajectories_select())
+            steps_branches.append(
+                _typed_parquet_select(_RAW_STEPS_PARQUET_TABLE, VIEW_SCHEMA["steps"])
             )
-            for sid in columnar_ids:
-                lazy_paths.extend(
-                    sessions_dir / sid / name
-                    for name in (
-                        SESSION_PARQUET,
-                        STEPS_PARQUET,
-                        TOOL_CALLS_PARQUET,
-                        TOOL_RESULTS_PARQUET,
-                    )
-                )
+            calls_branches.append(
+                _typed_parquet_select(_RAW_TOOL_CALLS_PARQUET_TABLE, VIEW_SCHEMA["tool_calls"])
+            )
+            results_branches.append(
+                _typed_parquet_select(_RAW_TOOL_RESULTS_PARQUET_TABLE, VIEW_SCHEMA["tool_results"])
+            )
+        else:
+            # A connection re-registered after every columnar session lost
+            # its artifacts must not keep the previous generation's readers.
+            for reader, _, _ in parquet_readers:
+                con.execute(f"DROP VIEW IF EXISTS {reader};")
 
         if json_ids:
             # One trajectory document per file -> format='auto' (NOT NDJSON).
             # The explicit projection keeps `steps` as a lazy JSON[] column.
             # An explicit path list rather than a glob: the glob would parse
             # the columnar sessions' trajectory.json too, which is the cost
-            # this whole arrangement exists to avoid.
-            json_files = ", ".join(
-                sql_literal(str(sessions_dir / sid / "trajectory.json")) for sid in json_ids
-            )
+            # this whole arrangement exists to avoid. The list is the
+            # statement's one parameter.
+            json_files = [str(sessions_dir / sid / "trajectory.json") for sid in json_ids]
             con.execute(
                 f"""
                 CREATE OR REPLACE TEMP TABLE {_RAW_TRAJECTORIES_JSON_TABLE} AS
@@ -530,13 +627,14 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
                        regexp_extract(filename, '/sessions/([^/]+)/trajectory\\.json$', 1)
                            AS session_id_path
                 FROM read_json(
-                    [{json_files}],
+                    ?,
                     format='auto',
                     filename=true,
                     columns={{{_render_columns_clause(_TRAJECTORY_COLUMNS)}}},
                     maximum_object_size={_MAX_OBJECT_SIZE}
                 );
-                """  # noqa: S608 — every path escaped by sql_literal; table/columns/cap are constants
+                """,  # noqa: S608  # nosec B608 - file list is a bound parameter; table/columns/cap are constants
+                [json_files],
             )
             logger.debug(
                 "Registered {} over {} trajectory.json file(s)",
@@ -559,10 +657,13 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
             (_RAW_TOOL_RESULTS_TABLE, results_branches, VIEW_SCHEMA["tool_results"]),
         ):
             # Table names are module constants; every branch is built above
-            # from catalog constants and sql_literal-escaped paths.
-            con.execute(f"CREATE OR REPLACE VIEW {table} AS\n{_union_or_empty(branches, columns)};")
+            # from catalog constants over module-constant readers.
+            con.execute(f"CREATE OR REPLACE VIEW {table} AS\n{_union_or_empty(branches, columns)};")  # nosec B608 - constants only
             logger.debug("Registered {} ({} source branch(es))", table, len(branches))
 
+        # edges.jsonl is one line per RAW record -> newline_delimited.
+        # The record's own `source_file` (the raw transcript path) is kept;
+        # the edges.jsonl path itself is aliased to `edges_path`.
         # edges.jsonl is one line per RAW record -> newline_delimited.
         # The record's own `source_file` (the raw transcript path) is kept;
         # the edges.jsonl path itself is aliased to `edges_path`.
@@ -575,14 +676,15 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
                        regexp_extract(filename, '/sessions/([^/]+)/edges\\.jsonl$', 1)
                            AS session_id_path
                 FROM read_json(
-                    {edges_glob},
+                    ?,
                     format='newline_delimited',
                     filename=true,
                     columns={{{_render_columns_clause(_EDGE_COLUMNS)}}},
                     maximum_object_size={_MAX_OBJECT_SIZE}
                 )
             ) WHERE {meta_gate};
-            """  # noqa: S608 — edges glob escaped by sql_literal; table/columns/gate are constants
+            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants
+            [edges_glob],
         )
         logger.debug("Registered {} from glob {}", _RAW_EDGES_TABLE, edges_glob)
 
@@ -595,13 +697,14 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
                        regexp_extract(filename, '/sessions/([^/]+)/loss_report\\.json$', 1)
                            AS session_id_path
                 FROM read_json(
-                    {loss_glob},
+                    ?,
                     format='auto',
                     filename=true,
                     columns={{{_render_columns_clause(_LOSS_REPORT_COLUMNS)}}}
                 )
             ) WHERE {meta_gate};
-            """  # noqa: S608 — loss glob escaped by sql_literal; table/columns/gate are constants
+            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants
+            [loss_glob],
         )
         logger.debug("Registered {} from glob {}", _RAW_LOSS_REPORTS_TABLE, loss_glob)
     except Exception:
@@ -612,6 +715,7 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         columnar_session_ids=tuple(columnar_ids),
         json_session_ids=tuple(json_ids),
         lazy_read_paths=tuple(lazy_paths),
+        rejected_session_ids=rejected,
     )
 
 
@@ -649,7 +753,7 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # applied by register_raw when it builds ``v_raw_steps``; this view
         # pins the catalog's column order over that relation.
         con.execute(
-            f"CREATE OR REPLACE VIEW steps AS SELECT {_catalog_columns('steps')} "  # noqa: S608
+            f"CREATE OR REPLACE VIEW steps AS SELECT {_catalog_columns('steps')} "  # noqa: S608  # nosec B608 - catalog columns over a module-constant table
             f"FROM {_RAW_STEPS_TABLE};"
         )
         logger.debug("Registered view: steps")
@@ -735,7 +839,7 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # parsed JSON value, NOT a JSON string, so a query must not
         # json_extract it twice. Expressions: projections.CALL_COLUMNS.
         con.execute(
-            f"CREATE OR REPLACE VIEW tool_calls AS SELECT {_catalog_columns('tool_calls')} "  # noqa: S608
+            f"CREATE OR REPLACE VIEW tool_calls AS SELECT {_catalog_columns('tool_calls')} "  # noqa: S608  # nosec B608 - catalog columns over a module-constant table
             f"FROM {_RAW_TOOL_CALLS_TABLE};"
         )
         logger.debug("Registered view: tool_calls")
@@ -746,7 +850,7 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # with `USING (tool_use_id)` and neither side needs a rename.
         # Expressions: projections.RESULT_COLUMNS.
         con.execute(
-            f"CREATE OR REPLACE VIEW tool_results AS SELECT {_catalog_columns('tool_results')} "  # noqa: S608
+            f"CREATE OR REPLACE VIEW tool_results AS SELECT {_catalog_columns('tool_results')} "  # noqa: S608  # nosec B608 - catalog columns over a module-constant table
             f"FROM {_RAW_TOOL_RESULTS_TABLE};"
         )
         logger.debug("Registered view: tool_results")
@@ -946,8 +1050,8 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # ``skill_id`` is the raw identifier, NOT a normalized name:
         # ``erpaval`` and ``personal-plugins:erpaval`` are distinct rows, so a
         # per-skill aggregate has to decide for itself whether to fold them.
-        cmd_name_re = "<command-name>/([A-Za-z0-9_:.-]+)</command-name>"
-        args_re = "<command-args>([^<]*)</command-args>"
+        cmd_name_re = SqlFragment("<command-name>/([A-Za-z0-9_:.-]+)</command-name>")
+        args_re = SqlFragment("<command-args>([^<]*)</command-args>")
         con.execute(
             f"""
             CREATE OR REPLACE VIEW skill_invocations AS
@@ -975,7 +1079,7 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
             WHERE s.source = 'user'
               AND s.message LIKE '%<command-name>/%'
               AND regexp_extract(s.message, '{cmd_name_re}', 1) != '';
-            """  # noqa: S608 — the two interpolated regexes are local literals defined above
+            """  # noqa: S608  # nosec B608 - the two interpolated regexes are local literals defined above
         )
         logger.debug("Registered view: skill_invocations")
 
@@ -1140,6 +1244,10 @@ def register_vss(
     attached = False
     if lance_uri.is_dir():
         try:
+            # ATTACH is one of the statement kinds DuckDB will not prepare, so
+            # this is the one corpus path that still enters statement text; it
+            # does so only through sql_literal, and the boundary test registers
+            # a store under a quoted path to keep it that way.
             con.execute(
                 f"ATTACH IF NOT EXISTS {sql_literal(str(lance_uri))} AS lance_store (TYPE LANCE);"
             )
@@ -1166,7 +1274,7 @@ def register_vss(
                 embedding   FLOAT[{dim_i}],
                 embedded_at TIMESTAMPTZ
             );
-            """
+            """  # nosec B608 - the only interpolation is the width, through int() coercion
         )
         return False
 
@@ -1200,7 +1308,7 @@ def register_vss(
             CAST(embedding AS FLOAT[{dim_i}]) AS embedding,
             embedded_at
         FROM lance_store.main.embeddings;
-        """  # noqa: S608 — the only interpolation is the width, through int() coercion
+        """  # noqa: S608  # nosec B608 - the only interpolation is the width, through int() coercion
     )
     count_row = con.execute("SELECT count(*) FROM message_embeddings;").fetchone()
     count = int(count_row[0]) if count_row else 0
@@ -1213,7 +1321,7 @@ def register_vss(
 # ---------------------------------------------------------------------------
 
 
-def _pricing_values_clause(pricing: dict[str, tuple[float, float]]) -> str:
+def _pricing_values_clause(pricing: dict[str, tuple[float, float]]) -> SqlFragment:
     """Render a pricing dict as an inline SQL ``VALUES`` row list.
 
     Parameters
@@ -1229,7 +1337,7 @@ def _pricing_values_clause(pricing: dict[str, tuple[float, float]]) -> str:
         empty ``VALUES`` lists).
     """
     if not pricing:
-        return f"({sql_literal('__no_pricing__')}, 0.0, 0.0)"
+        return SqlFragment(f"({sql_literal('__no_pricing__')}, 0.0, 0.0)")
     # The model NAME is escaped and the two rates are coerced with `float()`
     # rather than interpolated as they arrive. Both are the declared type of the
     # `pricing` parameter, and atif-cli never passes one — but this is a library
@@ -1240,7 +1348,7 @@ def _pricing_values_clause(pricing: dict[str, tuple[float, float]]) -> str:
         f"({sql_literal(model)}, {float(in_rate)}, {float(out_rate)})"
         for model, (in_rate, out_rate) in sorted(pricing.items())
     ]
-    return ", ".join(rows)
+    return SqlFragment(", ".join(rows))
 
 
 def register_macros(
@@ -1342,7 +1450,7 @@ def register_macros(
                   ON regexp_replace(s.model_name, '-\\d{{8}}$', '') = p.model
                 WHERE s.session_id = sid
             );
-            """  # noqa: S608 — pricing model names escaped by sql_literal; the rates are floats
+            """  # noqa: S608  # nosec B608 - pricing model names escaped by sql_literal; the rates are floats
         )
 
         con.execute(

@@ -37,6 +37,18 @@ proofs are out of scope for the workspace.
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
   One key is reserved and not hashed: `codex` names the Codex CLI corpus.
+- session_id boundary: the id comes from the transcript filename and is the
+  one piece of outside text that becomes a corpus path. It must match
+  `^[A-Za-z0-9][A-Za-z0-9._-]*$` and be at most 255 characters (every id
+  Claude Code and Codex produce does). The scanner skips a transcript whose
+  id fails, logs the reason, and reports it under `rejected` /
+  `rejected_session_ids`; nothing from it is written, and a corpus dir an
+  older version wrote under such a name is left alone, never ghosted.
+  atif-duck applies the SAME rule before it builds any path: a session dir
+  whose name fails registers nothing and is reported in
+  `RawSources.rejected_session_ids`. The pattern lives once per package
+  (`atif_corpus.domain.session_id`, `atif_duck.domain.session_id`), twinned
+  the way `AgentSource` is, with a test on each side pinning the other's copy.
 - meta.agent: the AgentSource value ("claude-code" or "codex") the session was
   materialized from. A corpus written before this key existed reads as NULL in
   SQL and is still valid; nothing may require it to be present.
@@ -117,6 +129,15 @@ proofs are out of scope for the workspace.
   Sessions carrying current columnar artifacts are read with read_parquet
   instead of read_json, per session, and the two sets are unioned; the
   returned RawSources says which sessions took which path.
+- No corpus path is statement text. The read_json readers take their glob or
+  file list as a bound parameter; the read_parquet readers are relations
+  built through the connection's own API and registered as views (CREATE
+  VIEW can't be prepared). Every remaining f-string placeholder in a SQL
+  statement is a module constant, a catalog constant, a projection
+  expression, or `sql_literal(...)`, and an AST test over the four SQL
+  modules fails on anything else. The two statements DuckDB won't prepare
+  (ATTACH for the Lance store, the producer's one-row session projection)
+  are the only places `sql_literal` still escapes a value.
 - ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
   ArtifactProducer implementation: a pure function of the trajectory that
   writes the four parquet files with the views' own projection expressions,
@@ -135,6 +156,7 @@ proofs are out of scope for the workspace.
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
 atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N]  # sync corpus
+                                       # report adds rejected / rejected_session_ids
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
 atif-sql schema                        # static, <50ms, no duckdb bind

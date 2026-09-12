@@ -2,6 +2,33 @@ version = 1
 revision = 3
 requires-python = ">=3.13"
 
+[options]
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+boto3 = "2026-09-12T21:16:20Z"
+botocore = "2026-09-12T21:16:20Z"
+cyclopts = "2026-09-12T21:16:20Z"
+filelock = "2026-09-12T21:16:20Z"
+grimp = "2026-09-12T21:16:20Z"
+huggingface-hub = "2026-09-12T21:16:20Z"
+hypothesis = "2026-09-12T21:16:20Z"
+litellm = "2026-09-12T21:16:20Z"
+multidict = "2026-09-12T21:16:20Z"
+narwhals = "2026-09-12T21:16:20Z"
+numpy = "2026-09-12T21:16:20Z"
+platformdirs = "2026-09-12T21:16:20Z"
+polars = "2026-09-12T21:16:20Z"
+polars-runtime-32 = "2026-09-12T21:16:20Z"
+pyjwt = "2026-09-12T21:16:20Z"
+regex = "2026-09-12T21:16:20Z"
+ruff = "2026-09-12T21:16:20Z"
+scikit-learn = "2026-09-12T21:16:20Z"
+tqdm = "2026-09-12T21:16:20Z"
+ty = "2026-09-12T21:16:20Z"
+wrapt = "2026-09-12T21:16:20Z"
+
 [manifest]
 members = [
     "atif-analytics",
