@@ -72,6 +72,14 @@ Rules of the road:
   also the one way to aim a pass at the other agent's corpus, which
   `meta.agent` catches: materialize refuses (exit 78) rather than deleting the
   other agent's sessions as ghosts.
+- `materialize` runs its convert+write stage on a spawn-context process pool
+  (`--workers N` / `ATIF_SQL_MATERIALIZE_WORKERS`, default `min(8, cpu_count)`).
+  `--workers 1` is the single-process reference path and must stay
+  byte-identical to the pool; the pool tests in
+  `packages/atif-corpus/tests/test_materialize_parallel.py` pin that, and
+  read worker pids back off disk so a pool that silently ran inline fails.
+  The `ConverterPort` instance is pickled into each worker, so an adapter
+  has to stay picklable.
 
 ## Agent query workflow
 

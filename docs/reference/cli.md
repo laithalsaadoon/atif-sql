@@ -33,7 +33,9 @@ atif-sql materialize [OPTIONS]
 ```
 
 Sync the materialized corpus with the raw transcript corpus in one scan-plan-convert-write pass.
-`packages/atif-cli/src/atif_cli/app.py:352`
+`packages/atif-cli/src/atif_cli/app.py:448`
+
+The convert-write stage runs across a process pool by default. Each worker builds its own converter once and writes through the same per-session staging directory and atomic swap the single-process path uses, so the artifacts are byte-identical either way and a crash still costs at most the session in flight. `--workers 1` is the single-process reference path. The report's `convert_seconds` is the per-session sum, so with several workers it can exceed `total_seconds`, which stays the wall clock; `workers` in the report is the pool size the pass actually used, which is never more than the number of sessions planned (`packages/atif-corpus/src/atif_corpus/application/materialize.py:385`).
 
 Flags:
 
@@ -43,9 +45,10 @@ Flags:
 - `--source-root` — override the raw transcript root, otherwise `ATIF_SQL_SOURCE_ROOT` or `<CLAUDE_CONFIG_DIR>/projects`. `:343`
 - `--corpus-root` — override the materialized corpus root, otherwise env or `~/.atif-sql/corpus/<slug>`. `:344`
 - `--sessions` — comma-separated session-id filter; only these sessions are planned this pass. `:345`
+- `--workers` — processes for the convert-write stage; default `ATIF_SQL_MATERIALIZE_WORKERS`, else `min(8, cpu_count)`. `1` is the single-process path. `:455`
 - `--format` — report format. `:346`
 
-Exit codes: `0` ok, `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
+Exit codes: `0` ok, `64` `--workers` below `1`; `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
 
 ## status
 

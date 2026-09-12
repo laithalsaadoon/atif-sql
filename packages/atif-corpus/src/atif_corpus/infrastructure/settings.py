@@ -69,6 +69,22 @@ def _default_corpus_root() -> Path:
     return _corpus_root_for(_default_source_root())
 
 
+#: Ceiling on the default pool size. Conversion is CPU-bound and the corpus
+#: filesystem takes the writes, so past this the pool stops earning its
+#: process starts; an operator who has measured otherwise sets the env var.
+MAX_DEFAULT_MATERIALIZE_WORKERS = 8
+
+
+def default_materialize_workers() -> int:
+    """``min(8, cpu_count)`` — the pool size a bare ``materialize`` uses.
+
+    Read at CALL time like every other default here. ``os.cpu_count()`` can
+    answer ``None`` on an exotic platform, which reads as one worker: the
+    inline path, never a pool of nothing.
+    """
+    return max(1, min(MAX_DEFAULT_MATERIALIZE_WORKERS, os.cpu_count() or 1))
+
+
 class CorpusSettings(BaseSettings):
     """Env-driven settings for corpus materialization."""
 
@@ -87,6 +103,9 @@ class CorpusSettings(BaseSettings):
     corpus_root: Path = Field(default_factory=_default_corpus_root)
     #: Seconds of source silence before a session may (re)materialize.
     quiesce_seconds: int = 300
+    #: Processes for a materialize pass's convert+write stage
+    #: (``ATIF_SQL_MATERIALIZE_WORKERS``). ``1`` is the inline reference path.
+    materialize_workers: int = Field(default_factory=default_materialize_workers, ge=1)
 
     @model_validator(mode="after")
     def _apply_agent_defaults(self) -> CorpusSettings:

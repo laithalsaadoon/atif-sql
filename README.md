@@ -68,6 +68,11 @@ atif-sql query 'SELECT * FROM sessions LIMIT 5'
 
 For one session at a time, `atif-sql convert <session.jsonl>` converts and audits it in place.
 
+`materialize` converts sessions across a process pool, `min(8, cpu_count)` workers by default.
+`--workers N` (or `ATIF_SQL_MATERIALIZE_WORKERS`) sets the size, and `--workers 1` runs the
+single-process path. The pool doesn't change a byte of output: every worker writes the same
+artifacts through the same per-session staging directory and atomic rename.
+
 ### Codex CLI transcripts
 
 `convert`, `materialize`, and `status` all take `--agent claude-code|codex`,

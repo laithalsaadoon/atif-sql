@@ -48,6 +48,12 @@ proofs are out of scope for the workspace.
 - Quiescence: a session is (re)materialized when newest source mtime is older
   than quiesce_seconds (default 300) AND newer than its meta.source_mtime_ns.
   --force overrides.
+- Parallel convert: the convert+write stage may run across a process pool
+  (--workers N, default min(8, cpu_count)). The pool changes no artifact byte:
+  each worker writes the same four files through the same per-session
+  .staging/ dir and atomic rename, so a session is still the crash-safety
+  unit, and the watermark still advances only for sessions that succeeded.
+  --workers 1 is the single-process reference path.
 
 ## Two agents (atif-converter converts, atif-corpus discovers)
 - AgentSource is a StrEnum in atif-converter with an AST-pinned twin in
@@ -105,7 +111,7 @@ proofs are out of scope for the workspace.
 ## CLI (atif-cli composes; the only package importing the other five)
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
-atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...]  # sync corpus
+atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N]  # sync corpus
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
 atif-sql schema                        # static, <50ms, no duckdb bind
@@ -128,8 +134,9 @@ repo neither declares nor provides.
 
 ## Settings (env prefix ATIF_SQL_)
 source_root (default CLAUDE_CONFIG_DIR~/.claude /projects), corpus_root,
-quiesce_seconds=300, agent=claude-code (every --agent command reads it). _default_*() factories read env at call
-time. With agent=codex the two roots re-derive to $CODEX_HOME (default
+quiesce_seconds=300, agent=claude-code (every --agent command reads it),
+materialize_workers=min(8, cpu_count) (materialize's pool size; 1 = single process).
+_default_*() factories read env at call time. With agent=codex the two roots re-derive to $CODEX_HOME (default
 ~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that
 re-derivation.

@@ -1183,6 +1183,111 @@ class TestMaterializeSuspiciousScan:
         assert EXIT_CODES["suspicious_scan"] != 1
 
 
+class TestMaterializeWorkers:
+    """``--workers`` reaches the use case, and its default comes from settings.
+
+    The use case is replaced with a recorder so these stay unit tests: what is
+    under test is the plumbing from flag and env to the ``workers`` keyword,
+    plus the per-process setup hook the CLI hands the pool.
+    """
+
+    @staticmethod
+    def _recorder(calls: list[dict[str, Any]]) -> Any:
+        from atif_corpus.application.materialize import MaterializationReport
+
+        def _fake_materialize(**kwargs: Any) -> MaterializationReport:
+            calls.append(kwargs)
+            return MaterializationReport(
+                materialized_count=0,
+                up_to_date_count=0,
+                skipped_live_count=0,
+                failures=(),
+                total_seconds=0.0,
+                convert_seconds=0.0,
+                workers=kwargs["workers"],
+            )
+
+        return _fake_materialize
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        import atif_corpus.application.materialize as materialize_module
+
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(materialize_module, "materialize", self._recorder(calls))
+        materialize_cmd(corpus_root=tmp_path / "corpus", fmt=OutputFormat.JSON, **kwargs)
+        return calls
+
+    def test_flag_reaches_the_use_case_with_the_worker_setup_hook(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from atif_cli.app import _materialize_worker_setup
+
+        calls = self._run(tmp_path, monkeypatch, workers=3)
+
+        assert len(calls) == 1
+        assert calls[0]["workers"] == 3
+        assert calls[0]["worker_setup"] is _materialize_worker_setup
+        assert json.loads(capsys.readouterr().out)["workers"] == 3
+
+    def test_env_supplies_the_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_MATERIALIZE_WORKERS", "2")
+        calls = self._run(tmp_path, monkeypatch)
+        assert calls[0]["workers"] == 2
+
+    def test_unset_env_defaults_to_min_eight_and_cpu_count(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from atif_corpus.infrastructure.settings import default_materialize_workers
+
+        monkeypatch.delenv("ATIF_SQL_MATERIALIZE_WORKERS", raising=False)
+        calls = self._run(tmp_path, monkeypatch)
+        assert calls[0]["workers"] == default_materialize_workers()
+
+    def test_flag_beats_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATIF_SQL_MATERIALIZE_WORKERS", "2")
+        calls = self._run(tmp_path, monkeypatch, workers=1)
+        assert calls[0]["workers"] == 1
+
+    def test_zero_workers_exits_64_before_the_use_case_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import atif_corpus.application.materialize as materialize_module
+
+        calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(materialize_module, "materialize", self._recorder(calls))
+        with pytest.raises(SystemExit) as excinfo:
+            materialize_cmd(corpus_root=tmp_path / "corpus", workers=0, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["invalid_input"] == 64
+        assert calls == []
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "invalid_input"
+        assert "--workers" in err["message"]
+
+    def test_worker_setup_installs_the_parent_sink_level(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Run the hook in-process: DEBUG must vanish and WARNING must stay."""
+        from loguru import logger
+
+        from atif_cli.app import _materialize_worker_setup
+
+        monkeypatch.delenv(LOG_LEVEL_ENV, raising=False)
+        _materialize_worker_setup()
+        logger.debug("worker-debug-line")
+        logger.warning("worker-warning-line")
+        err = capsys.readouterr().err
+        assert "worker-debug-line" not in err
+        assert "worker-warning-line" in err
+        logger.remove()
+
+
 class TestStderrLogLevel:
     """`main` installs the ONLY log sink in the workspace.
 

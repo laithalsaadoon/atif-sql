@@ -43,8 +43,12 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
 7. Per planned session: convert, write trajectory, loss report, edges, and
    `meta.json` last into a staging directory, then rename the whole directory
    into `sessions/<id>/` so a reader observes only a complete generation; a
-   session that raises is recorded and the pass continues — `packages/atif-corpus/src/atif_corpus/application/materialize.py:190`,
+   session that raises is recorded and the pass continues — `packages/atif-corpus/src/atif_corpus/application/materialize.py:228`,
    `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:98`.
+   With `--workers` above 1 this step runs on a spawn-context process pool;
+   each worker runs the same per-session function under its own pid, outcomes
+   are folded back in plan order, and a single planned session runs inline —
+   `packages/atif-corpus/src/atif_corpus/application/materialize.py:385`.
 8. Advance the watermark for succeeded sessions only, retaining every entry of
    a failed, unplanned, or unreadable session so staleness still signals a
    retry, and write it atomically before emitting the report —

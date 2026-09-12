@@ -30,7 +30,9 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
    the previous watermark and the quiescence policy; `force` overrides staleness but never
    liveness — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`.
 5. For each planned session the use case calls `converter.convert` across the port; one session's
-   exception is caught and recorded so a single bad transcript cannot abort the sync — `packages/atif-corpus/src/atif_corpus/application/materialize.py:599`.
+   exception is caught and recorded so a single bad transcript cannot abort the sync — `packages/atif-corpus/src/atif_corpus/application/materialize.py:310`.
+   By default the sessions are spread over a process pool (`--workers`, default `min(8, cpu_count)`)
+   whose workers each hold a pickled copy of the adapter; the pool changes no output byte — `:385`.
 6. The adapter that satisfies `ConverterPort` lives in atif-cli because the independence contract
    forbids atif-corpus from importing atif-converter; it raises rather than returning an invalid
    trajectory — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`.

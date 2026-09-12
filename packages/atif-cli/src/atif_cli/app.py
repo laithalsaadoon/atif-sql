@@ -403,6 +403,7 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         "unreadable_session_ids": list(report.unreadable_session_ids),
         "total_seconds": round(report.total_seconds, 3),
         "convert_seconds": round(report.convert_seconds, 3),
+        "workers": report.workers,
     }
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(
@@ -413,13 +414,34 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
             f"removed: {report.sessions_removed}  "
             f"unreadable: {report.unreadable_count}"
         )
-        print(f"total: {report.total_seconds:.2f}s  (convert: {report.convert_seconds:.2f}s)")
+        print(
+            f"total: {report.total_seconds:.2f}s  "
+            f"(convert: {report.convert_seconds:.2f}s summed over {report.workers} worker(s))"
+        )
         for failure in report.failures:
             print(f"  FAILED {failure.session_id}: {failure.error}", file=sys.stderr)
         for session_id in report.unreadable_session_ids:
             print(f"  UNREADABLE {session_id}", file=sys.stderr)
     else:
         emit_json(payload, fmt)
+
+
+def _materialize_worker_setup() -> None:
+    """Give a materialize pool worker the stderr sink :func:`main` gives the parent.
+
+    A spawned worker starts with loguru's default DEBUG sink, so without this
+    every debug line the converter or the atomic writer emits in a worker
+    would land on the CLI's stderr in a format the parent never uses. Reads
+    :data:`LOG_LEVEL_ENV` the same way, because the environment is what a
+    spawned child inherits. Module-level so the executor can pickle it.
+    """
+    from loguru import logger
+
+    logger.remove()
+    try:
+        logger.add(sys.stderr, level=_stderr_log_level())
+    except ValueError:
+        logger.add(sys.stderr, level=DEFAULT_LOG_LEVEL)
 
 
 @app.command
@@ -431,6 +453,7 @@ def materialize(
     source_root: Path | None = None,
     corpus_root: Path | None = None,
     sessions: str | None = None,
+    workers: int | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Sync the materialized corpus with the raw transcript corpus.
@@ -463,6 +486,12 @@ def materialize(
         Comma-separated session-id filter — only these sessions are planned
         this pass (contract-compatible extension; other sessions' watermark
         entries are left untouched).
+    workers
+        Processes for the convert+write stage. Default from
+        ``ATIF_SQL_MATERIALIZE_WORKERS``, else ``min(8, cpu_count)``. ``1``
+        is the single-process reference path; above that a process pool
+        converts sessions in parallel and writes byte-identical artifacts.
+        Below ``1`` exits 64.
     fmt
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
@@ -481,6 +510,18 @@ def materialize(
         if sessions is not None
         else None
     )
+    worker_count = workers if workers is not None else settings.materialize_workers
+    if worker_count < 1:
+        emit_error(
+            ClassifiedError(
+                kind="invalid_input",
+                exit_code=EXIT_CODES["invalid_input"],
+                message=f"--workers must be >= 1, got {worker_count}",
+                hint="pass --workers 1 for the single-process path",
+            ),
+            fmt,
+        )
+        raise SystemExit(EXIT_CODES["invalid_input"])
     try:
         report = materialize_use_case(
             source_root=settings.source_root,
@@ -495,6 +536,8 @@ def materialize(
             ),
             force=force,
             session_ids=session_filter,
+            workers=worker_count,
+            worker_setup=_materialize_worker_setup,
         )
     except CorpusAgentMismatchError as exc:
         # One corpus holds one agent. Nothing was removed and nothing written —
