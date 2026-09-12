@@ -21,6 +21,7 @@ from atif_duck.domain.catalog import (
     VIEW_SCHEMA,
 )
 from atif_duck.infrastructure.registry import (
+    RawSources,
     register,
     register_macros,
     register_raw,
@@ -33,6 +34,7 @@ __all__ = [
     "MACRO_SIGNATURES",
     "VIEW_NAMES",
     "VIEW_SCHEMA",
+    "RawSources",
     "register",
     "register_macros",
     "register_raw",

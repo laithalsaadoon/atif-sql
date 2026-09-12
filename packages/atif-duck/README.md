@@ -2,11 +2,26 @@
 
 DuckDB views and macros over the materialized ATIF corpus
 (`<corpus_root>/sessions/<id>/{trajectory.json, edges.jsonl,
-loss_report.json, meta.json}` per `docs/CONTRACT.md`).
+loss_report.json, meta.json}` per `docs/CONTRACT.md`, plus the optional typed
+columnar artifacts `session.parquet`, `steps.parquet`, `tool_calls.parquet`,
+`tool_results.parquet`).
 
 `atif_duck.register(con, corpus_root)` wires a connection to the corpus and
 exposes the whole query surface: the core views and macros, the vector-search
-view, and the v2 analytics views and macros.
+view, and the v2 analytics views and macros. It returns a `RawSources` naming
+which sessions were read from their parquet artifacts and which from
+`trajectory.json`; the views union the two and return the same rows either way.
+
+## Columnar artifacts
+
+`ColumnarArtifactProducer` implements atif-corpus's `ArtifactProducer` port
+(atif-cli plugs it into `materialize`). Given a session's trajectory it writes
+the four parquet files with the views' own projection expressions
+(`atif_duck.infrastructure.projections`), so a query over them is exactly the
+query over the JSON, with no JSON parsed at query time. The file names and the
+`columnar_schema` version they're claimed under live in
+`atif_duck.domain.columnar`; `columnar_coverage(corpus_root)` is what
+`atif-sql status` reports as the query path.
 
 ## Core surface (16 views, 9 macros)
 

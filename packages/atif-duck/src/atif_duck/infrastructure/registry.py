@@ -25,6 +25,21 @@ Design notes
   JSON), NOT newline-delimited; ``steps`` is projected as a ``JSON[]``
   column so views unnest it lazily at query time. ``edges.jsonl`` is
   ``format='newline_delimited'``.
+* Two sources per session, chosen per session. A session whose
+  ``meta.json`` names the current ``columnar_schema`` and whose four parquet
+  artifacts are present (:mod:`atif_duck.domain.columnar`) is read through
+  lazy views over ``read_parquet``, so no JSON is parsed for it at query
+  time; every other session is read from ``trajectory.json`` exactly as
+  before. When a corpus holds both kinds the two branches ``UNION ALL`` into
+  one relation per raw reader (``v_raw_trajectories``, ``v_raw_steps``,
+  ``v_raw_tool_calls``, ``v_raw_tool_results``), and the business views
+  never learn which branch a row came from. The parquet branch is lazy on
+  purpose: loading the tool-result text eagerly measured at 2.1 s per
+  process on a 300-session corpus, which is what the JSON path already
+  costs, whereas a lazy view answers the panel queries in about 20 ms.
+  :func:`register_raw` returns which sessions took which path and every
+  parquet the views will open, so the query sandbox can grant exactly those
+  files.
 * All views use ``CREATE OR REPLACE`` so callers may safely re-register.
 * Globs are inlined into DDL via :func:`~atif_duck.domain.sql_literal.sql_literal` (DuckDB rejects prepared
   parameters as table-function arguments).
@@ -47,15 +62,34 @@ Semantics a transcript-shaped reader gets wrong (documented per-view below)
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from atif_duck.domain.catalog import DEFAULT_PRICING
+from atif_duck.domain.catalog import DEFAULT_PRICING, VIEW_SCHEMA
+from atif_duck.domain.columnar import (
+    META_COLUMNAR_KEY,
+    SESSION_COLUMNS,
+    SESSION_PARQUET,
+    STEPS_PARQUET,
+    TOOL_CALLS_PARQUET,
+    TOOL_RESULTS_PARQUET,
+)
 from atif_duck.domain.embedding_guard import ensure_store_matches
 from atif_duck.domain.sql_literal import sql_literal
+from atif_duck.infrastructure.columnar import ColumnarCoverage, session_has_columnar
+from atif_duck.infrastructure.projections import (
+    CALL_COLUMNS,
+    RESULT_COLUMNS,
+    WHOLE_STEP,
+    render,
+    step_columns,
+    step_key_columns,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     import duckdb
@@ -63,15 +97,51 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Raw-reader object names
 # ---------------------------------------------------------------------------
-#: The four materialized raw readers. Named constants rather than inline
-#: literals so a DDL interpolation site cannot typo a second table into
-#: existence.
+#: The materialized raw readers. Named constants rather than inline literals
+#: so a DDL interpolation site cannot typo a second table into existence.
 #: Deliberately absent from :data:`atif_duck.domain.catalog.VIEW_NAMES`:
 #: they describe corpus files rather than being queryable business surface.
+#:
+#: ``v_raw_trajectories`` carries the trajectory's top-level members minus
+#: ``steps``; the step-level surface is ``v_raw_steps`` /
+#: ``v_raw_tool_calls`` / ``v_raw_tool_results``, each already in its view's
+#: column shape whichever source it came from. The JSON-path TEMP TABLE that
+#: still holds ``steps JSON[]`` is ``v_raw_trajectories_json``.
 _RAW_TRAJECTORIES_TABLE: str = "v_raw_trajectories"
+_RAW_TRAJECTORIES_JSON_TABLE: str = "v_raw_trajectories_json"
+_RAW_STEPS_TABLE: str = "v_raw_steps"
+_RAW_TOOL_CALLS_TABLE: str = "v_raw_tool_calls"
+_RAW_TOOL_RESULTS_TABLE: str = "v_raw_tool_results"
 _RAW_EDGES_TABLE: str = "v_raw_edges"
 _RAW_LOSS_REPORTS_TABLE: str = "v_raw_loss_reports"
 _RAW_META_TABLE: str = "v_raw_meta"
+
+
+@dataclass(frozen=True, slots=True)
+class RawSources:
+    """Which source each complete session was registered from.
+
+    Returned by :func:`register_raw` (and :func:`register`) so the
+    composition root can grant the sandbox exactly the files the views read
+    lazily, and so a test can prove the columnar path was taken rather than
+    silently falling back to JSON.
+    """
+
+    #: Sessions read through lazy views over their parquet artifacts.
+    columnar_session_ids: tuple[str, ...]
+    #: Sessions read from ``trajectory.json`` (no or stale columnar artifacts).
+    json_session_ids: tuple[str, ...]
+    #: Every parquet a registered raw reader opens at caller-query time.
+    lazy_read_paths: tuple[Path, ...]
+
+    @property
+    def coverage(self) -> ColumnarCoverage:
+        """The same counts ``atif-sql status`` reports."""
+        return ColumnarCoverage(
+            columnar_sessions=len(self.columnar_session_ids),
+            json_sessions=len(self.json_session_ids),
+        )
+
 
 #: Inlined ``read_json`` upper bound. Live trajectory.json files reach 436 MB
 #: because harbor inlines subagent sidechains and tool outputs, so 1 GiB is
@@ -148,7 +218,110 @@ _META_COLUMNS: dict[str, str] = {
     # Queries read ``sessions.agent`` (from the trajectory) instead; this
     # column is provenance for an operator reading meta.json directly.
     "agent": "VARCHAR",
+    # Which columnar schema the session's parquet artifacts were written
+    # against (:data:`atif_duck.domain.columnar.COLUMNAR_SCHEMA_VERSION`).
+    # Absent (NULL) on a session materialized before the artifacts existed;
+    # that session is read from trajectory.json, which is always correct.
+    META_COLUMNAR_KEY: "BIGINT",
 }
+
+
+def _typed_empty(columns: Sequence[tuple[str, str]]) -> str:
+    """A zero-row SELECT carrying the declared column names and types."""
+    projected = ", ".join(f"CAST(NULL AS {sql_type}) AS {name}" for name, sql_type in columns)
+    return f"SELECT {projected} WHERE false"
+
+
+def _typed_parquet_select(paths: Sequence[Path], columns: Sequence[tuple[str, str]]) -> str:
+    """SELECT the declared columns, cast to their declared types, from a parquet list.
+
+    The casts are belt and braces: the producer wrote these exact types, and
+    a ``UNION ALL`` against the JSON branch needs both sides to agree on
+    every column, so the declared type is asserted here rather than inferred
+    from the first file.
+    """
+    files = ", ".join(sql_literal(str(path)) for path in paths)
+    projected = ", ".join(f"CAST({name} AS {sql_type}) AS {name}" for name, sql_type in columns)
+    return f"SELECT {projected} FROM read_parquet([{files}])"  # noqa: S608 — paths via sql_literal; columns are catalog constants
+
+
+def _union_or_empty(branches: Sequence[str], columns: Sequence[tuple[str, str]]) -> str:
+    """Join the present source branches, or an empty typed relation if none is."""
+    return "\nUNION ALL\n".join(branches) if branches else _typed_empty(columns)
+
+
+def _json_steps_select() -> str:
+    """The JSON path's ``steps`` projection over ``v_raw_trajectories_json``."""
+    return (
+        f"SELECT t.session_id_path AS session_id,\n    {render(step_columns(WHOLE_STEP))}\n"
+        f"FROM {_RAW_TRAJECTORIES_JSON_TABLE} t, UNNEST(t.steps) AS s(step)"
+    )
+
+
+def _json_tool_calls_select() -> str:
+    """The JSON path's ``tool_calls`` projection.
+
+    The inner query narrows each step to (ids, ts, calls list) BEFORE the
+    second UNNEST: a step's JSON string is megabytes on harbor trajectories
+    that inline subagent sidechains, and unnesting it directly replicates
+    that string once per tool call.
+    """
+    return (
+        f"SELECT session_id, step_id, ts, {render(CALL_COLUMNS)}\n"  # noqa: S608 — constants only
+        "FROM (\n"
+        f"    SELECT t.session_id_path AS session_id, {render(step_key_columns(WHOLE_STEP))},\n"
+        f"           {WHOLE_STEP.json('tool_calls', '[*]')} AS calls\n"
+        f"    FROM {_RAW_TRAJECTORIES_JSON_TABLE} t, UNNEST(t.steps) AS s(step)\n"
+        f"    WHERE {WHOLE_STEP.json('tool_calls')} IS NOT NULL\n"
+        ") step_calls, UNNEST(calls) AS c(call)"
+    )
+
+
+def _json_tool_results_select() -> str:
+    """The JSON path's ``tool_results`` projection (same early narrowing)."""
+    return (
+        f"SELECT session_id, step_id, ts, {render(RESULT_COLUMNS)}\n"  # noqa: S608 — constants only
+        "FROM (\n"
+        f"    SELECT t.session_id_path AS session_id, {render(step_key_columns(WHOLE_STEP))},\n"
+        f"           {WHOLE_STEP.json('observation', '.results[*]')} AS results\n"
+        f"    FROM {_RAW_TRAJECTORIES_JSON_TABLE} t, UNNEST(t.steps) AS s(step)\n"
+        f"    WHERE {WHOLE_STEP.json('observation', '.results')} IS NOT NULL\n"
+        ") step_results, UNNEST(results) AS r(res)"
+    )
+
+
+#: ``v_raw_trajectories`` columns, in order: the trajectory's top-level
+#: members minus ``steps``, plus the two path-derived keys.
+_TRAJECTORY_RELATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    *(column for column in SESSION_COLUMNS if column[0] != "session_id_path"),
+    ("trajectory_path", "VARCHAR"),
+    ("session_id_path", "VARCHAR"),
+)
+
+
+def _json_trajectories_select() -> str:
+    names = ", ".join(name for name, _ in _TRAJECTORY_RELATION_COLUMNS)
+    return f"SELECT {names} FROM {_RAW_TRAJECTORIES_JSON_TABLE}"  # noqa: S608 — constants only
+
+
+def _columnar_trajectories_select(paths: Sequence[Path], sessions_dir: Path) -> str:
+    """``session.parquet`` rows in ``v_raw_trajectories`` shape.
+
+    ``trajectory_path`` is derived the way ``read_json(filename=true)``
+    reports it (``<sessions_dir>/<id>/trajectory.json``), so the ``sessions``
+    view's path column reads the same whichever branch produced the row.
+    """
+    files = ", ".join(sql_literal(str(path)) for path in paths)
+    casts = ", ".join(
+        f"CAST({name} AS {sql_type}) AS {name}"
+        for name, sql_type in SESSION_COLUMNS
+        if name != "session_id_path"
+    )
+    path_expr = f"{sql_literal(str(sessions_dir))} || '/' || session_id_path || '/trajectory.json'"
+    return (
+        f"SELECT {casts}, {path_expr} AS trajectory_path, session_id_path "  # noqa: S608 — paths and dir via sql_literal; columns are catalog constants
+        f"FROM read_parquet([{files}])"
+    )
 
 
 def _render_columns_clause(columns: dict[str, str]) -> str:
@@ -159,6 +332,11 @@ def _render_columns_clause(columns: dict[str, str]) -> str:
     constants — never user input — so escaping is defensive only.
     """
     return ", ".join(f"{name}: {sql_literal(typ)}" for name, typ in columns.items())
+
+
+def _catalog_columns(view_name: str) -> str:
+    """The catalog's column names for ``view_name``, comma-joined in catalog order."""
+    return ", ".join(name for name, _ in VIEW_SCHEMA[view_name])
 
 
 # ---------------------------------------------------------------------------
@@ -187,19 +365,64 @@ def _warn_incomplete_session_dirs(con: duckdb.DuckDBPyConnection, sessions_dir: 
             )
 
 
-def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> None:
-    """Create the four raw readers as TEMP TABLEs over ``corpus_root``.
+def _split_sources(
+    con: duckdb.DuckDBPyConnection, sessions_dir: Path
+) -> tuple[list[str], list[str]]:
+    """Partition the meta-bearing sessions into (columnar ids, JSON ids).
 
-    ``v_raw_trajectories`` / ``v_raw_edges`` / ``v_raw_loss_reports`` /
-    ``v_raw_meta`` each read one file kind from the CONTRACT corpus layout
+    A session is columnar when :func:`session_has_columnar` says so; every
+    other session with a ``trajectory.json`` is JSON. A meta-bearing dir
+    with neither readable source is skipped with a warning rather than
+    failing the whole registration: ``read_json`` over an explicit path list
+    errors on one missing file, and one broken session must not take the
+    corpus offline.
+    """
+    # The one interpolation is the module constant _RAW_META_TABLE plus the
+    # contract's meta key.
+    rows = con.execute(
+        f"SELECT session_id_path, {META_COLUMNAR_KEY} FROM {_RAW_META_TABLE} ORDER BY 1"  # noqa: S608
+    ).fetchall()
+    columnar_ids: list[str] = []
+    json_ids: list[str] = []
+    for session_id, columnar_schema in rows:
+        session_dir = sessions_dir / str(session_id)
+        if session_has_columnar(session_dir, columnar_schema):
+            columnar_ids.append(str(session_id))
+        elif (session_dir / "trajectory.json").is_file():
+            json_ids.append(str(session_id))
+        else:
+            logger.warning(
+                "Skipping session dir {} (meta.json present but no readable "
+                "trajectory.json or columnar artifacts); excluded from all views",
+                session_dir,
+            )
+    return columnar_ids, json_ids
+
+
+def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSources:
+    """Create the raw readers over ``corpus_root``.
+
+    ``v_raw_meta`` / ``v_raw_edges`` / ``v_raw_loss_reports`` are TEMP TABLEs
+    over ``read_json`` globs of the CONTRACT corpus layout
     ``<corpus_root>/sessions/<session_id>/...``, with ``session_id_path``
     derived from the directory component via regexp over ``filename``.
 
+    ``v_raw_trajectories`` / ``v_raw_steps`` / ``v_raw_tool_calls`` /
+    ``v_raw_tool_results`` are VIEWs that union up to two sources, chosen
+    per session by :func:`_split_sources`: the session's parquet artifacts
+    (read lazily with ``read_parquet``, no JSON touched at query time) or
+    its ``trajectory.json`` (parsed once into the TEMP TABLE
+    ``v_raw_trajectories_json`` and unnested per query, as every version
+    before the columnar artifacts did). A corpus with no columnar session
+    registers exactly as before; a corpus with no JSON session never opens
+    a ``trajectory.json``.
+
     TORN-SET GUARD: ``meta.json`` is written last by the corpus writer, so
-    its presence marks a session dir as complete. The trajectory / edges /
-    loss readers are restricted to session dirs where ``v_raw_meta`` has a
-    row — a session dir missing its meta (crashed writer) contributes
-    nothing to any view instead of a partial artifact set.
+    its presence marks a session dir as complete. Every other reader is
+    restricted to meta-bearing session dirs (the JSON path list is built
+    from ``v_raw_meta``; edges and loss use a semi-join), so a session dir
+    missing its meta (crashed writer) contributes nothing to any view
+    instead of a partial artifact set.
 
     Parameters
     ----------
@@ -207,6 +430,12 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> None:
         Open DuckDB connection.
     corpus_root
         Materialized corpus root (the directory containing ``sessions/``).
+
+    Returns
+    -------
+    RawSources
+        Which sessions took which path, and every parquet the views open at
+        query time (for the sandbox's file allowlist).
 
     Raises
     ------
@@ -217,13 +446,12 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> None:
         ``logger.exception`` before re-raise.
     """
     sessions_dir = corpus_root / "sessions"
-    trajectory_glob = sql_literal(str(sessions_dir / "*" / "trajectory.json"))
     edges_glob = sql_literal(str(sessions_dir / "*" / "edges.jsonl"))
     loss_glob = sql_literal(str(sessions_dir / "*" / "loss_report.json"))
     meta_glob = sql_literal(str(sessions_dir / "*" / "meta.json"))
 
     # meta.json is written LAST by atif-corpus — its presence marks a
-    # session dir as COMPLETE. Every other raw reader is restricted to
+    # session dir as COMPLETE. The edges and loss readers are restricted to
     # meta-bearing session dirs via this semi-join predicate, so a torn
     # session dir (crashed writer, partial cleanup) is invisible to every
     # view rather than surfacing a partial artifact set.
@@ -231,7 +459,7 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> None:
     meta_gate = f"session_id_path IN (SELECT session_id_path FROM {_RAW_META_TABLE})"  # noqa: S608
 
     try:
-        # meta FIRST: the other three readers gate on it.
+        # meta FIRST: every other reader derives from it.
         con.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {_RAW_META_TABLE} AS
@@ -250,27 +478,90 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> None:
         logger.debug("Registered {} from glob {}", _RAW_META_TABLE, meta_glob)
         _warn_incomplete_session_dirs(con, sessions_dir)
 
-        # One trajectory document per file -> format='auto' (NOT NDJSON).
-        # The explicit projection keeps `steps` as a lazy JSON[] column.
-        con.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE {_RAW_TRAJECTORIES_TABLE} AS
-            SELECT * FROM (
+        columnar_ids, json_ids = _split_sources(con, sessions_dir)
+        logger.info(
+            "register_raw: {} session(s) read from columnar artifacts, {} from trajectory.json",
+            len(columnar_ids),
+            len(json_ids),
+        )
+
+        trajectory_branches: list[str] = []
+        steps_branches: list[str] = []
+        calls_branches: list[str] = []
+        results_branches: list[str] = []
+        lazy_paths: list[Path] = []
+
+        if columnar_ids:
+            session_paths = [sessions_dir / sid / SESSION_PARQUET for sid in columnar_ids]
+            steps_paths = [sessions_dir / sid / STEPS_PARQUET for sid in columnar_ids]
+            calls_paths = [sessions_dir / sid / TOOL_CALLS_PARQUET for sid in columnar_ids]
+            results_paths = [sessions_dir / sid / TOOL_RESULTS_PARQUET for sid in columnar_ids]
+            trajectory_branches.append(_columnar_trajectories_select(session_paths, sessions_dir))
+            steps_branches.append(_typed_parquet_select(steps_paths, VIEW_SCHEMA["steps"]))
+            calls_branches.append(_typed_parquet_select(calls_paths, VIEW_SCHEMA["tool_calls"]))
+            results_branches.append(
+                _typed_parquet_select(results_paths, VIEW_SCHEMA["tool_results"])
+            )
+            for sid in columnar_ids:
+                lazy_paths.extend(
+                    sessions_dir / sid / name
+                    for name in (
+                        SESSION_PARQUET,
+                        STEPS_PARQUET,
+                        TOOL_CALLS_PARQUET,
+                        TOOL_RESULTS_PARQUET,
+                    )
+                )
+
+        if json_ids:
+            # One trajectory document per file -> format='auto' (NOT NDJSON).
+            # The explicit projection keeps `steps` as a lazy JSON[] column.
+            # An explicit path list rather than a glob: the glob would parse
+            # the columnar sessions' trajectory.json too, which is the cost
+            # this whole arrangement exists to avoid.
+            json_files = ", ".join(
+                sql_literal(str(sessions_dir / sid / "trajectory.json")) for sid in json_ids
+            )
+            con.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE {_RAW_TRAJECTORIES_JSON_TABLE} AS
                 SELECT *,
                        filename AS trajectory_path,
                        regexp_extract(filename, '/sessions/([^/]+)/trajectory\\.json$', 1)
                            AS session_id_path
                 FROM read_json(
-                    {trajectory_glob},
+                    [{json_files}],
                     format='auto',
                     filename=true,
                     columns={{{_render_columns_clause(_TRAJECTORY_COLUMNS)}}},
                     maximum_object_size={_MAX_OBJECT_SIZE}
-                )
-            ) WHERE {meta_gate};
-            """  # noqa: S608 — trajectory glob escaped by sql_literal; table/columns/cap are constants
-        )
-        logger.debug("Registered {} from glob {}", _RAW_TRAJECTORIES_TABLE, trajectory_glob)
+                );
+                """  # noqa: S608 — every path escaped by sql_literal; table/columns/cap are constants
+            )
+            logger.debug(
+                "Registered {} over {} trajectory.json file(s)",
+                _RAW_TRAJECTORIES_JSON_TABLE,
+                len(json_ids),
+            )
+            trajectory_branches.append(_json_trajectories_select())
+            steps_branches.append(_json_steps_select())
+            calls_branches.append(_json_tool_calls_select())
+            results_branches.append(_json_tool_results_select())
+        else:
+            # A connection re-registered after every session gained its
+            # artifacts must not keep the previous generation's parsed JSON.
+            con.execute(f"DROP TABLE IF EXISTS {_RAW_TRAJECTORIES_JSON_TABLE};")
+
+        for table, branches, columns in (
+            (_RAW_TRAJECTORIES_TABLE, trajectory_branches, _TRAJECTORY_RELATION_COLUMNS),
+            (_RAW_STEPS_TABLE, steps_branches, VIEW_SCHEMA["steps"]),
+            (_RAW_TOOL_CALLS_TABLE, calls_branches, VIEW_SCHEMA["tool_calls"]),
+            (_RAW_TOOL_RESULTS_TABLE, results_branches, VIEW_SCHEMA["tool_results"]),
+        ):
+            # Table names are module constants; every branch is built above
+            # from catalog constants and sql_literal-escaped paths.
+            con.execute(f"CREATE OR REPLACE VIEW {table} AS\n{_union_or_empty(branches, columns)};")
+            logger.debug("Registered {} ({} source branch(es))", table, len(branches))
 
         # edges.jsonl is one line per RAW record -> newline_delimited.
         # The record's own `source_file` (the raw transcript path) is kept;
@@ -317,6 +608,11 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> None:
         # register-or-fail-loud — any DuckDB error must surface to the caller.
         logger.exception("Failed to register raw readers over {}", corpus_root)
         raise
+    return RawSources(
+        columnar_session_ids=tuple(columnar_ids),
+        json_session_ids=tuple(json_ids),
+        lazy_read_paths=tuple(lazy_paths),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -347,62 +643,14 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
     """
     try:
         # One row per ATIF step, and the per-turn surface the contract names
-        # ("messages-parity view name: steps"). Column semantics that a
-        # transcript-shaped reader would misread:
-        # * ``message`` is flattened text: ATIF Step.message is
-        #   str | ContentPart[]; the ARRAY branch joins the parts' ``text``
-        #   fields with blank lines (mirrors harbor's own text bundling).
-        # * ``prompt_tokens`` is the ATIF TOTAL (input + cache_read +
-        #   cache_creation); ``cached_tokens`` is the cache-read subset;
-        #   ``cache_creation`` is dug out of ``metrics.extra`` because
-        #   harbor only preserves the creation split there (fidelity gap 6).
-        #   The two adapters spell that key differently —
-        #   ``cache_creation_input_tokens`` for Claude Code,
-        #   ``cache_write_input_tokens`` for Codex — so the column coalesces
-        #   them: one name reaches SQL, and a cost query does not branch on
-        #   which agent wrote the session.
-        # * ``is_sidechain`` / ``is_compact_summary`` / ``source_uuids``
-        #   come from ``step.extra`` per the CONTRACT enrichment pass.
+        # ("messages-parity view name: steps"). The column expressions live
+        # in :mod:`atif_duck.infrastructure.projections` (shared with the
+        # columnar producer, so both sources agree byte for byte) and are
+        # applied by register_raw when it builds ``v_raw_steps``; this view
+        # pins the catalog's column order over that relation.
         con.execute(
-            """
-            CREATE OR REPLACE VIEW steps AS
-            SELECT
-                t.session_id_path                                    AS session_id,
-                json_extract(step, '$.step_id')::BIGINT              AS step_id,
-                json_extract_string(step, '$.timestamp')::TIMESTAMP  AS ts,
-                json_extract_string(step, '$.source')                AS source,
-                json_extract_string(step, '$.model_name')            AS model_name,
-                CASE WHEN json_type(step, '$.message') = 'ARRAY'
-                     THEN array_to_string(
-                              list_transform(
-                                  json_extract(step, '$.message[*].text'),
-                                  part -> json_extract_string(part, '$')
-                              ),
-                              '\n\n'
-                          )
-                     ELSE json_extract_string(step, '$.message')
-                END                                                  AS message,
-                coalesce(
-                    json_extract(step, '$.extra.is_sidechain')::BOOLEAN, false
-                )                                                    AS is_sidechain,
-                coalesce(
-                    json_extract(step, '$.extra.is_compact_summary')::BOOLEAN, false
-                )                                                    AS is_compact_summary,
-                json_extract(step, '$.metrics.prompt_tokens')::BIGINT
-                                                                     AS prompt_tokens,
-                json_extract(step, '$.metrics.completion_tokens')::BIGINT
-                                                                     AS completion_tokens,
-                json_extract(step, '$.metrics.cached_tokens')::BIGINT
-                                                                     AS cached_tokens,
-                coalesce(
-                    json_extract(step, '$.metrics.extra.cache_creation_input_tokens'),
-                    json_extract(step, '$.metrics.extra.cache_write_input_tokens')
-                )::BIGINT                                            AS cache_creation,
-                json_extract(step, '$.llm_call_count')::BIGINT       AS llm_call_count,
-                json_extract(step, '$.extra.source_uuids')           AS source_uuids
-            FROM v_raw_trajectories t,
-                 UNNEST(t.steps) AS s(step);
-            """
+            f"CREATE OR REPLACE VIEW steps AS SELECT {_catalog_columns('steps')} "  # noqa: S608
+            f"FROM {_RAW_STEPS_TABLE};"
         )
         logger.debug("Registered view: steps")
 
@@ -484,35 +732,11 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # One row per ToolCall in any step. The columns are renamed off the
         # ATIF field names: function_name -> tool_name, tool_call_id ->
         # tool_use_id, arguments -> tool_input. ``tool_input`` is an already
-        # parsed dict, NOT a JSON string, so a query must not json_extract it.
-        #
-        # The CTE must narrow each step to (ids, ts, calls list) BEFORE the
-        # second UNNEST: a step's JSON string is megabytes on harbor
-        # trajectories that inline subagent sidechains, and unnesting it
-        # directly replicates that string once per tool call.
+        # parsed JSON value, NOT a JSON string, so a query must not
+        # json_extract it twice. Expressions: projections.CALL_COLUMNS.
         con.execute(
-            """
-            CREATE OR REPLACE VIEW tool_calls AS
-            WITH step_calls AS (
-                SELECT
-                    t.session_id_path                                    AS session_id,
-                    json_extract(step, '$.step_id')::BIGINT              AS step_id,
-                    json_extract_string(step, '$.timestamp')::TIMESTAMP  AS ts,
-                    json_extract(step, '$.tool_calls[*]')                AS calls
-                FROM v_raw_trajectories t,
-                     UNNEST(t.steps) AS s(step)
-                WHERE json_extract(step, '$.tool_calls') IS NOT NULL
-            )
-            SELECT
-                session_id,
-                step_id,
-                ts,
-                json_extract_string(call, '$.function_name')         AS tool_name,
-                json_extract_string(call, '$.tool_call_id')          AS tool_use_id,
-                json_extract(call, '$.arguments')                    AS tool_input
-            FROM step_calls,
-                 UNNEST(calls) AS c(call);
-            """
+            f"CREATE OR REPLACE VIEW tool_calls AS SELECT {_catalog_columns('tool_calls')} "  # noqa: S608
+            f"FROM {_RAW_TOOL_CALLS_TABLE};"
         )
         logger.debug("Registered view: tool_calls")
 
@@ -520,30 +744,10 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # key back to the tool_calls array, surfaced under the SAME name
         # ``tool_use_id`` that ``tool_calls`` exposes, so the two views join
         # with `USING (tool_use_id)` and neither side needs a rename.
-        # Same early-projection CTE as tool_calls (see comment there): the
-        # full step string must be dropped before the second UNNEST.
+        # Expressions: projections.RESULT_COLUMNS.
         con.execute(
-            """
-            CREATE OR REPLACE VIEW tool_results AS
-            WITH step_results AS (
-                SELECT
-                    t.session_id_path                                    AS session_id,
-                    json_extract(step, '$.step_id')::BIGINT              AS step_id,
-                    json_extract_string(step, '$.timestamp')::TIMESTAMP  AS ts,
-                    json_extract(step, '$.observation.results[*]')       AS results
-                FROM v_raw_trajectories t,
-                     UNNEST(t.steps) AS s(step)
-                WHERE json_extract(step, '$.observation.results') IS NOT NULL
-            )
-            SELECT
-                session_id,
-                step_id,
-                ts,
-                json_extract_string(res, '$.source_call_id')         AS tool_use_id,
-                json_extract(res, '$.content')                       AS content
-            FROM step_results,
-                 UNNEST(results) AS r(res);
-            """
+            f"CREATE OR REPLACE VIEW tool_results AS SELECT {_catalog_columns('tool_results')} "  # noqa: S608
+            f"FROM {_RAW_TOOL_RESULTS_TABLE};"
         )
         logger.debug("Registered view: tool_results")
 
@@ -670,6 +874,13 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # NULL) on no-match, and '' satisfies COALESCE — without it every later
         # fallback branch is unreachable and non-"Task #N" results all collapse
         # onto the same empty task_id, colliding in the latest_status join.
+        #
+        # The creation-order fallback orders by ``created_at`` and then by
+        # ``step_id, tool_use_id``: several TaskCreate calls in one step share a
+        # timestamp, and a window with a tied ORDER BY numbers them in physical
+        # scan order, which differs between the JSON reader (a hash join
+        # reorders the unnested calls) and the parquet reader. The tiebreaker
+        # makes the number a function of the data, not of the source format.
         con.execute(
             """
             CREATE OR REPLACE VIEW tasks_state_current AS
@@ -689,7 +900,8 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
                         ),
                         json_extract_string(tr.content, '$.taskId'),
                         CAST(row_number() OVER (
-                            PARTITION BY tc.session_id ORDER BY tc.created_at
+                            PARTITION BY tc.session_id
+                            ORDER BY tc.created_at, tc.step_id, tc.tool_use_id
                         ) AS VARCHAR)
                     ) AS task_id
                 FROM task_creations tc
@@ -1267,12 +1479,15 @@ def register(
     lance_uri: Path | None = None,
     expected_model: str | None = None,
     expected_dim: int | None = None,
-) -> None:
+) -> RawSources:
     """Register raw readers, views, VSS, and macros over ``corpus_root``, in order.
 
-    Every call re-scans and re-parses the whole corpus into TEMP tables, so
-    cost is O(corpus) per connection: reuse one connection per process rather
-    than registering per query.
+    Every call re-scans the corpus, and re-parses every session that has no
+    columnar artifacts into TEMP tables, so cost is O(JSON sessions) per
+    connection: reuse one connection per process rather than registering per
+    query. Returns :func:`register_raw`'s :class:`RawSources` so the caller
+    knows which path each session took and which parquet files the views
+    will open lazily.
 
     Order matters: raw TEMP tables first (views bind against them at CREATE
     time), then views, then VSS (``semantic_search``'s body binds against
@@ -1313,7 +1528,7 @@ def register(
         register_analytics_macros,
     )
 
-    register_raw(con, corpus_root)
+    sources = register_raw(con, corpus_root)
     register_views(con)
     if not skip_vss:
         register_vss(
@@ -1325,3 +1540,4 @@ def register(
     register_macros(con, pricing=pricing, skip_vss=skip_vss)
     registered = register_analytics(con, corpus_root)
     register_analytics_macros(con, registered)
+    return sources

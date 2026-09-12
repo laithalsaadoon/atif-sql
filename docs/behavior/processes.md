@@ -40,8 +40,9 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
    directory is missing — the one state reachable by a kill inside the swap
    window — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`,
    `packages/atif-corpus/src/atif_corpus/application/materialize.py:313`.
-7. Per planned session: convert, write trajectory, loss report, edges, and
-   `meta.json` last into a staging directory, then rename the whole directory
+7. Per planned session: convert, write trajectory, loss report, edges, then
+   run the `ArtifactProducer` (the typed columnar parquet files, unless
+   `--no-columnar`), and `meta.json` last into a staging directory, then rename the whole directory
    into `sessions/<id>/` so a reader observes only a complete generation; a
    session that raises is recorded and the pass continues — `packages/atif-corpus/src/atif_corpus/application/materialize.py:190`,
    `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:98`.
@@ -253,7 +254,9 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:529`
    a missing statement emits a classified parse error and exits 64 — `:564`.
 2. Resolve the corpus root and the expected embedder identity, then open an
    in-memory DuckDB connection — `:586`.
-3. Register the four raw readers as TEMP tables over the contract layout,
+3. Register the raw readers over the contract layout (trajectory rows come
+   from `read_parquet` for sessions with current columnar artifacts and from
+   `read_json` for the rest, unioned per surface),
    gating trajectory, edges, and loss on `meta.json` presence so a torn session
    directory contributes nothing to any view —
    `packages/atif-duck/src/atif_duck/infrastructure/registry.py:180`.

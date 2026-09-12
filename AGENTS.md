@@ -21,14 +21,19 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `--agent` flag, harbor's `Trajectory.agent.name`, and `meta.agent`.
   Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
-  quiescence, atomic artifact writes. Per-agent discovery lives in
+  quiescence, atomic artifact writes, and the `ArtifactProducer` port that
+  lets the composition root add per-session files (atif-duck's columnar
+  parquets) to the same atomic swap. Per-agent discovery lives in
   `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
   Codex's `<YYYY>/<MM>/<DD>` nesting), and `domain.agents` is an AST-pinned
   twin of the converter's enum, because the two packages may not import each
   other. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-duck` — DuckDB views + macros over the materialized corpus:
   16 core views and 9 macros, plus 12 analytics views and 13 analytics
-  macros, all declared in a static drift-tested catalog. Layered:
+  macros, all declared in a static drift-tested catalog. Also the
+  `ColumnarArtifactProducer` that writes each session's typed parquet
+  artifacts at materialize time, and the registry that reads them instead of
+  `trajectory.json` when they're current (falling back per session). Layered:
   `infrastructure` > `domain`.
 - `packages/atif-models` — model alias registry + structured-output LLM
   client. No other package hardcodes a Bedrock model id. Layered:
