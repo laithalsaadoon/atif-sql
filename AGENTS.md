@@ -86,6 +86,14 @@ Rules of the road:
   models. A shape the fast path doesn't replicate falls back to litellm, so a
   litellm bump still means re-running that test and reading its failures as
   upstream-pricing reports.
+- The converter reads each transcript file ONCE. `raw_records.load_session`
+  fingerprints and parses a file in the same pass, and the converter, the
+  census, the edges emitter and the enrichment pass all consume that one list
+  of records; the fingerprints are re-checked (stat and digest) after the
+  artifacts are built. Per file that's two opens, one parse and two hash
+  passes, pinned by `test_snapshot_and_drift.py::TestSinglePass` for both
+  agents. Don't add a reader that opens the session again; take the records
+  from the `LoadedSession`.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - SQL text is constants only. No corpus path may be spliced into a statement:
   `read_json(?)` takes globs and file lists as bound parameters, parquet file

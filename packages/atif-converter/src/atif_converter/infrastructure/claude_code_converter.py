@@ -23,14 +23,13 @@ sidecars are excluded by the ``*.jsonl`` suffix filter, as before.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
-from loguru import logger
 
 from atif_converter.domain.claude_code_conversion import convert_claude_code_records
+from atif_converter.infrastructure.raw_records import LoadedSession, parse_jsonl_records
 
 
 def read_session_records(path: Path) -> list[dict[str, Any]]:
@@ -41,17 +40,21 @@ def read_session_records(path: Path) -> list[dict[str, Any]]:
     object is kept as-is, as harbor keeps it (it fails later, in the same
     place harbor fails).
     """
-    records: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                records.append(json.loads(stripped))
-            except json.JSONDecodeError as exc:
-                logger.debug("Skipping malformed JSONL line in {}: {}", path, exc)
-    return records
+        return parse_jsonl_records(handle, path)
+
+
+def staged_side_name(side_file: Path, side_dir: Path) -> str:
+    """The flat name harbor saw a side-file under: path parts joined with ``__``.
+
+    A leading ``subagents`` part is dropped, so
+    ``subagents/workflows/wf_1/agent-a.jsonl`` becomes
+    ``workflows__wf_1__agent-a.jsonl``. The domain converter sorts on this name.
+    """
+    rel_parts = side_file.relative_to(side_dir).parts
+    if rel_parts and rel_parts[0] == "subagents":
+        rel_parts = rel_parts[1:]
+    return "__".join(rel_parts)
 
 
 def discover_side_files(session_jsonl: Path, *, include_subagents: bool = True) -> dict[str, Path]:
@@ -63,11 +66,34 @@ def discover_side_files(session_jsonl: Path, *, include_subagents: bool = True) 
     side_dir = session_jsonl.parent / session_jsonl.stem
     if include_subagents and side_dir.is_dir():
         for side_file in sorted(side_dir.rglob("*.jsonl")):
-            rel_parts = side_file.relative_to(side_dir).parts
-            if rel_parts and rel_parts[0] == "subagents":
-                rel_parts = rel_parts[1:]
-            side_files.setdefault("__".join(rel_parts), side_file)
+            side_files.setdefault(staged_side_name(side_file, side_dir), side_file)
     return side_files
+
+
+def convert_loaded_claude_code_session(
+    loaded: LoadedSession, *, include_subagents: bool = True
+) -> Trajectory | None:
+    """Convert an already-read session: the records of :func:`~atif_converter.infrastructure.raw_records.load_session`.
+
+    Same result as :func:`convert_claude_code_session` on the same bytes, with
+    no second read: the main transcript is the loaded main file and the
+    side-files are the loaded side-files keyed by their staged name, first in
+    sorted order winning on a name collision exactly as
+    :func:`discover_side_files` resolves it. ``include_subagents`` off converts
+    the main transcript alone, as before.
+    """
+    session_jsonl = loaded.snapshot.session_jsonl
+    side_dir = session_jsonl.parent / session_jsonl.stem
+    side_records: dict[str, list[Any]] = {}
+    if include_subagents:
+        for path, records in loaded.records_by_file.items():
+            if path != session_jsonl:
+                side_records.setdefault(staged_side_name(path, side_dir), records)
+    return convert_claude_code_records(
+        loaded.main_records,
+        side_records,
+        fallback_session_id=session_jsonl.parent.name or "-unknown",
+    )
 
 
 def convert_claude_code_session(

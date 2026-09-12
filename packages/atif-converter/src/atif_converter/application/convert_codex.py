@@ -4,10 +4,11 @@
 
 The Codex counterpart of
 :mod:`atif_converter.application.convert_and_audit`, composed the same way and
-under the same discipline: a fingerprint snapshot before harbor reads,
-re-checked after harbor's read and again after the raw parse, so the census,
-the trajectory and ``edges.jsonl`` all describe the same bytes of a rollout
-that Codex may still be appending to.
+under the same discipline: the rollout is read once, fingerprinted and parsed
+in the same pass, the converter and the audit consume that one list of
+records, and the fingerprints are re-checked once the artifacts are built, so
+the census, the trajectory and ``edges.jsonl`` all describe the same bytes of a
+rollout that Codex may still be appending to.
 
 What differs is only what a rollout IS. One file, no side-file tree, a record
 taxonomy of its own, and a set of gaps of its own — so the census, the edges
@@ -31,22 +32,17 @@ from atif_converter.domain.codex_fidelity import (
 )
 from atif_converter.domain.errors import SourceMutatedDuringConversion
 from atif_converter.domain.fidelity import AnyRecordType, LossReport
-from atif_converter.infrastructure.codex_adapter import convert_codex_session
+from atif_converter.infrastructure.codex_adapter import convert_loaded_codex_session
 from atif_converter.infrastructure.codex_census import (
     CodexSessionCensus,
     codex_census_from_records,
 )
 from atif_converter.infrastructure.harbor_adapter import (
     ConversionResult,
-    require_transcript_file,
+    read_session,
     validate_trajectory,
 )
-from atif_converter.infrastructure.raw_records import (
-    SessionSnapshot,
-    mutated_files,
-    read_snapshot_records,
-    take_session_snapshot,
-)
+from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
 
 #: Response-item payload types whose presence in a rollout means a specific
 #: content-shaped gap was actually exercised, rather than merely being possible.
@@ -139,24 +135,21 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
     ------
         InvalidSessionInput: ``rollout_jsonl`` is not an existing ``.jsonl`` file.
         SourceMutatedDuringConversion: the rollout changed between the
-            snapshot and the end of the raw parse, so the artifacts would
-            disagree with each other.
+            read and the end of the audit, so the artifacts would not
+            describe the rollout as it stands.
     """
-    # BEFORE the snapshot: the snapshot stats the file, so an absent path would
-    # raise FileNotFoundError from inside it rather than this terminal verdict.
-    require_transcript_file(rollout_jsonl)
-    snapshot = take_session_snapshot(rollout_jsonl)
-    result = convert_codex_session(rollout_jsonl)
-    _refuse_if_mutated(snapshot)
+    loaded = read_session(rollout_jsonl)
+    snapshot = loaded.snapshot
+    result = convert_loaded_codex_session(loaded)
 
-    records = read_snapshot_records(snapshot)
+    records = loaded.record_pairs()
     census = codex_census_from_records(rollout_jsonl, records)
     report = _loss_report(census, developer_messages=_developer_message_count(records))
     edges_lines = tuple(codex_edges_jsonl_lines(records))
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole rollout's worth of steps.
     enriched = enrich_codex_trajectory(result.trajectory, records, copy_input=False)
-    del records
+    del records, loaded
     _refuse_if_mutated(snapshot)
 
     return (

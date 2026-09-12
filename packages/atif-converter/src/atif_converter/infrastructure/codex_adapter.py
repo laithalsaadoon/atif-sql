@@ -14,7 +14,7 @@ the directory-globbing hazard the old wrapper staged around no longer exists.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -27,6 +27,10 @@ from atif_converter.infrastructure.harbor_adapter import (
     ConversionResult,
     validate_trajectory,
 )
+from atif_converter.infrastructure.raw_records import LoadedSession
+
+if TYPE_CHECKING:
+    from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
 
 #: A Codex rollout's filename shape. harbor's own
 #: ``Codex._ROLLOUT_FILENAME_RE`` requires the same prefix for its upload path,
@@ -83,6 +87,38 @@ def convert_codex_session(rollout_jsonl: Path) -> ConversionResult:
         msg = f"Codex conversion failed for {rollout_jsonl}"
         raise ConversionError(msg) from exc
 
+    if trajectory is None:
+        msg = f"no convertible events in {rollout_jsonl}"
+        raise EmptySessionError(msg)
+
+    return _result_from(trajectory, rollout_jsonl)
+
+
+def convert_loaded_codex_session(loaded: LoadedSession) -> ConversionResult:
+    """Convert an already-read rollout into a validated ATIF trajectory.
+
+    The records are :func:`~atif_converter.infrastructure.harbor_adapter.read_session`'s;
+    nothing is read from disk here.
+
+    Raises
+    ------
+        EmptySessionError: the converter found no convertible events.
+        ConversionError: any unexpected failure inside the converter.
+    """
+    from atif_converter.infrastructure.codex_converter import convert_loaded_codex_rollout
+
+    rollout_jsonl = loaded.snapshot.session_jsonl
+    try:
+        trajectory = convert_loaded_codex_rollout(loaded)
+    except (
+        Exception
+    ) as exc:  # the converter is a port of untyped upstream code; classify at the seam
+        msg = f"Codex conversion failed for {rollout_jsonl}"
+        raise ConversionError(msg) from exc
+    return _result_from(trajectory, rollout_jsonl)
+
+
+def _result_from(trajectory: Trajectory | None, rollout_jsonl: Path) -> ConversionResult:
     if trajectory is None:
         msg = f"no convertible events in {rollout_jsonl}"
         raise EmptySessionError(msg)

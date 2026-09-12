@@ -17,15 +17,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
 
 from atif_converter.domain.errors import (
     ConversionError,
     EmptySessionError,
     InvalidSessionInput,
 )
+from atif_converter.infrastructure.raw_records import LoadedSession, load_session
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +84,72 @@ def validate_trajectory(trajectory: dict[str, Any]) -> tuple[str, ...]:
     return () if ok else tuple(str(e) for e in validator.errors)
 
 
+def read_session(session_jsonl: Path) -> LoadedSession:
+    """Read one session's files once, fingerprinted and parsed in the same pass.
+
+    The reader half of the seam: :func:`convert_loaded_session` converts what
+    this returns, and the use case audits the same records, so the files are
+    read once for everything. A transcript that is not UTF-8 is classified as
+    a ``ConversionError`` here, as it was when the converter did its own read,
+    so a materialize pass records one per-session failure and continues.
+
+    Raises
+    ------
+        InvalidSessionInput: ``session_jsonl`` is not an existing ``.jsonl`` file.
+        ConversionError: a discovered file is not UTF-8.
+    """
+    require_transcript_file(session_jsonl)
+    try:
+        return load_session(session_jsonl)
+    except UnicodeDecodeError as exc:
+        msg = f"conversion failed for {session_jsonl}"
+        raise ConversionError(msg) from exc
+
+
+def _result_from(trajectory: Trajectory | None, session_jsonl: Path) -> ConversionResult:
+    """Validate a converted trajectory into the seam's result, or raise on ``None``."""
+    if trajectory is None:
+        msg = f"no convertible events in {session_jsonl}"
+        raise EmptySessionError(msg)
+
+    trajectory_dict: dict[str, Any] = trajectory.model_dump(mode="json", exclude_none=True)
+
+    errors = validate_trajectory(trajectory_dict)
+    if errors:
+        logger.warning("trajectory for {} failed validation: {}", session_jsonl, errors)
+
+    return ConversionResult(trajectory=trajectory_dict, validation_errors=errors)
+
+
+def convert_loaded_session(
+    loaded: LoadedSession,
+    *,
+    include_subagents: bool = True,
+) -> ConversionResult:
+    """Convert an already-read Claude Code session into a validated ATIF trajectory.
+
+    The records are :func:`read_session`'s; nothing is read from disk here.
+
+    Raises
+    ------
+        EmptySessionError: the converter found no convertible events.
+        ConversionError: any unexpected failure inside the converter.
+    """
+    from atif_converter.infrastructure.claude_code_converter import (
+        convert_loaded_claude_code_session,
+    )
+
+    session_jsonl = loaded.snapshot.session_jsonl
+    try:
+        trajectory = convert_loaded_claude_code_session(loaded, include_subagents=include_subagents)
+    except (
+        Exception
+    ) as exc:  # the converter is a port of untyped upstream code; classify at the seam
+        msg = f"conversion failed for {session_jsonl}"
+        raise ConversionError(msg) from exc
+    return _result_from(trajectory, session_jsonl)
+
+
 def convert_session(
     session_jsonl: Path,
     *,
@@ -88,7 +158,10 @@ def convert_session(
     """Convert one Claude Code session JSONL into a validated ATIF trajectory.
 
     Reads the session and its side files through our converter and validates
-    the result with harbor's ``TrajectoryValidator``.
+    the result with harbor's ``TrajectoryValidator``. The use case goes through
+    :func:`read_session` + :func:`convert_loaded_session` instead so the audit
+    shares the read; this is the plain path for a caller that wants the
+    trajectory alone.
 
     Raises
     ------
@@ -107,15 +180,4 @@ def convert_session(
     ) as exc:  # the converter is a port of untyped upstream code; classify at the seam
         msg = f"conversion failed for {session_jsonl}"
         raise ConversionError(msg) from exc
-
-    if trajectory is None:
-        msg = f"no convertible events in {session_jsonl}"
-        raise EmptySessionError(msg)
-
-    trajectory_dict: dict[str, Any] = trajectory.model_dump(mode="json", exclude_none=True)
-
-    errors = validate_trajectory(trajectory_dict)
-    if errors:
-        logger.warning("trajectory for {} failed validation: {}", session_jsonl, errors)
-
-    return ConversionResult(trajectory=trajectory_dict, validation_errors=errors)
+    return _result_from(trajectory, session_jsonl)

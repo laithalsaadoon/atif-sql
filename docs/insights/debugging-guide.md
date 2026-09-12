@@ -229,9 +229,10 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
 - **`SourceMutatedDuringConversion`:** a session that resumes writing
   mid-conversion would yield a census, a trajectory, and an `edges.jsonl` each
   describing different bytes. Signal: one session failing with a
-  `N source file(s) changed` message while its siblings succeed. Mitigation: a
-  fingerprint snapshot taken before harbor reads and re-checked twice, refusing
-  rather than publishing; retrying once the session goes quiet succeeds.
+  `N source file(s) changed` message while its siblings succeed. Mitigation: the
+  files are read once, fingerprinted in the same pass that parses them, and the
+  fingerprints are re-checked (stat and digest) once the artifacts are built,
+  refusing rather than publishing; retrying once the session goes quiet succeeds.
   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:11-22`,
   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:93-102`
 - **`SuspiciousEmptyScanError`:** a wrong `source_root` — a typo, an unmounted
