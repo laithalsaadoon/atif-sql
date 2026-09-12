@@ -45,6 +45,13 @@ The three instance attributes the method read are replaced as follows:
     ``cli_version``, and the adapter never set it either, so ``agent.version``
     is the rollout's ``cli_version`` or the literal ``"unknown"``.
 
+One substitution under the hood: ``_compute_cost_from_pricing`` reads the
+price table and prices each call through :mod:`atif_converter.domain.pricing`
+rather than ``litellm`` directly. The floats are identical (the module
+reproduces ``litellm.cost_per_token`` from litellm's bundled table and falls
+back to litellm for any shape it does not cover); what changed is that the
+conversion no longer pays the four-second ``import litellm``.
+
 Pure over already-parsed records in FILE order: no file I/O, no
 ``harbor.agents`` import. Reading the rollout is
 :mod:`atif_converter.infrastructure.codex_converter`'s job.
@@ -67,6 +74,7 @@ from harbor.models.trajectories import (  # type: ignore[import-untyped]
 )
 from loguru import logger
 
+from atif_converter.domain import pricing
 from atif_converter.domain.agents import AgentSource
 from atif_converter.domain.codex_enrichment import message_text
 
@@ -438,28 +446,31 @@ def _compute_cost_from_pricing(
 
     harbor's ``Codex._compute_cost_from_pricing``; ``fallback_model_name``
     stands in for ``self.model_name``. LiteLLM selects context-dependent rates
-    from the token count for this individual request. Returns None when litellm
-    is not installed, the model is missing from its pricing table (tried as
-    given and with any ``provider/`` prefix stripped) or the calculation fails.
+    from the token count for this individual request. Returns None when the
+    pricing table is unavailable, the model is missing from it (tried as given
+    and with any ``provider/`` prefix stripped) or the calculation fails.
+
+    The table lookup and the arithmetic go through
+    :mod:`atif_converter.domain.pricing`, which reads litellm's bundled table
+    without importing litellm and returns the same floats; litellm is imported
+    only for a shape the fast path does not cover.
     """
     resolved_model_name = model_name or fallback_model_name
     if not resolved_model_name:
         return None
 
+    pricing_model_name: str | None = None
     try:
-        import litellm
+        for key in (
+            resolved_model_name,
+            resolved_model_name.split("/", 1)[-1],
+        ):
+            if pricing.has_pricing_entry(key):
+                pricing_model_name = key
+                break
     except ImportError:
         logger.debug("litellm not available; leaving codex cost_usd as None")
         return None
-
-    pricing_model_name: str | None = None
-    for key in (
-        resolved_model_name,
-        resolved_model_name.split("/", 1)[-1],
-    ):
-        if litellm.model_cost.get(key):
-            pricing_model_name = key
-            break
 
     if pricing_model_name is None:
         logger.debug(
@@ -469,7 +480,7 @@ def _compute_cost_from_pricing(
         return None
 
     try:
-        input_cost, output_cost = litellm.cost_per_token(
+        input_cost, output_cost = pricing.cost_per_token(
             model=pricing_model_name,
             prompt_tokens=prompt_tokens or 0,
             completion_tokens=completion_tokens or 0,

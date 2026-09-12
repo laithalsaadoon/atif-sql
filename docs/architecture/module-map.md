@@ -240,8 +240,17 @@ empty text parts and an empty assistant message can never be placed by matching
 (`packages/atif-converter/src/atif_converter/domain/codex_enrichment.py`). A fingerprint snapshot is
 taken before harbor reads and re-checked afterwards, so a session that resumes writing mid-conversion
 fails instead of yielding mutually inconsistent artifacts
-(`packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:110`).
+(`packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:110`). Per-step cost
+estimates come from `pricing.cost_per_token`
+(`packages/atif-converter/src/atif_converter/domain/pricing.py:628`), which reads litellm's bundled
+price table without importing litellm and reproduces `litellm.cost_per_token`'s floats exactly,
+falling back to litellm for any shape it does not cover; `import litellm` used to be four of the
+five seconds a large session took.
 
+- `packages/atif-converter/src/atif_converter/domain/pricing.py` (675 LOC): `fast_cost_per_token`
+  (`packages/atif-converter/src/atif_converter/domain/pricing.py:584`) prices the covered model shapes
+  from litellm's own table located via `importlib.util.find_spec` (`:318`); `cost_per_token` (`:628`)
+  wraps it with the litellm fallback and `has_pricing_entry` (`:666`) is Codex's table lookup.
 - `packages/atif-converter/src/atif_converter/domain/enrichment.py` (412 LOC) — `enrich_trajectory`
   restores source uuids, the compact-summary flag, and the cache-creation total
   (`packages/atif-converter/src/atif_converter/domain/enrichment.py:198`).

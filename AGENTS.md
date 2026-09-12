@@ -19,7 +19,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `codex_*` so one `gaps_observed` array carries both). `domain.agents`
   holds the `AgentSource` enum, whose VALUES are the wire contract for the
   `--agent` flag, harbor's `Trajectory.agent.name`, and `meta.agent`.
-  Layered: `application` > `infrastructure` > `domain`.
+  `domain.pricing` prices each step (`total_cost_usd`, Codex `cost_usd`) from
+  litellm's bundled price table without importing litellm, and hands any
+  shape it doesn't cover to litellm itself. Layered: `application` >
+  `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
   quiescence, atomic artifact writes. Per-agent discovery lives in
   `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
@@ -64,6 +67,17 @@ Rules of the road:
   frozen goldens under `tests/goldens/` and a live-corpus parity test.
   A harbor bump is a lockfile edit plus reading the converter suite's failures
   as upstream-behavior reports (see CONTRIBUTING).
+- litellm stays a declared dependency but is OFF the conversion hot path:
+  `import litellm` took about four of the five seconds a 76 MB session
+  needed, so `atif_converter.domain.pricing` reads litellm's own bundled
+  `model_prices_and_context_window_backup.json` (found through
+  `importlib.util.find_spec`, never `import litellm`) and repeats
+  `litellm.cost_per_token`'s arithmetic in the same float order. The output
+  is bit for bit identical; `packages/atif-converter/tests/test_pricing_identity.py`
+  proves it against litellm over every covered table key and the corpus
+  models. A shape the fast path doesn't replicate falls back to litellm, so a
+  litellm bump still means re-running that test and reading its failures as
+  upstream-pricing reports.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - Settings via pydantic-settings, env prefix `ATIF_SQL_`. `agent` is applied
   at CONSTRUCTION, not copied in afterwards: both default roots derive from

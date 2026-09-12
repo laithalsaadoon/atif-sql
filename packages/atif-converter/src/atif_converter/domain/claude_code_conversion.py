@@ -35,7 +35,10 @@ raised ``OSError`` and the method returned ``None`` on every call, which sent
 every trajectory down the ``litellm`` estimate path. That fallback ordering is
 kept verbatim: ``total_cost_usd`` is the litellm estimate or ``None``, and
 ``final_metrics.extra["cost_source"] == "litellm_estimate"`` whenever the
-estimate priced at least one step. Also not ported: ``_session_dirs`` (log-dir
+estimate priced at least one step. The estimate itself now comes from
+:mod:`atif_converter.domain.pricing`, which reproduces ``litellm.cost_per_token``
+from litellm's bundled table without importing litellm (the import cost four
+seconds per process); the floats are identical, so the label stays. Also not ported: ``_session_dirs`` (log-dir
 discovery, replaced by the infrastructure reader), and ``_session_text`` /
 ``_session_tool_result_content`` (they serve ``atif_to_native_trajectory``, the
 REVERSE conversion, not this one).
@@ -66,6 +69,7 @@ from harbor.models.trajectories import (  # type: ignore[import-untyped]
 )
 from loguru import logger
 
+from atif_converter.domain import pricing
 from atif_converter.domain.agents import AgentSource
 
 #: The schema version harbor 0.22.0 stamps on a Claude Code trajectory.
@@ -418,13 +422,14 @@ def _format_tool_result(
 
 
 def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
-    """Estimate cost from transcript usage when Claude omits its result event."""
-    try:
-        import litellm
-    except ImportError:
-        logger.debug("LiteLLM is unavailable; cannot estimate Claude cost")
-        return None
+    """Estimate cost from transcript usage when Claude omits its result event.
 
+    harbor priced every step through ``litellm.cost_per_token``; the call goes
+    through :mod:`atif_converter.domain.pricing`, which returns the same floats
+    from litellm's bundled table without importing litellm, and imports it only
+    for a shape it does not cover. Any pricing failure (litellm raising, or
+    litellm missing on a fallback) yields "no estimate", as in harbor.
+    """
     total_cost = 0.0
     priced_any_step = False
     for step in steps:
@@ -452,7 +457,7 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
             service_tier = None
 
         try:
-            prompt_cost, completion_cost = litellm.cost_per_token(
+            prompt_cost, completion_cost = pricing.cost_per_token(
                 model=step.model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
