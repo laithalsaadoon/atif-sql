@@ -207,8 +207,11 @@ def write_analytics_parquets(corpus_root: Path, session_id: str) -> list[Path]:
 # query time was finding 4 of the MicroVM review), so the suite installs it
 # once up front. A no-op where it is already present; a one-time download on a
 # fresh runner, exactly what every register() call used to do implicitly.
+# A public name on purpose: ``conftest.py`` re-exports this module with
+# ``import *``, which skips underscore names, so an underscore here would leave
+# the fixture unregistered (it did, on a runner with no extension cached).
 @pytest.fixture(scope="session", autouse=True)
-def _lance_extension_present() -> None:  # pyright: ignore[reportUnusedFunction]
+def lance_extension_present() -> None:
     import duckdb
 
     con = duckdb.connect()
