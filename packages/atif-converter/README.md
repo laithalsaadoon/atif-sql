@@ -48,14 +48,24 @@ fallback sets it to `true` before importing so one process never prices from
 two tables). Set to anything else, the operator has asked for the remote table,
 and every call goes through litellm.
 
-## Snapshot discipline
+## One read, then the snapshot re-check
 
-`convert_and_audit` fingerprints every source file before harbor reads, and
-re-checks after harbor's read and again after the raw parse; movement anywhere
-in that window raises `SourceMutatedDuringConversion` rather than publishing a
-census, a trajectory, and an `edges.jsonl` that describe different bytes.
+`convert_and_audit` reads each source file once. `raw_records.load_session`
+stats the file, then streams its bytes through a sha256 digest on the way to
+the JSON parser, so the fingerprint it records is the fingerprint of the bytes
+that were parsed. The converter, the census, the `edges.jsonl` emitter and the
+enrichment pass all consume that one list of records, so the three artifacts
+describe the same bytes by construction.
 
-The snapshot carries fingerprints only. Records are parsed after harbor's
-converter returns and releases its working set, so the two large allocations
-do not overlap — measured peak RSS on an 18 MB / 17,932-record session is
-595.4 MiB, against 761.4 MiB when the parse is hoisted ahead of harbor.
+Once the artifacts are built the fingerprints are re-checked, stat and digest
+both: a same-length rewrite inside one mtime tick is invisible to the stat
+pair, so the re-check hashes again. Movement anywhere between the read and the
+check raises `SourceMutatedDuringConversion` rather than publishing artifacts
+that describe bytes the session no longer holds.
+
+Per file that's two opens, one parse and two hash passes. The previous flow
+(fingerprint, converter read, re-check, audit parse, re-check) opened each
+file five times, parsed it twice and hashed it three times; on the 76 MB
+benchmark session with its 59 MB of side files the use case went from 1.55 s
+to 1.01 s in-process. `tests/test_snapshot_and_drift.py::TestSinglePass` pins
+the counts for both agents.

@@ -28,14 +28,13 @@ directory name, the same value on a real Codex tree.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
-from loguru import logger
 
 from atif_converter.domain.codex_conversion import convert_codex_records
+from atif_converter.infrastructure.raw_records import LoadedSession, parse_jsonl_records
 
 
 def read_codex_rollout(rollout_jsonl: Path) -> list[dict[str, Any]]:
@@ -49,17 +48,8 @@ def read_codex_rollout(rollout_jsonl: Path) -> list[dict[str, Any]]:
     ------
         OSError: the file cannot be opened or read.
     """
-    raw_events: list[dict[str, Any]] = []
     with rollout_jsonl.open(encoding="utf-8") as handle:
-        for line in handle:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                raw_events.append(json.loads(stripped))
-            except json.JSONDecodeError as exc:
-                logger.debug("Skipping malformed JSONL line in {}: {}", rollout_jsonl, exc)
-    return raw_events
+        return parse_jsonl_records(handle, rollout_jsonl)
 
 
 def convert_codex_rollout(rollout_jsonl: Path) -> Trajectory | None:
@@ -78,4 +68,16 @@ def convert_codex_rollout(rollout_jsonl: Path) -> Trajectory | None:
     return convert_codex_records(raw_events, fallback_session_id=rollout_jsonl.parent.name)
 
 
-__all__ = ["convert_codex_rollout", "read_codex_rollout"]
+def convert_loaded_codex_rollout(loaded: LoadedSession) -> Trajectory | None:
+    """Convert an already-read rollout: the records of :func:`~atif_converter.infrastructure.raw_records.load_session`.
+
+    Same result as :func:`convert_codex_rollout` on the same bytes, with no
+    second read. Only the main file's records are converted; a rollout has no
+    side-files, so anything else the loader discovered is the audit's
+    business, as it was before.
+    """
+    rollout_jsonl = loaded.snapshot.session_jsonl
+    return convert_codex_records(loaded.main_records, fallback_session_id=rollout_jsonl.parent.name)
+
+
+__all__ = ["convert_codex_rollout", "convert_loaded_codex_rollout", "read_codex_rollout"]

@@ -71,36 +71,43 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:226`
 1. Reject a path that is not an existing `.jsonl` file before any harbor work,
    which the CLI maps to exit 64 —
    `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:163`.
-2. Fingerprint every source file — the main transcript and each discovered
-   side-file — before harbor reads anything —
-   `packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:110`.
-3. Read the main transcript and discover every side file under `<stem>/`,
-   workflow-nested ones included —
-   `packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py:57`.
-4. Convert the records with our ported converter (a parity port of harbor
+2. Read every source file once: the main transcript and each discovered
+   side-file under `<stem>/`, workflow-nested ones included. Each file is
+   stat'ed, then streamed through a sha256 digest into the JSON parser, so the
+   fingerprint recorded is the fingerprint of the bytes parsed:
+   `packages/atif-converter/src/atif_converter/infrastructure/raw_records.py`
+   (`load_session`), reached through `harbor_adapter.read_session`, which
+   classifies a non-UTF-8 file as `ConversionError`.
+3. Convert those records with our ported converter (a parity port of harbor
    0.22.0's, built on the public ATIF models) and dump the result to a
    JSON-mode dict; a `None` return means no convertible events and raises
-   `EmptySessionError` —
-   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`.
-5. Re-check the fingerprints. Any movement raises
-   `SourceMutatedDuringConversion` rather than emitting a census, a trajectory,
-   and an edges file that describe different bytes of one session —
-   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:93`.
-6. Parse the raw records from the snapshot and build the loss report: four
-   `FidelityGap` members are structural for every harbor 0.22.0 conversion, and
-   the rest are added from what the census found —
-   `packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:118`,
+   `EmptySessionError`:
+   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py`
+   (`convert_loaded_session`),
+   `packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py`
+   (`convert_loaded_claude_code_session`).
+4. Build the loss report from the same records: four `FidelityGap` members
+   are structural for every harbor 0.22.0 conversion, and the rest are added
+   from what the census found:
+   `packages/atif-converter/src/atif_converter/infrastructure/census.py:57`,
    `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:62`.
-7. Derive the `edges.jsonl` lines from the raw records, then enrich the
+5. Derive the `edges.jsonl` lines from the same records, then enrich the
    trajectory in place with `source_uuids`, `is_compact_summary`, and
-   `cache_creation_total` — the harbor trajectory has no other consumer, so no
-   deep copy is taken — `packages/atif-converter/src/atif_converter/domain/edges.py:99`,
+   `cache_creation_total` (the harbor trajectory has no other consumer, so no
+   deep copy is taken): `packages/atif-converter/src/atif_converter/domain/edges.py:99`,
    `packages/atif-converter/src/atif_converter/domain/enrichment.py:198`.
-8. Re-check the fingerprints a second time, re-validate the enriched
-   trajectory, and write it plus `edges.jsonl` beside it or stream the
-   trajectory to stdout; a validation error exits 65 —
-   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:148`,
+6. Re-check the fingerprints, stat and digest both. Any movement since the
+   read raises `SourceMutatedDuringConversion` rather than publishing
+   artifacts that describe bytes the session no longer holds:
+   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:93`,
+   `packages/atif-converter/src/atif_converter/infrastructure/raw_records.py`
+   (`mutated_files`).
+7. Re-validate the enriched trajectory, and write it plus `edges.jsonl`
+   beside it or stream the trajectory to stdout; a validation error exits 65:
    `packages/atif-cli/src/atif_cli/app.py:272`.
+
+Per file that is two opens, one parse and two hash passes; the converter and
+the audit never read the session separately.
 
 ### Related
 

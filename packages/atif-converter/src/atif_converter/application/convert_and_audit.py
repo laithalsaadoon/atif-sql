@@ -5,20 +5,23 @@
 Composes the raw-side census (:mod:`atif_converter.infrastructure.census`)
 with the harbor adapter
 (:mod:`atif_converter.infrastructure.harbor_adapter`) into a
-``(ConversionResult, LossReport)`` pair — the honest answer to "what did we
+``(ConversionResult, LossReport)`` pair, the honest answer to "what did we
 just materialize, and what did upstream drop on the floor?".
 
-SNAPSHOT DISCIPLINE: a fingerprint snapshot of every source file is taken
-BEFORE harbor reads, and re-checked after harbor's read and again after the
-raw parse. Any movement anywhere in that window fails the session. A Claude
-Code session that resumes writing mid-conversion would otherwise yield a
-census, a trajectory, and an edges.jsonl each describing different bytes of
-the same session — mutually inconsistent artifacts that only surface as
-enrichment desync noise.
+ONE READ. The session's files are read once, by
+:func:`~atif_converter.infrastructure.harbor_adapter.read_session`, which
+fingerprints and parses each file in the same pass. The converter, the census,
+the edges emitter and the enrichment pass all consume that one list of
+records, so the trajectory, the loss report and ``edges.jsonl`` describe the
+same bytes by construction. Before this, the converter and the audit each
+parsed the files and the snapshot hashed them three times over.
 
-The snapshot carries fingerprints, not records: the raw records are parsed
-only after harbor's converter has returned and released its own working set,
-so the two large allocations do not overlap.
+SNAPSHOT DISCIPLINE: the fingerprints taken by that read are re-checked once
+the artifacts are built. A Claude Code session that resumes writing during
+the read, or anywhere before the check, fails the session: a stat pair alone
+would miss a same-length rewrite inside one mtime tick, so the re-check hashes
+the bytes again. That second hash pass is the one read the audit still pays
+beyond the parse.
 """
 
 from __future__ import annotations
@@ -39,16 +42,11 @@ from atif_converter.domain.fidelity import (
 from atif_converter.infrastructure.census import SessionCensus, census_from_snapshot
 from atif_converter.infrastructure.harbor_adapter import (
     ConversionResult,
-    convert_session,
-    require_transcript_file,
+    convert_loaded_session,
+    read_session,
     validate_trajectory,
 )
-from atif_converter.infrastructure.raw_records import (
-    SessionSnapshot,
-    mutated_files,
-    read_snapshot_records,
-    take_session_snapshot,
-)
+from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
 
 #: Gaps every harbor 0.22.0 conversion exhibits regardless of session content.
 _STRUCTURAL_GAPS: frozenset[FidelityGap] = frozenset(
@@ -113,7 +111,7 @@ def convert_and_audit(
 
     The returned :class:`ConversionResult` carries the ENRICHED trajectory
     (``source_uuids`` / ``is_compact_summary`` on steps,
-    ``cache_creation_total`` on the trajectory — see
+    ``cache_creation_total`` on the trajectory, see
     :func:`~atif_converter.domain.enrichment.enrich_trajectory`) plus the
     ready-to-write ``edges.jsonl`` lines derived from the RAW records, per
     the corpus contract. Validation is re-run post-enrichment.
@@ -122,7 +120,7 @@ def convert_and_audit(
     is an upper bound on what the materialized trajectory is missing.
 
     Note: ``records_converted`` counts raw user/assistant RECORDS, not ATIF
-    steps — harbor legitimately bundles several assistant events (one
+    steps. harbor legitimately bundles several assistant events (one
     ``message.id``) into a single agent step, so the two numbers differ by
     design.
 
@@ -130,27 +128,24 @@ def convert_and_audit(
     ------
         InvalidSessionInput: ``session_jsonl`` is not an existing ``.jsonl`` file.
         SourceMutatedDuringConversion: a source file changed anywhere between
-            the snapshot and the end of the raw parse, so the artifacts would
-            disagree with each other.
+            the read and the end of the audit, so the artifacts would not
+            describe the session as it stands.
     """
-    # BEFORE the snapshot: the snapshot stats the file, so an absent path would
-    # raise FileNotFoundError from inside it rather than this terminal verdict.
-    require_transcript_file(session_jsonl)
-    snapshot = take_session_snapshot(session_jsonl)
-    result = convert_session(session_jsonl, include_subagents=include_subagents)
-    _refuse_if_mutated(snapshot)
+    loaded = read_session(session_jsonl)
+    snapshot = loaded.snapshot
+    result = convert_loaded_session(loaded, include_subagents=include_subagents)
 
-    records = read_snapshot_records(snapshot)
-    report = _loss_report(census_from_snapshot(snapshot, records))
-    edges_lines = tuple(edges_jsonl_lines(records))
+    pairs = loaded.record_pairs()
+    report = _loss_report(census_from_snapshot(snapshot, pairs))
+    edges_lines = tuple(edges_jsonl_lines(pairs))
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole large transcript's worth of steps.
     enriched = enrich_trajectory(
         result.trajectory,
-        [record for record, _src in records],
+        [record for record, _src in pairs],
         copy_input=False,
     )
-    del records
+    del pairs, loaded
     _refuse_if_mutated(snapshot)
 
     enriched_result = ConversionResult(

@@ -237,10 +237,12 @@ three by re-running harbor's deterministic normalization order over the raw reco
 `codex_*` so one `gaps_observed` array can carry either agent's, and its own enrichment pass, which
 attributes agent steps by a re-derived `api_call_id` rather than by message text because harbor drops
 empty text parts and an empty assistant message can never be placed by matching
-(`packages/atif-converter/src/atif_converter/domain/codex_enrichment.py`). A fingerprint snapshot is
-taken before harbor reads and re-checked afterwards, so a session that resumes writing mid-conversion
-fails instead of yielding mutually inconsistent artifacts
-(`packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:110`). Per-step cost
+(`packages/atif-converter/src/atif_converter/domain/codex_enrichment.py`). Each source file is read
+once, fingerprinted and parsed in the same pass, and the converter and the audit consume that one
+list of records; the fingerprints are re-checked once the artifacts are built, so a session that
+resumes writing mid-conversion fails instead of publishing artifacts for bytes it no longer holds
+(`packages/atif-converter/src/atif_converter/infrastructure/raw_records.py`, `load_session` and
+`mutated_files`). Per-step cost
 estimates come from `pricing.cost_per_token`
 (`packages/atif-converter/src/atif_converter/domain/pricing.py:628`), which reads litellm's bundled
 price table without importing litellm and reproduces `litellm.cost_per_token`'s floats exactly,

@@ -38,11 +38,12 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
    trajectory — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`.
 7. Under `--agent codex` the same step runs `convert_codex_and_audit`, which reads the one rollout it
    is given and converts it with our ported Codex converter — `packages/atif-converter/src/atif_converter/application/convert_codex.py:128`.
-8. `convert_and_audit` snapshots the source files, converts them with our ported converter
-   through the seam at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`
-   (validated by harbor's public `TrajectoryValidator`, `:68`), then builds
-   the loss report and edges from the raw records, enriches the trajectory, and refuses the result
-   if any source moved mid-pass — `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`.
+8. `convert_and_audit` reads the source files once (fingerprinted and parsed in the same pass,
+   `harbor_adapter.read_session`), converts those records with our ported converter through the
+   seam at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py`
+   (`convert_loaded_session`, validated by harbor's public `TrajectoryValidator`), then builds
+   the loss report and edges from the same records, enriches the trajectory, and refuses the result
+   if any source moved since the read (`packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`).
 9. The three JSON artifacts are written under `.staging/`, then the `ArtifactProducer` (atif-duck's
    `ColumnarArtifactProducer`, plugged in by the CLI unless `--no-columnar`) writes the four typed
    parquet files beside them and hands back the `columnar_schema` key for `meta.json`; `meta.json`
