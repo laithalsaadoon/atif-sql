@@ -335,6 +335,53 @@ class TestBadDirectoryNamesRegisterNothing:
         assert all(bad not in str(path) for path in sources.lazy_read_paths)
 
 
+class TestGlobShapedNamesDoNotMultiplyRows:
+    """Finding 7 of the MicroVM review, exactly as reproduced there.
+
+    Before the boundary a session dir named ``*`` or ``???`` landed inside
+    the readers' path lists, DuckDB expanded it as a glob, and every other
+    session's rows were read twice: ``sessions`` had seven rows for four
+    ids and ``count(*) FROM steps`` was 14 where 8 was true. The name is now
+    rejected at the boundary, so a registration over such a corpus counts
+    each session exactly once, on both read paths, and grants no glob.
+    """
+
+    @staticmethod
+    def _per_session_counts(con: duckdb.DuckDBPyConnection) -> dict[str, tuple[int, int]]:
+        rows = _rows(
+            con,
+            "SELECT s.session_id, s.step_count, (SELECT count(*) FROM steps t "
+            "WHERE t.session_id = s.session_id) FROM sessions s ORDER BY 1",
+        )
+        return {str(r[0]): (int(r[1]), int(r[2])) for r in rows}
+
+    @pytest.mark.parametrize("name", ["*", "???"])
+    def test_each_session_is_counted_once_on_both_paths(self, tmp_path: Path, name: str) -> None:
+        clean = duckdb.connect(":memory:")
+        register(clean, build_corpus(tmp_path / "clean"))
+        expected = self._per_session_counts(clean)
+        assert set(expected) == set(SESSION_IDS)
+
+        root = build_corpus(tmp_path / "hostile")
+        _write_session(
+            root / "sessions" / name, name, _adversarial_trajectory() | {"session_id": name}
+        )
+        for path_label in ("json", "columnar"):
+            if path_label == "columnar":
+                add_columnar(root, tuple(SESSION_IDS))
+            con = duckdb.connect(":memory:")
+            sources = register(con, root)
+            assert sources.rejected_session_ids == (name,), path_label
+            assert self._per_session_counts(con) == expected, path_label
+            assert _rows(con, "SELECT count(*) FROM sessions") == [(len(SESSION_IDS),)]
+            assert _rows(con, "SELECT count(*) FROM steps") == [
+                (sum(steps for steps, _ in expected.values()),)
+            ]
+            assert all(not any(ch in str(p) for ch in "*?[") for p in sources.lazy_read_paths), (
+                "a glob metacharacter reached the sandbox's file allowlist"
+            )
+
+
 class TestRemainingSqlLiteralSites:
     """The two statements DuckDB will not prepare; each fails without ``sql_literal``."""
 

@@ -35,6 +35,15 @@ EXIT_CODES: dict[str, int] = {
     "validation_error": 65,  # convert: trajectory failed TrajectoryValidator
     "embedding_mismatch": 65,  # query/search: Lance store written by another provider
     "runtime_error": 70,  # everything else duckdb (or the adapter) raises
+    "sandbox_refused": 70,  # query: a statement kind the sandbox never runs (COPY, EXPORT,
+    # ATTACH, INSTALL, LOAD, PREPARE, ...). Same number as runtime_error, which is what
+    # every other sandbox refusal exits with; the distinct kind names the reason.
+    "root_refused": 77,  # query/search/analyze: running as uid 0 without ATIF_SQL_ALLOW_ROOT=1.
+    # EX_NOPERM by convention: the process has too MUCH permission for the file modes
+    # that protect the corpus to mean anything.
+    "extension_missing": 78,  # search: the Lance store exists but the lance DuckDB extension
+    # is not installed; `atif-sql embed --install-extension` is the operator action, so the
+    # same EX_CONFIG contract as terminal_state.
     "terminal_state": 78,  # embed: store/config state requires OPERATOR action (EX_CONFIG);
     # retrying without intervention cannot succeed — unattended lanes suppress
     # retries on this code instead of burning identical ticks

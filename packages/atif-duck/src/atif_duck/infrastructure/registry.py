@@ -100,7 +100,7 @@ from atif_duck.infrastructure.projections import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
     import duckdb
@@ -166,13 +166,51 @@ class RawSources:
         )
 
 
-#: Inlined ``read_json`` upper bound. Live trajectory.json files reach 436 MB
-#: because harbor inlines subagent sidechains and tool outputs, so 1 GiB is
-#: roughly 2.3x headroom over the largest observed document — not a knob to
-#: trim. Lowering it does not reduce registration memory: measured peak RSS is
-#: unchanged at 512 MiB and rises at 128 MiB, because this bounds the parse
-#: buffer rather than preallocating per thread.
-_MAX_OBJECT_SIZE: int = 1_073_741_824
+#: Ceiling for a ``read_json`` ``maximum_object_size``. Live trajectory.json
+#: files reach 436 MB because harbor inlines subagent sidechains and tool
+#: outputs; 1 GiB is about 2.3x headroom over the largest observed document.
+_OBJECT_SIZE_CAP: int = 1_073_741_824
+
+#: Floor for the same bound: DuckDB's own default.
+_OBJECT_SIZE_FLOOR: int = 16_777_216
+
+#: Headroom over the largest file when sizing the bound: a quarter of the file
+#: plus one MiB, so a file that grows a little between the stat and the read
+#: still parses.
+_OBJECT_SIZE_HEADROOM_DIVISOR: int = 4
+_OBJECT_SIZE_HEADROOM_BYTES: int = 1_048_576
+
+#: The DuckDB extension that reads the Lance embeddings store.
+LANCE_EXTENSION: str = "lance"
+
+
+def _object_size_bound(paths: Iterable[Path]) -> int:
+    """``maximum_object_size`` for a ``read_json`` over ``paths``, sized from the files.
+
+    The bound is not free. DuckDB's eager JSON reader reserves about twice
+    this many bytes PER THREAD before it parses anything, so the 1 GiB
+    constant this replaced cost 2 GiB a thread: over 300 ``edges.jsonl``
+    files of under 8 MB each it exhausted a 6 GB ``memory_limit`` at four
+    threads and a 25 GB one at sixteen, while 16 MiB read the same rows in
+    0.10 s (measured on the 300-session panel corpus). An earlier note here
+    claimed lowering it changed nothing; that measurement held the thread
+    count at one.
+
+    A newline-delimited file's objects are its lines and a one-document file
+    IS its object, so the largest file present bounds every object either
+    reader meets. That size plus headroom, floored at DuckDB's default and
+    capped at :data:`_OBJECT_SIZE_CAP`, is the bound. A path that vanished
+    between the listing and the stat counts as zero.
+    """
+    largest = 0
+    for path in paths:
+        try:
+            largest = max(largest, path.stat().st_size)
+        except OSError:
+            continue
+    with_headroom = largest + largest // _OBJECT_SIZE_HEADROOM_DIVISOR + _OBJECT_SIZE_HEADROOM_BYTES
+    return max(_OBJECT_SIZE_FLOOR, min(_OBJECT_SIZE_CAP, with_headroom))
+
 
 # Explicit projection for ``v_raw_trajectories``.
 #
@@ -618,7 +656,9 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
             # the columnar sessions' trajectory.json too, which is the cost
             # this whole arrangement exists to avoid. The list is the
             # statement's one parameter.
-            json_files = [str(sessions_dir / sid / "trajectory.json") for sid in json_ids]
+            trajectory_paths = [sessions_dir / sid / "trajectory.json" for sid in json_ids]
+            json_files = [str(path) for path in trajectory_paths]
+            trajectory_bound = _object_size_bound(trajectory_paths)
             con.execute(
                 f"""
                 CREATE OR REPLACE TEMP TABLE {_RAW_TRAJECTORIES_JSON_TABLE} AS
@@ -631,9 +671,9 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
                     format='auto',
                     filename=true,
                     columns={{{_render_columns_clause(_TRAJECTORY_COLUMNS)}}},
-                    maximum_object_size={_MAX_OBJECT_SIZE}
+                    maximum_object_size={int(trajectory_bound)}
                 );
-                """,  # noqa: S608  # nosec B608 - file list is a bound parameter; table/columns/cap are constants
+                """,  # noqa: S608  # nosec B608 - file list is a bound parameter; table/columns are constants; the bound is an int
                 [json_files],
             )
             logger.debug(
@@ -663,10 +703,10 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
 
         # edges.jsonl is one line per RAW record -> newline_delimited.
         # The record's own `source_file` (the raw transcript path) is kept;
-        # the edges.jsonl path itself is aliased to `edges_path`.
-        # edges.jsonl is one line per RAW record -> newline_delimited.
-        # The record's own `source_file` (the raw transcript path) is kept;
-        # the edges.jsonl path itself is aliased to `edges_path`.
+        # the edges.jsonl path itself is aliased to `edges_path`. The glob
+        # reads every matching file (the meta gate filters rows afterwards),
+        # so the bound is sized over every file the glob can reach.
+        edges_bound = _object_size_bound(sessions_dir.glob("*/edges.jsonl"))
         con.execute(
             f"""
             CREATE OR REPLACE TEMP TABLE {_RAW_EDGES_TABLE} AS
@@ -680,10 +720,10 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
                     format='newline_delimited',
                     filename=true,
                     columns={{{_render_columns_clause(_EDGE_COLUMNS)}}},
-                    maximum_object_size={_MAX_OBJECT_SIZE}
+                    maximum_object_size={int(edges_bound)}
                 )
             ) WHERE {meta_gate};
-            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants
+            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants; the bound is an int
             [edges_glob],
         )
         logger.debug("Registered {} from glob {}", _RAW_EDGES_TABLE, edges_glob)
@@ -1186,6 +1226,50 @@ def _lance_table_present(con: duckdb.DuckDBPyConnection) -> bool:
     return row is not None and int(row[0]) > 0
 
 
+def lance_extension_installed(con: duckdb.DuckDBPyConnection) -> bool:
+    """True when the lance extension is present in this connection's extension directory.
+
+    Read from ``duckdb_extensions()``, which lists the local directory and
+    never reaches the network, so the answer costs a few milliseconds and no
+    download.
+    """
+    row = con.execute(
+        "SELECT installed FROM duckdb_extensions() WHERE extension_name = ?", [LANCE_EXTENSION]
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
+def load_lance_extension(con: duckdb.DuckDBPyConnection) -> bool:
+    """``LOAD`` the lance extension when it is installed; never install it.
+
+    Returns ``False`` when the extension is absent, and executes no
+    ``INSTALL`` in that case whatever ``autoinstall_known_extensions`` says,
+    because the installed check runs first. Registration at query time must
+    never reach the network: the extension is 242 MB, fetched by name from
+    the default repository, and ``query`` runs unattended.
+    """
+    if not lance_extension_installed(con):
+        return False
+    con.execute(f"LOAD {LANCE_EXTENSION};")
+    return True
+
+
+def install_lance_extension(con: duckdb.DuckDBPyConnection) -> str:
+    """``INSTALL`` then ``LOAD`` the lance extension; return its install path.
+
+    The one place atif-duck reaches the network, so it belongs to explicit
+    commands only (``atif-sql embed --install-extension``, or a real embed
+    run, which reaches Bedrock anyway). A query-time registration calls
+    :func:`load_lance_extension` instead.
+    """
+    con.execute(f"INSTALL {LANCE_EXTENSION};")
+    con.execute(f"LOAD {LANCE_EXTENSION};")
+    row = con.execute(
+        "SELECT install_path FROM duckdb_extensions() WHERE extension_name = ?", [LANCE_EXTENSION]
+    ).fetchone()
+    return str(row[0]) if row and row[0] is not None else ""
+
+
 def register_vss(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -1198,7 +1282,14 @@ def register_vss(
 
     LanceDB stores embeddings + its IVF_HNSW_SQ index in one place (written
     by atif-embed's backfill); reads come back through DuckDB via the lance
-    core extension (``INSTALL lance; LOAD lance; ATTACH (TYPE LANCE)``).
+    core extension (``LOAD lance; ATTACH (TYPE LANCE)``). The extension is
+    only LOADed, never INSTALLed, here: :func:`load_lance_extension` checks
+    the local extension directory first and a missing extension degrades to
+    the empty fallback table with a warning, so registration never reaches
+    the network. Installing is an explicit act
+    (:func:`install_lance_extension`, behind ``atif-sql embed``). When no
+    store directory exists the extension is not loaded at all, which is the
+    state of every corpus that has not run ``embed``.
     The store probe runs through DuckDB itself. atif-duck declares no lancedb
     dependency: lancedb belongs to atif-embed, which writes the store, and the
     independence contract forbids an import edge between the two packages — so
@@ -1231,18 +1322,25 @@ def register_vss(
     -------
     bool
         ``True`` when the Lance table is reachable through the
-        ``message_embeddings`` view; ``False`` when no embeddings exist yet
-        (the name is created as an empty TABLE with the right schema so a
+        ``message_embeddings`` view; ``False`` when no embeddings exist yet,
+        or the store exists but the lance extension is not installed (the
+        name is created as an empty TABLE with the right schema so a
         downstream ``CREATE MACRO semantic_search`` can still bind).
     """
     dim_i = int(dim)
-    con.execute("INSTALL lance;")
-    con.execute("LOAD lance;")
 
     import duckdb as _duckdb
 
     attached = False
-    if lance_uri.is_dir():
+    if lance_uri.is_dir() and not load_lance_extension(con):
+        logger.warning(
+            "Lance store at {} cannot be read: the {} extension is not installed, so "
+            "message_embeddings binds empty. Run `atif-sql embed --install-extension` "
+            "(a one-time download) to enable vector search.",
+            lance_uri,
+            LANCE_EXTENSION,
+        )
+    elif lance_uri.is_dir():
         try:
             # ATTACH is one of the statement kinds DuckDB will not prepare, so
             # this is the one corpus path that still enters statement text; it

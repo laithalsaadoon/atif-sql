@@ -220,3 +220,45 @@ class TestMaterializeBoundary:
         report = _materialize(source_root, corpus_root)
         assert report.rejected_session_ids == ()
         assert report.rejected_count == 0
+
+
+class TestFilenamesThatOnceDestroyedTheCorpus:
+    """Findings 6 and 7 of the MicroVM review, exactly as reproduced there.
+
+    A transcript named ``..jsonl`` has the stem ``.``; ``sessions_dir / "."``
+    IS ``sessions_dir``, so the atomic swap once renamed the whole sessions
+    tree aside and deleted it, with exit 0 and a report that said nothing. A
+    transcript named ``*.jsonl`` materialized fine and then multiplied every
+    other session's rows in the readers. Both names now stop at the boundary.
+    """
+
+    VICTIMS = ("victim-1", "victim-2", "victim-3")
+
+    def test_dot_jsonl_and_star_jsonl_leave_the_materialized_tree_alone(
+        self, source_root: Path, corpus_root: Path
+    ) -> None:
+        for sid in self.VICTIMS:
+            write_session(source_root, sid, mtime_ns=STALE_NS)
+        first = _materialize(source_root, corpus_root)
+        assert first.materialized_count == len(self.VICTIMS)
+        layout = CorpusLayout(corpus_root=corpus_root)
+        before = sorted(p.name for p in layout.sessions_dir.iterdir())
+        assert before == sorted(self.VICTIMS)
+
+        # ``write_session`` names the file ``<id>.jsonl``: these are ``..jsonl`` and ``*.jsonl``.
+        for hostile in (".", "*"):
+            write_session(source_root, hostile, mtime_ns=STALE_NS)
+        assert (source_root / "-proj-a" / "..jsonl").is_file()
+        assert (source_root / "-proj-a" / "*.jsonl").is_file()
+
+        second = _materialize(source_root, corpus_root)
+        assert second.rejected_session_ids == ("*", ".")
+        assert second.rejected_count == 2
+        assert second.materialized_count == 0
+        assert second.failed_count == 0
+        assert second.sessions_removed == 0
+        assert sorted(p.name for p in layout.sessions_dir.iterdir()) == before
+        for sid in self.VICTIMS:
+            assert (layout.sessions_dir / sid / "meta.json").is_file()
+        # No loose artifact files at the sessions root, which is what the swap left behind.
+        assert all(p.is_dir() for p in layout.sessions_dir.iterdir())

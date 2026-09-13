@@ -159,6 +159,15 @@ atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N]
                                        # report adds rejected / rejected_session_ids
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
+                                       # sized to the host before registration
+                                       # (ATIF_SQL_QUERY_MEMORY_LIMIT / _THREADS
+                                       # override); private mkdtemp spill dir;
+                                       # refuses uid 0 unless ATIF_SQL_ALLOW_ROOT=1;
+                                       # COPY/EXPORT/ATTACH/INSTALL/LOAD/PREPARE/EXECUTE
+                                       # exit 70 sandbox_refused before execution;
+                                       # never installs an extension
+atif-sql embed --install-extension     # the ONE place the lance DuckDB extension
+                                       # is downloaded (also done by a real embed run)
 atif-sql schema                        # static, <50ms, no duckdb bind
 
 ## Parity oracle (satisfied and retired)
@@ -181,6 +190,9 @@ repo neither declares nor provides.
 source_root (default CLAUDE_CONFIG_DIR~/.claude /projects), corpus_root,
 quiesce_seconds=300, agent=claude-code (every --agent command reads it),
 materialize_workers=min(8, cpu_count) (materialize's pool size; 1 = single process).
+ATIF_SQL_QUERY_MEMORY_LIMIT (DuckDB size literal, e.g. 6GB) and ATIF_SQL_QUERY_THREADS
+override query's host-derived cap and thread count; ATIF_SQL_ALLOW_ROOT=1 lets
+query/search/analyze run as uid 0 (a warning is logged).
 _default_*() factories read env at call time. With agent=codex the two roots re-derive to $CODEX_HOME (default
 ~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that

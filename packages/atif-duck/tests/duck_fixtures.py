@@ -707,3 +707,21 @@ def write_codex_session(root: Path) -> Path:
         )
     )
     return session_dir
+
+
+# ``register_vss`` no longer installs the lance extension (that download at
+# query time was finding 4 of the MicroVM review), so the suite installs it
+# once up front. A no-op where it is already present; a one-time download on a
+# fresh runner, exactly what every register() call used to do implicitly.
+# A public name on purpose: ``conftest.py`` re-exports this module with
+# ``import *``, which skips underscore names, so an underscore here would leave
+# the fixture unregistered (it did, on a runner with no extension cached).
+@pytest.fixture(scope="session", autouse=True)
+def lance_extension_present() -> None:
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        con.execute("INSTALL lance")
+    finally:
+        con.close()

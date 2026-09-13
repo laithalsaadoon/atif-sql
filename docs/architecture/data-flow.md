@@ -104,12 +104,19 @@ sequenceDiagram
    written by a different provider or width raises instead of binding, because vectors from
    different models live in incompatible spaces and would return numerically valid but meaningless
    cosine scores — `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:46`.
-7. The fully-registered connection is then sandboxed: spill directory, memory cap, a directory
-   allowlist holding only the spill area, a path allowlist holding the individual analytics
-   parquets, `enable_external_access=false`, and `lock_configuration` last so caller SQL cannot
-   widen any of it — `packages/atif-cli/src/atif_cli/app.py:138`.
-8. The caller's statement executes against the locked connection (`:606`) and the cursor drains in
-   batches to stdout — a JSON array of row objects on a pipe, a width-aligned table on a TTY — `packages/atif-cli/src/atif_cli/output.py:154`.
+7. Before any of that, the connection was sized to the host (`_configure_query_resources`: a memory
+   cap from available RAM, a thread count from that cap, a private `mkdtemp` spill directory, and
+   extension auto-install and auto-load off), because registration is what needs the cap. The
+   fully-registered connection is then sandboxed: a directory allowlist holding only the private
+   spill area, a path allowlist holding the individual parquets the views read lazily,
+   `enable_external_access=false`, and `lock_configuration` last so caller SQL cannot widen any of
+   it (`packages/atif-cli/src/atif_cli/app.py`, `_harden_query_connection`).
+8. The statement's kinds are checked with DuckDB's own parser on the locked connection; `COPY`,
+   `EXPORT`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE` exit 70
+   (`sandbox_refused`) before anything runs. Then the caller's statement executes and the cursor
+   drains in batches to stdout: a JSON array of row objects on a pipe, a width-aligned table on a
+   TTY (`packages/atif-cli/src/atif_cli/output.py:154`). The spill directory is removed when the
+   process exits.
 
 ```mermaid
 sequenceDiagram
@@ -120,6 +127,7 @@ sequenceDiagram
     participant Lance as Lance store
 
     CLI->>DB: duckdb.connect()
+    CLI->>DB: threads, memory_limit, private temp_directory, autoinstall off
     CLI->>Duck: register(con, corpus_root, expected model + dim)
     Duck->>DB: CREATE TEMP TABLE raw readers over corpus globs
     DB->>Disk: read_json sessions/*/meta.json then the rest
@@ -131,6 +139,7 @@ sequenceDiagram
     Duck->>Duck: ensure_store_matches, then bind the view
     Duck-->>CLI: views and macros registered
     CLI->>DB: allowlists, external access off, lock_configuration
+    CLI->>DB: extract_statements(caller SQL), refuse file-facing kinds
     CLI->>DB: execute(caller SQL)
     DB-->>CLI: cursor
     CLI->>CLI: drain in batches to stdout
