@@ -129,6 +129,15 @@ not in a public issue. Supported versions, the disclosure expectations, and what
 vulnerability in a tool that reads local transcripts are in
 **[SECURITY.md](SECURITY.md)**.
 
+`atif-sql query` runs agent-composed SQL, so it runs it in a box: sized to the host before the
+corpus is registered (override with `ATIF_SQL_QUERY_MEMORY_LIMIT` and `ATIF_SQL_QUERY_THREADS`),
+a private spill directory outside the corpus that's removed on exit, no extension installs at
+query time (`atif-sql embed --install-extension` is where the lance extension comes from), file
+facing statements (`COPY`, `EXPORT`, `ATTACH`, `INSTALL`, `LOAD`, `PREPARE`, `EXECUTE`) refused
+before they run, and a refusal to run as root unless `ATIF_SQL_ALLOW_ROOT=1` says so. The details
+and the one accepted disclosure (`duckdb_settings()` lists the granted paths) are in
+[docs/reference/cli.md](docs/reference/cli.md#query).
+
 ## License
 
 [Apache License 2.0](LICENSE). Each of the seven module directories carries the same license

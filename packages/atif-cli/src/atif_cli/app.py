@@ -54,7 +54,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import sys
+import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -72,7 +77,7 @@ from atif_cli.output import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Generator, Sequence
 
     from atif_corpus.application.materialize import MaterializationReport
 
@@ -121,25 +126,269 @@ def _sql_str(value: str) -> str:
     return f"'{escaped}'"
 
 
-#: Lower bound for ``query``'s DuckDB memory cap. Registration alone parses
-#: the corpus through 1 GiB-per-object JSON buffers on every thread, and the
-#: base views (``tool_calls``, ``tool_rank``) need several GiB more on a
-#: multi-GB corpus — a tighter cap turns working queries into OutOfMemory.
-_QUERY_MEMORY_FLOOR_BYTES = 8 * 1024**3
+#: Env override for the DuckDB memory cap ``query`` runs under: any size
+#: literal DuckDB's ``SET memory_limit`` accepts (``6GB``, ``512MiB``, ``2000000000B``).
+QUERY_MEMORY_LIMIT_ENV = "ATIF_SQL_QUERY_MEMORY_LIMIT"
+
+#: Env override for the DuckDB thread count ``query`` runs under.
+QUERY_THREADS_ENV = "ATIF_SQL_QUERY_THREADS"
+
+#: Set to ``1`` to let ``query``, ``search`` and ``analyze`` run as uid 0.
+ALLOW_ROOT_ENV = "ATIF_SQL_ALLOW_ROOT"
+
+#: Target for ``query``'s DuckDB memory cap when the host can afford it: the
+#: base views (``tool_calls``, ``tool_rank``) need several GiB on a multi-GB
+#: corpus, and a tighter cap turns working queries into OutOfMemory. A
+#: target, not a floor: it never exceeds what the host has (the old 8 GiB
+#: floor set a "limit" above physical RAM on an 8 GiB guest).
+_QUERY_MEMORY_TARGET_BYTES = 8 * 1024**3
+
+#: Never cap below this. DuckDB needs room to open the readers at all, and a
+#: host with less available than this fails to register whatever the cap says.
+_QUERY_MEMORY_MIN_BYTES = 512 * 1024**2
+
+#: Cap budgeted per DuckDB thread when deriving the thread count. The JSON
+#: readers reserve about twice their ``maximum_object_size`` per thread, and
+#: that bound is now sized from the largest file present (the largest
+#: trajectory.json seen is 436 MB), so 2 GiB a thread keeps a corpus on the
+#: JSON path registering under the cap.
+_QUERY_BYTES_PER_THREAD = 2 * 1024**3
+
+
+def _host_memory() -> tuple[int, int]:
+    """``(physical, available)`` bytes on this host.
+
+    Physical comes from ``os.sysconf``. Available is Linux's ``MemAvailable``
+    from ``/proc/meminfo`` (what a new allocation can really get, reclaimable
+    page cache included); where that file is absent (macOS) available is
+    taken as physical.
+    """
+    physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    available = physical
+    try:
+        with Path("/proc/meminfo").open(encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    available = int(line.split()[1]) * 1024
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    return physical, min(physical, available)
 
 
 def _query_memory_limit_bytes() -> int:
-    """Bytes to cap ``query``'s DuckDB heap at.
+    """Bytes to cap ``query``'s DuckDB heap at, derived from the host.
 
-    Half of physical RAM, but never below :data:`_QUERY_MEMORY_FLOOR_BYTES`
-    and never above DuckDB's own 80%-of-RAM default — on a small host the
-    default is already the tighter of the two, and raising it would make an
-    unbounded query worse rather than better.
+    Half of physical RAM or :data:`_QUERY_MEMORY_TARGET_BYTES`, whichever is
+    larger, but never above 80% of physical RAM (DuckDB's own default) and
+    never above 80% of the memory available right now, floored at
+    :data:`_QUERY_MEMORY_MIN_BYTES`. On a 124 GiB host that is 62 GiB; on an
+    8 GiB guest with 6 GiB free it is 4.8 GiB, where the previous rule said
+    8 GiB and DuckDB's default said 6.4 GiB, neither of which the guest had.
     """
-    import os
+    physical, available = _host_memory()
+    target = max(int(physical * 0.5), _QUERY_MEMORY_TARGET_BYTES)
+    ceiling = min(int(physical * 0.8), int(available * 0.8))
+    return max(_QUERY_MEMORY_MIN_BYTES, min(target, ceiling))
 
-    physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    return min(int(physical * 0.8), max(int(physical * 0.5), _QUERY_MEMORY_FLOOR_BYTES))
+
+def _query_threads(memory_limit_bytes: int) -> int:
+    """DuckDB threads for ``query``: one per :data:`_QUERY_BYTES_PER_THREAD` of cap.
+
+    Capped at the CPUs this process may run on (``sched_getaffinity``, which
+    sees a container's cpuset where ``cpu_count`` does not) and floored at
+    one. DuckDB's own default is the core count, which is what made a 4 vCPU
+    guest reserve four readers' worth of memory it did not have.
+    """
+    affinity = getattr(os, "sched_getaffinity", None)
+    cpus = len(affinity(0)) if affinity is not None else (os.cpu_count() or 1)
+    return max(1, min(cpus, memory_limit_bytes // _QUERY_BYTES_PER_THREAD))
+
+
+_SIZE_UNITS: dict[str, int] = {
+    "B": 1,
+    "KB": 10**3,
+    "MB": 10**6,
+    "GB": 10**9,
+    "TB": 10**12,
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
+}
+
+_SIZE_RE = re.compile(r"\s*(\d+(?:\.\d+)?)\s*([A-Za-z]*)\s*")
+
+
+def _parse_size(text: str) -> int:
+    """Bytes for a DuckDB-style size literal (``6GB``, ``512 MiB``, ``123B``)."""
+    match = _SIZE_RE.fullmatch(text)
+    if match is None:
+        problem = f"{text!r} is not a size (expected e.g. 6GB, 512MiB, 2000000000B)"
+        raise ValueError(problem)
+    number, unit = match.group(1), (match.group(2) or "B").upper()
+    if unit not in _SIZE_UNITS:
+        problem = f"{text!r} has an unknown unit (use B, KB, MB, GB, TB, KiB, MiB, GiB, TiB)"
+        raise ValueError(problem)
+    return int(float(number) * _SIZE_UNITS[unit])
+
+
+@dataclass(frozen=True, slots=True)
+class QueryResources:
+    """What ``query`` hands DuckDB before it registers anything."""
+
+    memory_limit_bytes: int
+    threads: int
+
+
+def _query_resources() -> QueryResources:
+    """Resolve the memory cap and thread count for one ``query`` process.
+
+    :data:`QUERY_MEMORY_LIMIT_ENV` and :data:`QUERY_THREADS_ENV` override the
+    host-derived values; the thread default follows whichever cap is in
+    force, so a caller who lowers the cap gets fewer threads for free.
+    Raises ``ValueError`` on a malformed override; the command turns that
+    into exit 64.
+    """
+    memory_env = os.environ.get(QUERY_MEMORY_LIMIT_ENV, "").strip()
+    threads_env = os.environ.get(QUERY_THREADS_ENV, "").strip()
+    if memory_env:
+        memory = _parse_size(memory_env)
+        if memory <= 0:
+            problem = f"{QUERY_MEMORY_LIMIT_ENV} must be a positive size"
+            raise ValueError(problem)
+    else:
+        memory = _query_memory_limit_bytes()
+    if threads_env:
+        threads = int(threads_env)
+        if threads < 1:
+            problem = f"{QUERY_THREADS_ENV} must be a positive integer"
+            raise ValueError(problem)
+    else:
+        threads = _query_threads(memory)
+    return QueryResources(memory_limit_bytes=memory, threads=threads)
+
+
+def _configure_query_resources(con: Any, resources: QueryResources, spill_dir: Path) -> None:
+    """Size the connection to the host BEFORE registration.
+
+    Registration is the heaviest thing ``query`` does (the eager JSON readers
+    reserve memory per thread), so the cap and thread count must be in force
+    before it runs, not after, which is where they used to be applied. The
+    spill directory is set here for the same reason: a registration that
+    spills must spill into the private directory. Extension auto-install and
+    auto-load are switched off so nothing during registration can reach the
+    network; the lance extension is LOADed only when it is already installed
+    (:func:`atif_duck.infrastructure.registry.load_lance_extension`).
+    """
+    con.execute(f"SET threads={int(resources.threads)}")
+    con.execute(f"SET memory_limit='{int(resources.memory_limit_bytes)}B'")
+    con.execute(f"SET temp_directory={_sql_str(str(spill_dir))}")
+    con.execute("SET autoinstall_known_extensions=false")
+    con.execute("SET autoload_known_extensions=false")
+
+
+@contextmanager
+def _private_spill_dir() -> Generator[Path]:
+    """A per-process spill directory outside the corpus, gone when the process is.
+
+    ``mkdtemp`` creates it mode 0700 under the system temp dir. It is the
+    ONLY directory the sandbox grants, so it is where DuckDB spills a query
+    that exceeds ``memory_limit``; it used to be ``<corpus_root>/.duckdb_tmp``,
+    inside the tree ``materialize`` scans, and files written there by caller
+    SQL persisted between runs. Removed on every exit path, error included,
+    after the connection is closed.
+    """
+    path = Path(tempfile.mkdtemp(prefix="atif-sql-query-"))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _refuse_root(command: str, fmt: OutputFormat) -> None:
+    """Exit 77 when running as uid 0, unless :data:`ALLOW_ROOT_ENV` is ``1``.
+
+    The corpus artifacts are written mode 0444, which is what stops a
+    ``COPY ... TO`` at a granted parquet from succeeding at the filesystem.
+    Root ignores file modes, so as uid 0 that protection is gone and caller
+    SQL could overwrite the corpus (measured: probe d2 of the MicroVM review
+    rewrote ``steps.parquet`` as a one-row file). The override exists for
+    containers that have no other user; it logs a warning so the run is on
+    record.
+    """
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None or geteuid() != 0:
+        return
+    if os.environ.get(ALLOW_ROOT_ENV, "").strip() == "1":
+        from loguru import logger
+
+        logger.warning(
+            "atif-sql {} is running as root because {}=1; the 0444 file modes no longer "
+            "protect the corpus from the SQL this process runs",
+            command,
+            ALLOW_ROOT_ENV,
+        )
+        return
+    err = ClassifiedError(
+        kind="root_refused",
+        exit_code=EXIT_CODES["root_refused"],
+        message=f"atif-sql {command} refuses to run as root (uid 0)",
+        hint=f"run it as an unprivileged user, or set {ALLOW_ROOT_ENV}=1 to override "
+        "(a warning is logged; root can then overwrite corpus files from SQL)",
+    )
+    emit_error(err, fmt)
+    raise SystemExit(err.exit_code)
+
+
+#: Statement kinds the query sandbox executes. Everything else is refused
+#: before execution, by name, using DuckDB's own parser on the hardened
+#: connection. The refused kinds are the ones that name a file or defer a
+#: statement past this check: COPY and COPY_DATABASE (DuckDB's ``allowed_paths``
+#: grants are read-write, so ``COPY ... TO <granted parquet> (USE_TMP_FILE
+#: false)`` would overwrite corpus data, and root ignores the 0444 mode that
+#: used to stop it), EXPORT, ATTACH, DETACH, LOAD, EXTENSION (INSTALL),
+#: PREPARE and EXECUTE (a prepared COPY parses as PREPARE). An allowlist, so a
+#: statement kind a future DuckDB adds is refused until someone reads what it
+#: does.
+_QUERY_STATEMENT_KINDS: frozenset[str] = frozenset(
+    {
+        "SELECT",
+        "EXPLAIN",
+        "SET",
+        "VARIABLE_SET",
+        "CREATE",
+        "CREATE_FUNC",
+        "DROP",
+        "ALTER",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "MERGE_INTO",
+        "CALL",
+        "PRAGMA",
+        "TRANSACTION",
+        "VACUUM",
+        "ANALYZE",
+    }
+)
+
+
+def _refused_statement_kinds(con: Any, sql: str) -> list[str]:
+    """Statement kinds in ``sql`` outside :data:`_QUERY_STATEMENT_KINDS`, in order, once each.
+
+    ``extract_statements`` is the parser ``execute`` uses, so there is no
+    second grammar to disagree with it, and it runs on the hardened
+    connection so a PRAGMA that reads a file while parsing meets the same
+    allowlist the query would. A parse error propagates as DuckDB's own
+    ``ParserException`` (exit 64), exactly as ``execute`` would have raised it.
+    """
+    refused: list[str] = []
+    for statement in con.extract_statements(sql):
+        kind = str(statement.type.name)
+        if kind not in _QUERY_STATEMENT_KINDS and kind not in refused:
+            refused.append(kind)
+    return refused
 
 
 #: Config options caller SQL may still change after the sandbox locks. Only
@@ -169,7 +418,7 @@ def _harden_query_connection(
     con: Any,
     *,
     corpus_root: Path,
-    temp_dir: Path,
+    spill_dir: Path,
     columnar_paths: Sequence[Path] = (),
 ) -> None:
     """Sandbox a fully-registered connection before it runs caller SQL.
@@ -180,25 +429,35 @@ def _harden_query_connection(
     path, ``ATTACH`` of unrelated databases, and ``INSTALL httpfs`` for
     network egress.
 
+    The memory cap, thread count and spill directory are NOT set here any
+    more: :func:`_configure_query_resources` applies them before
+    ``register`` runs, because registration is what needs them. This
+    function arms the allowlists and freezes the configuration.
+
     Reach is granted at two granularities, and the split is what keeps
     injected SQL from overwriting the corpus it was read from:
 
-    * ``allowed_directories`` holds ONLY ``temp_dir`` — the spill area, which
-      must accept writes for a query that exceeds ``memory_limit`` to
-      complete at all. It sits inside the corpus root but holds no corpus
-      data.
+    * ``allowed_directories`` holds ONLY ``spill_dir``, the per-process
+      private directory from :func:`_private_spill_dir`, which must accept
+      writes for a query that exceeds ``memory_limit`` to complete at all.
+      It lives outside the corpus and is removed when the process exits, so
+      nothing written there persists and nothing under the corpus root is
+      writable. (DuckDB grants a directory read-write, so a ``COPY`` into it
+      would succeed at this layer; the statement gate in :func:`query`
+      refuses COPY before it gets here.)
     * ``allowed_paths`` holds the individual files the views read lazily:
       the analytics parquets from :func:`_lazy_read_paths` and the
       per-session columnar parquets in ``columnar_paths`` (what
       ``register`` bound this connection to). A file grant lets
-      ``read_parquet`` open that exact path; because ``COPY`` writes through
-      a sibling ``tmp_<name>`` file, which is a different path, the grant
-      does not carry a plain write. Nothing else under the corpus is named,
-      so ``COPY`` over a ``trajectory.json`` or into a new ``pwned.csv`` is
-      refused. The columnar parquets are additionally written read-only
-      (``0o444``) by their producer, which closes the ``USE_TMP_FILE false``
-      residual hole documented on :func:`query` for them: the open for
-      writing fails at the filesystem for any non-root user.
+      ``read_parquet`` open that exact path. Nothing else under the corpus
+      is named, so ``read_text`` of a ``trajectory.json`` is refused. DuckDB
+      1.5.5 has no read-only grant (measured: a ``read_parquet`` relation
+      bound before ``enable_external_access=false`` is refused at query time
+      without a grant, and ``duckdb_settings()`` lists no write switch), so
+      each grant is read-write and ``COPY ... TO <granted parquet>
+      (USE_TMP_FILE false)`` would overwrite it. Two things close that: the
+      statement gate refuses COPY for any uid, and :func:`_refuse_root`
+      keeps the producer's 0444 modes meaningful by refusing uid 0.
 
     Four ordering constraints, each one required:
 
@@ -214,9 +473,7 @@ def _harden_query_connection(
       including itself). Without it the memory cap is decorative: caller SQL
       can just ``SET memory_limit`` back up.
     """
-    con.execute(f"SET temp_directory={_sql_str(str(temp_dir))}")
-    con.execute(f"SET memory_limit='{_query_memory_limit_bytes()}B'")
-    con.execute(f"SET allowed_directories=[{_sql_str(str(temp_dir))}]")
+    con.execute(f"SET allowed_directories=[{_sql_str(str(spill_dir))}]")
     lazy_paths = ", ".join(
         _sql_str(str(path)) for path in (*columnar_paths, *_lazy_read_paths(corpus_root))
     )
@@ -612,6 +869,44 @@ def materialize(
 # ---------------------------------------------------------------------------
 
 
+def _vector_surface(corpus_root: Path) -> dict[str, Any]:
+    """How ``query`` and ``search`` will see the embeddings store, without installing anything.
+
+    The extension check reads ``duckdb_extensions()`` on a throwaway
+    connection (the local extension directory, a few milliseconds, no
+    network); the store check is the directory ``embed`` writes, resolved the
+    way ``query`` and ``search`` resolve it (``ATIF_SQL_LANCE_URI`` wins).
+    """
+    import duckdb
+
+    from atif_duck.infrastructure.registry import lance_extension_installed
+    from atif_embed.infrastructure.settings import EmbedSettings
+
+    store = EmbedSettings().resolve_lance_uri(corpus_root)
+    con = duckdb.connect()
+    try:
+        installed = lance_extension_installed(con)
+    finally:
+        con.close()
+    store_present = store.is_dir()
+    if store_present and installed:
+        state, note = "ready", f"store at {store}"
+    elif store_present:
+        state = "extension_missing"
+        note = (
+            "store present but the lance DuckDB extension is not installed; "
+            "run `atif-sql embed --install-extension`"
+        )
+    else:
+        state, note = "no_store", "no embeddings store; run `atif-sql embed --all --no-dry-run`"
+    return {
+        "lance_extension_installed": installed,
+        "embeddings_store_present": store_present,
+        "vector_search": state,
+        "note": note,
+    }
+
+
 def _dir_bytes(root: Path) -> int:
     """Total bytes of every file under ``root`` (0 if absent)."""
     if not root.is_dir():
@@ -647,6 +942,14 @@ def status(
     ``materialize --force`` brings them over). It applies the same
     per-session predicate the registry does, so it cannot say ``columnar``
     while ``query`` silently parses JSON.
+
+    ``vector search`` says whether ``semantic_search`` and ``search`` can
+    reach an embeddings store: ``ready`` (store present, lance extension
+    installed), ``no_store`` (run ``atif-sql embed``), or
+    ``extension_missing`` (a store exists but the DuckDB lance extension is
+    not installed; ``query`` binds ``message_embeddings`` empty rather than
+    downloading it, so run ``atif-sql embed --install-extension``). Read
+    from DuckDB's local extension listing; never installs anything.
     """
     import time
 
@@ -687,6 +990,7 @@ def status(
         "live": len(plan.skipped_live),
     }
     coverage = columnar_coverage(settings.corpus_root)
+    vector = _vector_surface(settings.corpus_root)
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(f"agent:        {settings.agent.value}")
         print(f"source root:  {settings.source_root}")
@@ -706,6 +1010,7 @@ def status(
             f"({coverage.columnar_sessions} of {coverage.total_sessions} complete sessions "
             "carry typed columnar artifacts)"
         )
+        print(f"vector search: {vector['vector_search']}  ({vector['note']})")
     else:
         emit_json(
             {
@@ -721,6 +1026,9 @@ def status(
                 "columnar_sessions": coverage.columnar_sessions,
                 "json_sessions": coverage.json_sessions,
                 "query_path": coverage.query_path,
+                "lance_extension_installed": vector["lance_extension_installed"],
+                "embeddings_store_present": vector["embeddings_store_present"],
+                "vector_search": vector["vector_search"],
             },
             fmt,
         )
@@ -755,28 +1063,55 @@ def query(
 
     Sandbox
     -------
-    The statement runs against a hardened connection (see
+    Before anything is registered the connection is sized to the host
+    (:func:`_query_resources`: a memory cap derived from available RAM and a
+    thread count derived from that cap, overridable with
+    ``ATIF_SQL_QUERY_MEMORY_LIMIT`` and ``ATIF_SQL_QUERY_THREADS``), its spill
+    directory is a private ``mkdtemp`` (mode 0700) outside the corpus that is
+    removed when the process exits, and extension auto-install and auto-load
+    are off. The lance extension is loaded only when it is already installed;
+    when a store exists and it is not, the vector surface binds empty with a
+    warning and ``atif-sql status`` says so. Registration therefore reaches
+    neither the network nor the corpus for writing, and it fits an 8 GiB
+    guest, where it used to exit 70 out of memory before the cap applied.
+
+    The statement then runs against the hardened connection (see
     :func:`_harden_query_connection`). Reads reach the registered views and
-    nothing else; the only writable path is the query engine's own spill
-    directory ``<corpus_root>/.duckdb_tmp``. ``read_text`` outside the
-    corpus, ``COPY`` anywhere in it (including over a ``trajectory.json``),
-    ``ATTACH`` of unrelated databases, and extension installs all fail with
-    exit 70 rather than reading credentials, corrupting the corpus, or
-    reaching the network. The embedding-store guard binds here exactly as it
-    does for ``search``, so a store written by a different provider refuses
-    to bind (exit 65) instead of scoring garbage.
+    nothing else. ``read_text`` outside the corpus, ``ATTACH`` of unrelated
+    databases and extension installs fail with exit 70 rather than reading
+    credentials or reaching the network, and nothing under the corpus root
+    is writable. Two layers keep caller SQL from writing the corpus:
 
-    Two residual holes remain, both over recomputable derived data rather
-    than the transcript artifacts:
+    * DuckDB's file grants are read-write, and ``COPY ... TO <granted
+      parquet> (USE_TMP_FILE false)`` used to overwrite one, so every
+      statement kind that names a file is refused BEFORE execution, for any
+      uid, by DuckDB's own parser: COPY, EXPORT, ATTACH, DETACH, INSTALL,
+      LOAD, and PREPARE/EXECUTE (which could defer one). Exit 70, kind
+      ``sandbox_refused``.
+    * A 0444 file mode does not bind root, so ``query`` refuses to run as
+      uid 0 (exit 77) unless ``ATIF_SQL_ALLOW_ROOT=1`` is set, which logs a
+      warning.
 
-    * ``COPY ... TO '<an existing analytics parquet>' (USE_TMP_FILE false)``
-      overwrites it. A plain ``COPY`` to the same path is refused, because
-      DuckDB stages it through a sibling ``tmp_<name>`` that carries no
-      grant; ``USE_TMP_FILE false`` writes the granted path directly. Re-run
-      ``atif-sql analyze`` to rebuild.
-    * ``DELETE``/``INSERT`` against ``lance_store.main.embeddings`` reach the
-      ATTACHed store, which the filesystem allowlist does not cover. Re-run
-      ``atif-sql embed --all --no-dry-run`` to rebuild.
+    The embedding-store guard binds here exactly as it does for ``search``,
+    so a store written by a different provider refuses to bind (exit 65)
+    instead of scoring garbage.
+
+    One residual hole remains, over recomputable derived data rather than
+    the transcript artifacts: ``DELETE``/``INSERT`` against
+    ``lance_store.main.embeddings`` reach the ATTACHed store, which the
+    filesystem allowlist does not cover. Re-run
+    ``atif-sql embed --all --no-dry-run`` to rebuild.
+
+    What caller SQL can still see, and why that is accepted:
+    ``duckdb_settings()`` and ``current_setting(...)`` return the sandbox's
+    own configuration, including the corpus root, the spill directory, the
+    memory cap and every granted parquet path, which names every session id.
+    DuckDB cannot hide a setting from SQL, and the grants have to be per-file
+    for the lazy reads to work at all, so the inventory is a property of the
+    design. The caller is the local user, who can list the corpus directory
+    and ``SELECT session_id FROM sessions`` anyway; ``query`` is not a
+    privilege boundary (SECURITY.md) and must not be exposed to a caller who
+    may not know the session ids.
 
     ``lock_configuration`` freezes the connection's settings, so ``SET`` is
     refused for everything except ``TimeZone``, which stays open for
@@ -787,10 +1122,15 @@ def query(
     Exit codes
     ----------
     * 64  parse_error   malformed SQL (or no SQL and no --examples)
+    * 64  invalid_input a malformed ``ATIF_SQL_QUERY_MEMORY_LIMIT`` or
+      ``ATIF_SQL_QUERY_THREADS``
     * 65  catalog_error unknown view/macro/column (try ``atif-sql schema``)
     * 65  embedding_mismatch the Lance store was written by another provider
+    * 70  sandbox_refused a statement kind the sandbox never runs (COPY,
+      EXPORT, ATTACH, INSTALL, LOAD, PREPARE, ...)
     * 70  runtime_error everything else (an unmaterialized corpus, or SQL
       the sandbox refused)
+    * 77  root_refused  running as uid 0 without ``ATIF_SQL_ALLOW_ROOT=1``
 
     Examples
     --------
@@ -821,6 +1161,20 @@ def query(
         )
         raise SystemExit(EXIT_CODES["parse_error"])
 
+    _refuse_root("query", fmt)
+    try:
+        resources = _query_resources()
+    except ValueError as exc:
+        err = ClassifiedError(
+            kind="invalid_input",
+            exit_code=EXIT_CODES["invalid_input"],
+            message=str(exc),
+            hint=f"{QUERY_MEMORY_LIMIT_ENV} takes a size such as 6GB or 512MiB; "
+            f"{QUERY_THREADS_ENV} takes a positive integer",
+        )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code) from exc
+
     import duckdb
 
     from atif_cli.duck_errors import REGISTRATION_ERRORS, classify_registration_error
@@ -832,35 +1186,49 @@ def query(
     expected_model, expected_dim = embed_settings.expected_embedding_identity()
     lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)
 
-    con = duckdb.connect()
-    try:
+    with _private_spill_dir() as spill_dir:
+        con = duckdb.connect()
         try:
-            sources = register(
-                con,
-                settings.corpus_root,
-                lance_uri=lance_uri,
-                expected_model=expected_model,
-                expected_dim=expected_dim,
-            )
-            _harden_query_connection(
-                con,
-                corpus_root=settings.corpus_root,
-                temp_dir=settings.corpus_root / ".duckdb_tmp",
-                columnar_paths=sources.lazy_read_paths,
-            )
-            cursor = con.execute(sql)
-        except REGISTRATION_ERRORS as exc:
-            err = classify_registration_error(exc)
-            emit_error(err, fmt)
-            raise SystemExit(err.exit_code) from exc
-        try:
-            emit_cursor(cursor, fmt)
-        except REGISTRATION_ERRORS as exc:
-            err = classify_registration_error(exc)
-            emit_error(err, fmt)
-            raise SystemExit(err.exit_code) from exc
-    finally:
-        con.close()
+            try:
+                _configure_query_resources(con, resources, spill_dir)
+                sources = register(
+                    con,
+                    settings.corpus_root,
+                    lance_uri=lance_uri,
+                    expected_model=expected_model,
+                    expected_dim=expected_dim,
+                )
+                _harden_query_connection(
+                    con,
+                    corpus_root=settings.corpus_root,
+                    spill_dir=spill_dir,
+                    columnar_paths=sources.lazy_read_paths,
+                )
+                refused = _refused_statement_kinds(con, sql)
+                if refused:
+                    err = ClassifiedError(
+                        kind="sandbox_refused",
+                        exit_code=EXIT_CODES["sandbox_refused"],
+                        message=f"the query sandbox does not run {', '.join(refused)} statements",
+                        hint="query runs SELECT and in-memory DDL/DML only; COPY, EXPORT, "
+                        "ATTACH, DETACH, INSTALL, LOAD, PREPARE and EXECUTE are refused "
+                        "because they reach files or defer a statement past this check",
+                    )
+                    emit_error(err, fmt)
+                    raise SystemExit(err.exit_code)
+                cursor = con.execute(sql)
+            except REGISTRATION_ERRORS as exc:
+                err = classify_registration_error(exc)
+                emit_error(err, fmt)
+                raise SystemExit(err.exit_code) from exc
+            try:
+                emit_cursor(cursor, fmt)
+            except REGISTRATION_ERRORS as exc:
+                err = classify_registration_error(exc)
+                emit_error(err, fmt)
+                raise SystemExit(err.exit_code) from exc
+        finally:
+            con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -930,6 +1298,8 @@ def analyze(
     fmt
         Summary format; ``auto`` = JSON on a pipe.
     """
+    _refuse_root("analyze", fmt)
+
     from atif_analytics.application.analyze import run_analyze
     from atif_analytics.infrastructure.settings import AnalyticsSettings
 
@@ -975,16 +1345,66 @@ def analyze(
 # ---------------------------------------------------------------------------
 
 
+def _install_lance_extension(fmt: OutputFormat, *, quiet: bool = False) -> None:
+    """``INSTALL lance; LOAD lance`` on a throwaway connection.
+
+    The one network reach outside Bedrock, so it lives behind ``embed``.
+    With ``quiet`` (a real embed run) a failure is a warning rather than an
+    exit: the backfill itself still runs, and ``status`` will keep saying
+    the extension is missing until a later attempt succeeds. Without
+    ``quiet`` (``--install-extension``) the result is emitted as JSON and a
+    failure exits 70.
+    """
+    import duckdb
+
+    from atif_cli.duck_errors import classify_duckdb_error
+    from atif_duck.infrastructure.registry import install_lance_extension
+
+    con = duckdb.connect()
+    try:
+        try:
+            install_path = install_lance_extension(con)
+        except duckdb.Error as exc:
+            if quiet:
+                from loguru import logger
+
+                logger.warning(
+                    "Could not install the lance DuckDB extension ({}); vector search stays "
+                    "unavailable until `atif-sql embed --install-extension` succeeds",
+                    str(exc).splitlines()[0],
+                )
+                return
+            err = classify_duckdb_error(exc)
+            emit_error(err, fmt)
+            raise SystemExit(err.exit_code) from exc
+    finally:
+        con.close()
+    if not quiet:
+        emit_json({"extension": "lance", "installed": True, "install_path": install_path}, fmt)
+
+
 @app.command
 def embed(
     *,
     limit: int | None = None,
     all_steps: Annotated[bool, cyclopts.Parameter(name="--all")] = False,
     dry_run: bool = False,
+    install_extension: Annotated[bool, cyclopts.Parameter(name="--install-extension")] = False,
     corpus_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Embed unembedded corpus steps with Cohere Embed v4 and append to LanceDB.
+
+    Extension
+    ---------
+    ``query`` and ``search`` read the store through DuckDB's lance extension
+    and never install it themselves (installing is a 242 MB download from
+    the extension repository, and ``query`` runs unattended). It is
+    installed here, where the network is already a deliberate act: every
+    REAL run installs it first, and ``--install-extension`` installs it and
+    exits without touching Bedrock or the store (``{"extension": "lance",
+    "installed": true, "install_path": ...}``). ``atif-sql status`` reports
+    whether it is present.
 
     Cost
     ----
@@ -1001,6 +1421,7 @@ def embed(
     --limit N       Cap the number of steps embedded this run.
     --all           Explicitly embed EVERY unembedded step (full backfill).
     --dry-run       Preview only; emit plan JSON, no embedding calls.
+    --install-extension  Install the lance DuckDB extension and exit (no Bedrock).
     --corpus-root   Override the materialized corpus root.
 
     Output
@@ -1014,6 +1435,10 @@ def embed(
     state (the store or its config requires operator action; retrying without
     intervention cannot succeed, so unattended lanes suppress retries on 78).
     """
+    if install_extension:
+        _install_lance_extension(fmt)
+        return
+
     import asyncio
 
     from atif_embed.application.embed import run_backfill
@@ -1034,6 +1459,8 @@ def embed(
 
     settings = _corpus_settings(None, corpus_root)
     embed_settings = EmbedSettings()
+    if not dry_run:
+        _install_lance_extension(fmt, quiet=True)
     try:
         result = asyncio.run(
             run_backfill(
@@ -1107,8 +1534,13 @@ def search(
     Sorted by cosine distance ascending — highest sim first.
 
     Exit codes: 0 success, 2 no_embeddings, 65 embedding_mismatch (the store
-    was written by another provider), 70 runtime.
+    was written by another provider), 70 runtime, 77 root_refused (uid 0
+    without ``ATIF_SQL_ALLOW_ROOT=1``), 78 extension_missing (a store exists
+    but the lance DuckDB extension is not installed; run
+    ``atif-sql embed --install-extension``).
     """
+    _refuse_root("search", fmt)
+
     import duckdb
 
     from atif_cli.duck_errors import (
@@ -1116,7 +1548,7 @@ def search(
         classify_duckdb_error,
         classify_registration_error,
     )
-    from atif_duck.infrastructure.registry import register
+    from atif_duck.infrastructure.registry import lance_extension_installed, register
     from atif_embed.application.embed import embed_query
     from atif_embed.infrastructure.settings import EmbedSettings
 
@@ -1139,6 +1571,19 @@ def search(
             err = classify_registration_error(exc)
             emit_error(err, fmt)
             raise SystemExit(err.exit_code) from exc
+
+        if lance_uri.is_dir() and not lance_extension_installed(con):
+            emit_error(
+                ClassifiedError(
+                    kind="extension_missing",
+                    exit_code=EXIT_CODES["extension_missing"],
+                    message="the lance DuckDB extension is not installed, so the embeddings "
+                    f"store at {lance_uri} cannot be read",
+                    hint="run: atif-sql embed --install-extension (a one-time download)",
+                ),
+                fmt,
+            )
+            raise SystemExit(EXIT_CODES["extension_missing"])
 
         row = con.execute("SELECT count(*) FROM message_embeddings").fetchone()
         if not row or int(row[0]) == 0:

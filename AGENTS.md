@@ -141,6 +141,17 @@ For an LLM agent driving `atif-sql`, the discovery loop is three commands:
    prefer `atif-sql search 'query'` — it embeds the text first, then runs
    the same `semantic_search` kNN.
 
+   What the query sandbox will and won't do: `SELECT`, `EXPLAIN`, `SET
+   TimeZone`, and in-memory DDL/DML run; `COPY`, `EXPORT`, `ATTACH`,
+   `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE` exit 70 with kind
+   `sandbox_refused` before anything executes, so emit results on stdout
+   rather than writing files. Running as uid 0 exits 77 (`root_refused`)
+   unless `ATIF_SQL_ALLOW_ROOT=1`. The connection is sized to the host
+   before registration (`ATIF_SQL_QUERY_MEMORY_LIMIT` / `ATIF_SQL_QUERY_THREADS`
+   override), and no extension is ever installed at query time: `atif-sql
+   status` reports `vector_search` as `ready`, `no_store`, or
+   `extension_missing` (fix the last with `atif-sql embed --install-extension`).
+
 Adding a view/macro? The drift tests force: a `DESCRIPTIONS` entry in
 `atif_duck/domain/catalog.py`, an `ARG_EXEMPLARS` entry for any new
 parameter name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and

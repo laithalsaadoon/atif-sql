@@ -161,6 +161,79 @@ class TestEmbedCommand:
         payload = json.loads(capsys.readouterr().out)
         assert payload["dry_run"] is True
 
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_real_run_installs_the_lance_extension_first(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The network is already a deliberate act here, so this is where the download belongs."""
+        from atif_duck.infrastructure import registry as registry_mod
+
+        calls: list[object] = []
+
+        def recording_install(con: object) -> str:
+            calls.append(con)
+            return "/ext/lance"
+
+        monkeypatch.setattr(registry_mod, "install_lance_extension", recording_install)
+        embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert json.loads(capsys.readouterr().out)["rows_processed"] == 1
+        assert len(calls) == 1
+
+    def test_dry_run_installs_nothing(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from atif_duck.infrastructure import registry as registry_mod
+
+        def forbidden_install(con: object) -> str:
+            del con
+            pytest.fail("a dry run must not reach the extension repository")
+
+        monkeypatch.setattr(registry_mod, "install_lance_extension", forbidden_install)
+        embed(dry_run=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert json.loads(capsys.readouterr().out)["dry_run"] is True
+
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_a_failed_install_only_warns_and_the_backfill_still_runs(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import duckdb
+        from loguru import logger
+
+        from atif_duck.infrastructure import registry as registry_mod
+
+        def failing(con: object) -> str:
+            del con
+            problem = "Failed to download extension"
+            raise duckdb.IOException(problem)
+
+        monkeypatch.setattr(registry_mod, "install_lance_extension", failing)
+        warnings: list[str] = []
+        sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+        try:
+            embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        finally:
+            logger.remove(sink_id)
+        assert json.loads(capsys.readouterr().out)["rows_processed"] == 1
+        assert any("--install-extension" in w for w in warnings)
+
+    def test_install_extension_flag_exits_70_when_the_download_fails(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import duckdb
+
+        from atif_duck.infrastructure import registry as registry_mod
+
+        def failing(con: object) -> str:
+            del con
+            problem = "Failed to download extension"
+            raise duckdb.IOException(problem)
+
+        monkeypatch.setattr(registry_mod, "install_lance_extension", failing)
+        with pytest.raises(SystemExit) as excinfo:
+            embed(install_extension=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["runtime_error"]
+        assert json.loads(capsys.readouterr().err)["error"]["kind"] == "runtime_error"
+
 
 class TestSearchCommand:
     def test_empty_store_exits_2(self, corpus: Path, capsys: pytest.CaptureFixture[str]) -> None:

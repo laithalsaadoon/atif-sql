@@ -55,4 +55,12 @@ If your transcripts may not be sent to a third-party model provider, do not run
 DuckDB can read and write local files. The tool assumes the caller already owns
 the shell and the data; do not treat it as a sandbox, and do not wire it behind
 an interface that lets an untrusted party choose the SQL, the corpus root, or
-the environment.
+the environment. What the hardened connection does do is keep an injected
+statement from writing the corpus or reaching the network: file-facing
+statement kinds (`COPY`, `EXPORT`, `ATTACH`, `INSTALL`, `LOAD`, `PREPARE`,
+`EXECUTE`) are refused before execution, the only granted directory is a
+private per-process spill dir, no extension is ever installed at query time,
+and `query`, `search` and `analyze` refuse to run as root (file modes don't
+bind uid 0) unless `ATIF_SQL_ALLOW_ROOT=1` is set. Caller SQL can still read
+`duckdb_settings()`, which lists the granted paths and so every session id;
+that's the local user's own corpus listing, not a leak across a boundary.

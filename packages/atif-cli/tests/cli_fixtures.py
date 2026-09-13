@@ -201,3 +201,18 @@ def write_analytics_parquets(corpus_root: Path, session_id: str) -> list[Path]:
     finally:
         scratch.close()
     return sorted(written)
+
+
+# ``register_vss`` no longer installs the lance extension (that download at
+# query time was finding 4 of the MicroVM review), so the suite installs it
+# once up front. A no-op where it is already present; a one-time download on a
+# fresh runner, exactly what every register() call used to do implicitly.
+@pytest.fixture(scope="session", autouse=True)
+def _lance_extension_present() -> None:  # pyright: ignore[reportUnusedFunction]
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        con.execute("INSTALL lance")
+    finally:
+        con.close()

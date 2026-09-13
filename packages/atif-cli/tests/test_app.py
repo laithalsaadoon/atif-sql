@@ -4,8 +4,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,19 +17,26 @@ from typing import Any
 
 import pytest
 from cli_fixtures import write_analytics_parquets
+from loguru import logger
 
 from atif_cli import app as app_module
 from atif_cli.app import (
+    ALLOW_ROOT_ENV,
     DEFAULT_LOG_LEVEL,
     LOG_LEVEL_ENV,
+    QUERY_MEMORY_LIMIT_ENV,
+    QUERY_THREADS_ENV,
     _stderr_log_level,
+    analyze,
     app,
     convert,
+    embed,
     examples,
     materialize as materialize_cmd,
     query,
     schema,
     search,
+    status,
 )
 from atif_cli.errors import EXIT_CODES
 from atif_cli.output import (
@@ -326,14 +337,105 @@ def duckdb_default_memory_limit() -> str:
         con.close()
 
 
-def _expect_refusal(sql: str, corpus_root: Path, capsys: pytest.CaptureFixture[str]) -> str:
-    """Run ``sql`` expecting the sandbox to refuse it; return the message."""
+def _expect_refusal(
+    sql: str,
+    corpus_root: Path,
+    capsys: pytest.CaptureFixture[str],
+    *,
+    kind: str = "runtime_error",
+) -> str:
+    """Run ``sql`` expecting the sandbox to refuse it; return the message.
+
+    ``kind`` is ``runtime_error`` for a refusal DuckDB itself raises
+    (allowlist, locked configuration) and ``sandbox_refused`` for a
+    statement kind the CLI refuses by name before executing anything.
+    """
     with pytest.raises(SystemExit) as excinfo:
         _run_query(sql, corpus_root)
-    assert excinfo.value.code == EXIT_CODES["runtime_error"]
+    assert excinfo.value.code == EXIT_CODES[kind]
     payload = json.loads(capsys.readouterr().err)
-    assert payload["error"]["kind"] == "runtime_error"
+    assert payload["error"]["kind"] == kind
     return str(payload["error"]["message"])
+
+
+def _tree_digest(root: Path) -> str:
+    """One hash over every path, mode and byte under ``root``."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        digest.update(f"{rel}\0{oct(path.stat().st_mode)}\0".encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _capture_warnings() -> tuple[list[str], int]:
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    return warnings, sink_id
+
+
+def _write_two_session_corpus(root: Path) -> Path:
+    """The contract corpus plus a second session: two ``edges.jsonl`` for the glob reader.
+
+    One file registers under any limit because the reader uses one thread
+    per file; the per-thread reservation that finding 1 is about needs at
+    least two.
+    """
+    _write_contract_corpus(root)
+    second = "22222222-2222-2222-2222-222222222222"
+    src = root / "sessions" / SESSION_ID
+    dst = root / "sessions" / second
+    shutil.copytree(src, dst)
+    for name in ("trajectory.json", "meta.json"):
+        path = dst / name
+        path.write_text(path.read_text().replace(SESSION_ID, second))
+    return root
+
+
+class _RecordingConnection:
+    """Wrap a DuckDB connection so every statement text is observable.
+
+    ``execute`` is recorded; everything else (``read_parquet``,
+    ``extract_statements``, ``close``) delegates. Registration only ever
+    touches those, so the wrapper is transparent to the code under test.
+    """
+
+    def __init__(self, con: Any, statements: list[str]) -> None:
+        self._con = con
+        self._statements = statements
+
+    def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        self._statements.append(sql)
+        return self._con.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._con, name)
+
+
+@pytest.fixture
+def empty_extension_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, list[str]]:
+    """Every ``duckdb.connect()`` in the command bodies sees NO installed extensions.
+
+    The connection is pointed at an empty ``extension_directory`` and
+    wrapped so the statements it runs are recorded. Returns the directory
+    (still empty afterwards proves nothing was installed) and the recording.
+    """
+    import duckdb
+
+    ext_dir = tmp_path / "no-extensions"
+    ext_dir.mkdir()
+    statements: list[str] = []
+    real_connect = duckdb.connect
+
+    def connect(*args: Any, **kwargs: Any) -> Any:
+        con = real_connect(*args, **kwargs)
+        con.execute(f"SET extension_directory='{ext_dir}'")
+        return _RecordingConnection(con, statements)
+
+    monkeypatch.setattr(duckdb, "connect", connect)
+    return ext_dir, statements
 
 
 class TestMaterializeReportOutput:
@@ -403,19 +505,24 @@ class TestQuerySandbox:
     ) -> None:
         target = tmp_path / "exfil.csv"
 
-        _expect_refusal(f"COPY (SELECT 42 AS x) TO '{target}'", query_corpus, capsys)
+        _expect_refusal(
+            f"COPY (SELECT 42 AS x) TO '{target}'", query_corpus, capsys, kind="sandbox_refused"
+        )
         assert not target.exists()
 
     def test_attach_unrelated_database_is_refused(
         self, query_corpus: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        _expect_refusal(f"ATTACH '{tmp_path / 'other.db'}' AS o", query_corpus, capsys)
+        _expect_refusal(
+            f"ATTACH '{tmp_path / 'other.db'}' AS o", query_corpus, capsys, kind="sandbox_refused"
+        )
 
-    def test_extension_install_is_refused(
+    def test_extension_install_and_load_are_refused(
         self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """No INSTALL/LOAD means no httpfs, which means no network egress."""
-        _expect_refusal("INSTALL httpfs", query_corpus, capsys)
+        _expect_refusal("INSTALL httpfs", query_corpus, capsys, kind="sandbox_refused")
+        _expect_refusal("LOAD httpfs", query_corpus, capsys, kind="sandbox_refused")
 
     def test_injected_sql_cannot_reopen_the_sandbox(
         self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
@@ -426,6 +533,8 @@ class TestQuerySandbox:
             "SET allowed_directories=['/']",
             "SET memory_limit='512GB'",
             "SET temp_directory='/tmp'",
+            "SET autoinstall_known_extensions=true",
+            "SET threads=64",
         ):
             _expect_refusal(statement, query_corpus, capsys)
 
@@ -462,6 +571,180 @@ class TestQuerySandbox:
         assert json.loads(capsys.readouterr().out) == [{"n": 1}]
 
         _run_query("SELECT count(*) AS n FROM message_clusters", corpus)
+        assert json.loads(capsys.readouterr().out) == [{"n": 1}]
+
+
+class TestQueryStatementGate:
+    """Statement kinds that name a file are refused by name before anything executes.
+
+    DuckDB's ``allowed_paths`` grants are read-write and it has no read-only
+    grant (pinned in :class:`TestHardenedConnectionLayer`), so this gate is
+    what stops ``COPY ... TO <granted parquet> (USE_TMP_FILE false)`` for
+    any uid.
+    """
+
+    @pytest.mark.parametrize(
+        ("statement", "kind"),
+        [
+            ("COPY (SELECT 1) TO '{tmp}/a.csv'", "COPY"),
+            ("COPY (SELECT 1) TO '{tmp}/a.csv' (USE_TMP_FILE false)", "COPY"),
+            ("EXPORT DATABASE '{tmp}/exported'", "EXPORT"),
+            ("PREPARE p AS COPY (SELECT 1) TO '{tmp}/a.csv'", "PREPARE"),
+            ("EXECUTE p", "EXECUTE"),
+            ("ATTACH '{tmp}/other.db' AS o", "ATTACH"),
+            ("DETACH o", "DETACH"),
+            # DuckDB parses INSTALL and LOAD to the same statement kind.
+            ("INSTALL httpfs", "LOAD"),
+            ("LOAD httpfs", "LOAD"),
+        ],
+    )
+    def test_file_statement_kinds_are_refused_by_name(
+        self,
+        query_corpus: Path,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        statement: str,
+        kind: str,
+    ) -> None:
+        message = _expect_refusal(
+            statement.format(tmp=tmp_path), query_corpus, capsys, kind="sandbox_refused"
+        )
+        assert kind in message
+        assert not (tmp_path / "a.csv").exists()
+
+    def test_a_refused_statement_stops_the_whole_batch(
+        self, query_corpus: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Nothing in a batch runs when any statement in it is refused."""
+        target = tmp_path / "late.csv"
+        message = _expect_refusal(
+            f"SELECT 1; COPY (SELECT 1) TO '{target}'", query_corpus, capsys, kind="sandbox_refused"
+        )
+        assert "COPY" in message
+        assert not target.exists()
+
+    def test_select_batches_and_in_memory_ddl_still_run(
+        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run_query("SELECT 1 AS a; SELECT 2 AS b", query_corpus)
+        assert json.loads(capsys.readouterr().out) == [{"b": 2}]
+        _run_query("CREATE TEMP TABLE t AS SELECT 1 AS x; SELECT * FROM t", query_corpus)
+        assert json.loads(capsys.readouterr().out) == [{"x": 1}]
+        _run_query("EXPLAIN SELECT count(*) FROM sessions", query_corpus)
+        assert json.loads(capsys.readouterr().out)
+
+    def test_parse_errors_still_exit_64(
+        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            _run_query("SELEC 1", query_corpus)
+        assert excinfo.value.code == EXIT_CODES["parse_error"]
+        assert json.loads(capsys.readouterr().err)["error"]["kind"] == "parse_error"
+
+    def test_allowlist_names_real_statement_kinds_and_omits_the_file_facing_ones(self) -> None:
+        import duckdb
+
+        known = {member for member in dir(duckdb.StatementType) if member.isupper()}
+        assert known >= app_module._QUERY_STATEMENT_KINDS
+        for refused in (
+            "COPY",
+            "COPY_DATABASE",
+            "EXPORT",
+            "ATTACH",
+            "DETACH",
+            "LOAD",
+            "EXTENSION",
+            "PREPARE",
+            "EXECUTE",
+        ):
+            assert refused in known
+            assert refused not in app_module._QUERY_STATEMENT_KINDS
+
+
+class TestQueryRefusesRoot:
+    """A 0444 file mode does not bind uid 0, so the commands that run SQL refuse it."""
+
+    @staticmethod
+    def _as_root(monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(os, "geteuid", lambda: 0)
+        monkeypatch.delenv(ALLOW_ROOT_ENV, raising=False)
+
+    def test_query_exits_77_before_opening_duckdb(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import duckdb
+
+        self._as_root(monkeypatch)
+
+        def refuse_connect(*args: object, **kwargs: object) -> Any:
+            del args, kwargs
+            pytest.fail("DuckDB was opened as root")
+
+        monkeypatch.setattr(duckdb, "connect", refuse_connect)
+        with pytest.raises(SystemExit) as excinfo:
+            _run_query("SELECT 1", query_corpus)
+        assert excinfo.value.code == EXIT_CODES["root_refused"] == 77
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "root_refused"
+        assert "root" in err["message"]
+        assert ALLOW_ROOT_ENV in err["hint"]
+
+    def test_search_and_analyze_refuse_root_too(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._as_root(monkeypatch)
+        with pytest.raises(SystemExit) as excinfo:
+            search("anything", corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["root_refused"]
+        assert json.loads(capsys.readouterr().err)["error"]["kind"] == "root_refused"
+        with pytest.raises(SystemExit) as excinfo:
+            analyze(corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["root_refused"]
+        assert json.loads(capsys.readouterr().err)["error"]["kind"] == "root_refused"
+
+    def test_the_escape_hatch_runs_with_a_warning(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._as_root(monkeypatch)
+        monkeypatch.setenv(ALLOW_ROOT_ENV, "1")
+        warnings, sink_id = _capture_warnings()
+        try:
+            _run_query("SELECT count(*) AS n FROM sessions", query_corpus)
+        finally:
+            logger.remove(sink_id)
+        assert json.loads(capsys.readouterr().out) == [{"n": 1}]
+        assert any("root" in w and ALLOW_ROOT_ENV in w for w in warnings)
+
+    def test_only_the_value_one_opens_the_hatch(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._as_root(monkeypatch)
+        monkeypatch.setenv(ALLOW_ROOT_ENV, "yes")
+        with pytest.raises(SystemExit) as excinfo:
+            _run_query("SELECT 1", query_corpus)
+        assert excinfo.value.code == EXIT_CODES["root_refused"]
+        capsys.readouterr()
+
+    def test_an_unprivileged_uid_is_untouched(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(os, "geteuid", lambda: 1000)
+        _run_query("SELECT count(*) AS n FROM sessions", query_corpus)
         assert json.loads(capsys.readouterr().out) == [{"n": 1}]
 
 
@@ -521,10 +804,12 @@ class TestQuerySandboxWrites:
         trajectory = query_corpus / "sessions" / SESSION_ID / "trajectory.json"
         before = trajectory.read_text()
 
-        message = _expect_refusal(
-            f"COPY (SELECT 'destroyed' AS x) TO '{trajectory}'", query_corpus, capsys
+        _expect_refusal(
+            f"COPY (SELECT 'destroyed' AS x) TO '{trajectory}'",
+            query_corpus,
+            capsys,
+            kind="sandbox_refused",
         )
-        assert "Permission" in message
         assert trajectory.read_text() == before
 
     def test_copy_new_file_into_the_corpus_is_refused(
@@ -532,7 +817,9 @@ class TestQuerySandboxWrites:
     ) -> None:
         target = query_corpus / "pwned.csv"
 
-        _expect_refusal(f"COPY (SELECT 42) TO '{target}'", query_corpus, capsys)
+        _expect_refusal(
+            f"COPY (SELECT 42) TO '{target}'", query_corpus, capsys, kind="sandbox_refused"
+        )
         assert not target.exists()
 
     def test_copy_into_the_lance_store_is_refused(
@@ -541,62 +828,63 @@ class TestQuerySandboxWrites:
         _write_lance_store(query_corpus / "embeddings_lance")
         target = query_corpus / "embeddings_lance" / "exfil.csv"
 
-        _expect_refusal(f"COPY (SELECT 42) TO '{target}'", query_corpus, capsys)
+        _expect_refusal(
+            f"COPY (SELECT 42) TO '{target}'", query_corpus, capsys, kind="sandbox_refused"
+        )
         assert not target.exists()
 
-    def test_traversal_out_of_the_spill_directory_is_refused(
+    def test_copy_into_the_legacy_spill_directory_is_refused_and_nothing_persists(
         self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``.duckdb_tmp`` is writable and sits inside the corpus — ``..`` must not escape.
+        """Probe d3 of the review: ``<corpus>/.duckdb_tmp`` used to be the one writable dir.
 
-        The spill dir is created up front on purpose: DuckDB reports a
-        missing parent directory as an IO error, which would make this pass
-        with no sandbox at all.
+        It is pre-created here, as the review did, so a success would be the
+        old grant and not a missing parent; it is no longer granted at all.
         """
-        (query_corpus / ".duckdb_tmp").mkdir(exist_ok=True)
-        trajectory = query_corpus / "sessions" / SESSION_ID / "trajectory.json"
-        before = trajectory.read_text()
-        escape = query_corpus / ".duckdb_tmp" / ".." / "sessions" / SESSION_ID / "trajectory.json"
-
-        message = _expect_refusal(
-            f"COPY (SELECT 'destroyed' AS x) TO '{escape}'", query_corpus, capsys
-        )
-        assert "Permission" in message
-        assert trajectory.read_text() == before
-
-    def test_plain_copy_over_an_analytics_parquet_is_refused(
-        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """The read grant is per-file; DuckDB stages ``COPY`` through an ungranted sibling."""
-        parquet = query_corpus / "analytics" / "clusters.parquet"
-        before = parquet.read_bytes()
+        legacy = query_corpus / ".duckdb_tmp"
+        legacy.mkdir()
+        before = _tree_digest(query_corpus)
 
         _expect_refusal(
-            f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET)", query_corpus, capsys
+            f"COPY (SELECT 1) TO '{legacy}/probe.csv'", query_corpus, capsys, kind="sandbox_refused"
         )
-        assert parquet.read_bytes() == before
+        _expect_refusal(f"SELECT * FROM read_text('{legacy}/probe.csv')", query_corpus, capsys)
+        assert _tree_digest(query_corpus) == before
+        assert list(legacy.iterdir()) == []
 
-    def test_documented_residual_holes_still_behave_as_documented(
-        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
+    def test_use_tmp_file_false_over_a_granted_parquet_is_refused_for_any_uid(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Pins the two holes ``query``'s docstring admits, so the promise cannot rot.
+        """Probe d2 of the review, the one that overwrote ``steps.parquet`` as root.
 
-        Both are recomputable derived data. If a future DuckDB closes either,
-        this test fails and the docstring's Sandbox section must lose the
-        corresponding paragraph.
+        The analytics parquet is a granted path and writable by this uid at
+        the filesystem, so a refusal here is the statement gate and not a
+        file mode. Repeated as uid 0 with the escape hatch open: still
+        refused, because the gate does not look at the uid.
         """
         parquet = query_corpus / "analytics" / "clusters.parquet"
         before = parquet.read_bytes()
-        _run_query(
-            f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET, USE_TMP_FILE false)",
-            query_corpus,
-        )
-        capsys.readouterr()
-        assert parquet.read_bytes() != before, (
-            "USE_TMP_FILE false no longer overwrites a granted parquet — "
-            "drop that paragraph from query's Sandbox docstring"
-        )
+        statement = f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET, USE_TMP_FILE false)"
 
+        _expect_refusal(statement, query_corpus, capsys, kind="sandbox_refused")
+        assert parquet.read_bytes() == before
+
+        monkeypatch.setattr(os, "geteuid", lambda: 0)
+        monkeypatch.setenv(ALLOW_ROOT_ENV, "1")
+        _expect_refusal(statement, query_corpus, capsys, kind="sandbox_refused")
+        assert parquet.read_bytes() == before
+
+    def test_documented_residual_hole_still_behaves_as_documented(
+        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Pins the one hole ``query``'s docstring admits, so the promise cannot rot.
+
+        Recomputable derived data. If a future DuckDB closes it, this test
+        fails and the docstring's Sandbox section must lose the paragraph.
+        """
         _write_lance_store(query_corpus / "embeddings_lance")
         _run_query("DELETE FROM lance_store.main.embeddings", query_corpus)
         capsys.readouterr()
@@ -607,67 +895,470 @@ class TestQuerySandboxWrites:
         )
 
 
-class TestQueryMemoryCap:
-    """``_query_memory_limit_bytes`` is pure arithmetic over ``os.sysconf``."""
+def _hardened_connection(corpus_root: Path, spill_dir: Path) -> Any:
+    """What ``query`` builds, minus the statement gate: DuckDB's own layer alone."""
+    import duckdb
 
-    @staticmethod
-    def _limit_for(physical_bytes: int, monkeypatch: pytest.MonkeyPatch) -> int:
-        import os
+    from atif_duck.infrastructure.registry import register
 
-        from atif_cli import app as app_mod
+    con = duckdb.connect()
+    app_module._configure_query_resources(con, app_module._query_resources(), spill_dir)
+    sources = register(con, corpus_root)
+    app_module._harden_query_connection(
+        con,
+        corpus_root=corpus_root,
+        spill_dir=spill_dir,
+        columnar_paths=sources.lazy_read_paths,
+    )
+    return con
 
-        page = 4096
 
-        def _sysconf(name: str | int) -> int:
-            return page if name == "SC_PAGE_SIZE" else physical_bytes // page
+class TestHardenedConnectionLayer:
+    """DuckDB's allowlist, exercised WITHOUT the statement gate.
 
-        monkeypatch.setattr(os, "sysconf", _sysconf)
-        return app_mod._query_memory_limit_bytes()
+    The CLI tests above hit the gate first, so this class is what proves
+    the second layer still holds on its own, and pins the two facts the
+    gate exists for: a directory grant and a file grant are both read-write.
+    """
 
-    def test_ceiling_wins_on_a_small_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """4 GiB of RAM: 50% is 2 GiB, but the 80% ceiling (3.2 GiB) is tighter than the floor."""
-        from atif_cli.app import _QUERY_MEMORY_FLOOR_BYTES
+    @pytest.fixture
+    def layer(self, query_corpus: Path, tmp_path: Path) -> Any:
+        spill = tmp_path / "spill"
+        spill.mkdir(mode=0o700)
+        con = _hardened_connection(query_corpus, spill)
+        yield con, spill
+        con.close()
 
-        physical = 4 * 1024**3
-        assert self._limit_for(physical, monkeypatch) == int(physical * 0.8)
-        assert int(physical * 0.8) < _QUERY_MEMORY_FLOOR_BYTES
-
-    def test_half_of_ram_wins_on_a_large_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        physical = 128 * 1024**3
-        assert self._limit_for(physical, monkeypatch) == int(physical * 0.5)
-
-    def test_floor_beats_half_between_the_two(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """12 GiB: half (6 GiB) is under the floor, and the floor is under the 80% ceiling."""
-        from atif_cli.app import _QUERY_MEMORY_FLOOR_BYTES
-
-        physical = 12 * 1024**3
-        assert self._limit_for(physical, monkeypatch) == _QUERY_MEMORY_FLOOR_BYTES
-        assert int(physical * 0.5) < _QUERY_MEMORY_FLOOR_BYTES < int(physical * 0.8)
-
-    def test_never_exceeds_duckdbs_own_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for gib in (1, 4, 16, 64, 256):
-            physical = gib * 1024**3
-            assert self._limit_for(physical, monkeypatch) <= int(physical * 0.8)
-
-    def test_connection_carries_the_cap_and_a_corpus_local_spill_dir(
-        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
+    def test_duckdb_refuses_every_ungranted_path(
+        self, layer: Any, query_corpus: Path, tmp_path: Path
     ) -> None:
-        """The settings are read back through caller SQL — the only honest witness."""
-        from atif_cli.app import _query_memory_limit_bytes
+        import duckdb
 
+        con, spill = layer
+        trajectory = query_corpus / "sessions" / SESSION_ID / "trajectory.json"
+        parquet = query_corpus / "analytics" / "clusters.parquet"
+        for statement in (
+            f"COPY (SELECT 1) TO '{tmp_path / 'out.csv'}'",
+            f"COPY (SELECT 1) TO '{trajectory}'",
+            f"COPY (SELECT 1) TO '{trajectory}' (USE_TMP_FILE false)",
+            f"COPY (SELECT 1) TO '{query_corpus / 'pwned.csv'}'",
+            f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET)",
+            f"COPY (SELECT 1) TO '{spill}/../escape.csv'",
+            f"SELECT * FROM read_text('{spill}/../../etc/passwd')",
+            "SELECT * FROM read_text('/etc/passwd')",
+            f"ATTACH '{tmp_path / 'other.db'}' AS o",
+            "INSTALL httpfs",
+        ):
+            with pytest.raises(duckdb.Error) as excinfo:
+                con.execute(statement)
+            assert "Permission" in str(excinfo.value) or "disabled" in str(excinfo.value), statement
+        assert not (tmp_path / "out.csv").exists()
+        assert not (tmp_path / "escape.csv").exists()
+
+    def test_grants_are_read_write_which_is_why_the_gate_exists(
+        self, layer: Any, query_corpus: Path
+    ) -> None:
+        """DuckDB 1.5.5 has no read-only grant; if one appears, this fails and the design can simplify."""
+        con, spill = layer
+        con.execute(f"COPY (SELECT 1 AS x) TO '{spill}/probe.csv'")
+        assert (spill / "probe.csv").is_file()
+
+        parquet = query_corpus / "analytics" / "clusters.parquet"
+        before = parquet.read_bytes()
+        con.execute(
+            f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET, USE_TMP_FILE false)"
+        )
+        assert parquet.read_bytes() != before, (
+            "DuckDB now refuses a write to a granted path: the statement gate is "
+            "belt-and-braces and query's Sandbox docstring can say so"
+        )
+
+    def test_resources_and_extension_settings_are_in_force(self, layer: Any) -> None:
+        con, spill = layer
+        resources = app_module._query_resources()
+        settings = dict(
+            con.execute(
+                "SELECT name, value FROM duckdb_settings() WHERE name IN "
+                "('threads', 'temp_directory', 'autoinstall_known_extensions', "
+                "'autoload_known_extensions', 'enable_external_access', 'lock_configuration')"
+            ).fetchall()
+        )
+        assert int(settings["threads"]) == resources.threads
+        assert settings["temp_directory"] == str(spill)
+        assert settings["autoinstall_known_extensions"] == "false"
+        assert settings["autoload_known_extensions"] == "false"
+        assert settings["enable_external_access"] == "false"
+        assert settings["lock_configuration"] == "true"
+
+
+class TestQuerySpillDirectory:
+    """The spill directory is private, outside the corpus, and gone when the process is."""
+
+    @pytest.fixture
+    def recorded_mkdtemp(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[Path, int]]:
+        import tempfile
+
+        created: list[tuple[Path, int]] = []
+        real = tempfile.mkdtemp
+
+        def mkdtemp(*args: Any, **kwargs: Any) -> str:
+            path = str(real(*args, **kwargs))
+            created.append((Path(path), Path(path).stat().st_mode & 0o777))
+            return path
+
+        # ``app`` reads ``tempfile.mkdtemp`` at call time, so the module attribute is the seam.
+        monkeypatch.setattr(tempfile, "mkdtemp", mkdtemp)
+        return created
+
+    def test_private_dir_outside_the_corpus_removed_on_success(
+        self,
+        query_corpus: Path,
+        recorded_mkdtemp: list[tuple[Path, int]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
         _run_query(
-            "SELECT current_setting('memory_limit') AS mem, "
-            "current_setting('temp_directory') AS tmp",
+            "SELECT current_setting('temp_directory') AS tmp, "
+            "current_setting('allowed_directories') AS dirs",
             query_corpus,
         )
         row = json.loads(capsys.readouterr().out)[0]
-        assert row["tmp"] == str(query_corpus / ".duckdb_tmp")
+        [(spill, mode)] = recorded_mkdtemp
+        assert row["tmp"] == str(spill)
+        assert [Path(d) for d in row["dirs"]] == [spill]
+        assert spill.name.startswith("atif-sql-query-")
+        assert mode == 0o700
+        assert not spill.is_relative_to(query_corpus)
+        assert not spill.exists()
+        assert not (query_corpus / ".duckdb_tmp").exists()
 
-        expected_gib = _query_memory_limit_bytes() / 1024**3
-        reported = row["mem"]
-        assert reported.endswith("GiB"), reported
-        assert float(reported.removesuffix(" GiB")) == pytest.approx(expected_gib, abs=0.1)
-        assert reported != duckdb_default_memory_limit()
+    def test_removed_on_error_too(
+        self,
+        query_corpus: Path,
+        recorded_mkdtemp: list[tuple[Path, int]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        with pytest.raises(SystemExit):
+            _run_query("SELEC 1", query_corpus)
+        capsys.readouterr()
+        [(spill, _)] = recorded_mkdtemp
+        assert not spill.exists()
+
+    def test_a_query_process_leaves_the_corpus_tree_unchanged(
+        self, query_corpus: Path, tmp_path: Path
+    ) -> None:
+        """Through a real process: the review's probe d3, then a plain read.
+
+        Before the fix the COPY exited 0 and ``probe.csv`` persisted inside
+        the corpus. Now the tree digest (paths, modes, bytes) is unchanged,
+        the pre-created legacy dir stays empty, no spill dir is left under
+        the process's TMPDIR, and a fresh corpus gains no ``.duckdb_tmp``.
+        """
+        legacy = query_corpus / ".duckdb_tmp"
+        legacy.mkdir()
+        scratch = tmp_path / "process-tmp"
+        scratch.mkdir()
+        env: dict[str, str] = dict(os.environ)
+        env.update(
+            TMPDIR=str(scratch),
+            NO_COLOR="1",
+            PYTHONHASHSEED="0",
+            LITELLM_LOCAL_MODEL_COST_MAP="true",
+        )
+        for var in ("ATIF_SQL_CORPUS_ROOT", "ATIF_SQL_LANCE_URI", "ATIF_SQL_EMBED_MODEL_ID"):
+            env.pop(var, None)
+        before = _tree_digest(query_corpus)
+
+        def run(sql: str) -> subprocess.CompletedProcess[str]:
+            argv = [sys.executable, "-m", "atif_cli", "query", "--format", "json"]
+            argv += ["--corpus-root", str(query_corpus), sql]
+            return subprocess.run(  # noqa: S603 - argv is built from constants and tmp paths
+                argv, capture_output=True, text=True, env=env, timeout=300, check=False
+            )
+
+        refused = run(f"COPY (SELECT 1) TO '{legacy}/probe.csv'")
+        assert refused.returncode == EXIT_CODES["sandbox_refused"], refused.stderr
+        assert json.loads(refused.stderr.strip().splitlines()[-1])["error"]["kind"] == (
+            "sandbox_refused"
+        )
+        read = run("SELECT count(*) AS n FROM sessions")
+        assert read.returncode == 0, read.stderr
+        assert json.loads(read.stdout) == [{"n": 1}]
+
+        assert _tree_digest(query_corpus) == before
+        assert list(legacy.iterdir()) == []
+        assert list(scratch.iterdir()) == [], "a spill dir outlived its process"
+
+        legacy.rmdir()
+        fresh = run("SELECT count(*) AS n FROM steps")
+        assert fresh.returncode == 0, fresh.stderr
+        assert not (query_corpus / ".duckdb_tmp").exists()
+
+
+class TestQueryResources:
+    """The cap and thread count are derived from the host and applied BEFORE registration."""
+
+    GIB = 1024**3
+
+    @staticmethod
+    def _host(monkeypatch: pytest.MonkeyPatch, physical: int, available: int) -> None:
+        monkeypatch.setattr(app_module, "_host_memory", lambda: (physical, available))
+
+    def test_large_host_gets_half_of_ram(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._host(monkeypatch, 124 * self.GIB, 89 * self.GIB)
+        assert app_module._query_memory_limit_bytes() == 62 * self.GIB
+
+    def test_eight_gib_guest_is_capped_below_its_own_ram(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The old rule said 8 GiB here; the guest had 8 GiB in total and 6 free."""
+        self._host(monkeypatch, 8 * self.GIB, 6 * self.GIB)
+        limit = app_module._query_memory_limit_bytes()
+        assert limit == int(6 * self.GIB * 0.8)
+        assert limit < 8 * self.GIB
+
+    def test_target_wins_between_half_and_eighty_percent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._host(monkeypatch, 12 * self.GIB, 12 * self.GIB)
+        assert app_module._query_memory_limit_bytes() == 8 * self.GIB
+
+    def test_never_exceeds_eighty_percent_of_physical_or_available(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for gib in (1, 4, 8, 16, 64, 256):
+            for free_fraction in (0.1, 0.5, 1.0):
+                physical = gib * self.GIB
+                available = int(physical * free_fraction)
+                self._host(monkeypatch, physical, available)
+                limit = app_module._query_memory_limit_bytes()
+                assert limit <= max(int(physical * 0.8), app_module._QUERY_MEMORY_MIN_BYTES)
+                assert limit <= max(int(available * 0.8), app_module._QUERY_MEMORY_MIN_BYTES)
+
+    def test_floor_when_almost_nothing_is_free(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._host(monkeypatch, 2 * self.GIB, 100 * 1024**2)
+        assert app_module._query_memory_limit_bytes() == app_module._QUERY_MEMORY_MIN_BYTES
+
+    @staticmethod
+    def _sixteen_cpus(_pid: int) -> set[int]:
+        return set(range(16))
+
+    def test_threads_follow_the_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(os, "sched_getaffinity", self._sixteen_cpus, raising=False)
+        assert app_module._query_threads(int(4.8 * self.GIB)) == 2
+        assert app_module._query_threads(62 * self.GIB) == 16
+        assert app_module._query_threads(1 * self.GIB) == 1
+
+    def test_host_memory_reads_this_host(self) -> None:
+        physical, available = app_module._host_memory()
+        assert physical > 0
+        assert 0 < available <= physical
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("6GB", 6 * 10**9),
+            ("512MiB", 512 * 1024**2),
+            ("123B", 123),
+            ("1.5GiB", int(1.5 * 1024**3)),
+            (" 6 gb ", 6 * 10**9),
+            ("4096", 4096),
+        ],
+    )
+    def test_parse_size(self, text: str, expected: int) -> None:
+        assert app_module._parse_size(text) == expected
+
+    @pytest.mark.parametrize("text", ["", "abc", "6XB", "GB", "-1GB"])
+    def test_parse_size_rejects_garbage(self, text: str) -> None:
+        with pytest.raises(ValueError, match=r"size|unit"):
+            app_module._parse_size(text)
+
+    def test_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(os, "sched_getaffinity", self._sixteen_cpus, raising=False)
+        monkeypatch.setenv(QUERY_MEMORY_LIMIT_ENV, "6GB")
+        monkeypatch.setenv(QUERY_THREADS_ENV, "4")
+        assert app_module._query_resources() == app_module.QueryResources(6 * 10**9, 4)
+        monkeypatch.delenv(QUERY_THREADS_ENV)
+        assert app_module._query_resources().threads == 2, "threads follow the overridden cap"
+
+    @pytest.mark.parametrize(
+        ("var", "value"),
+        [(QUERY_MEMORY_LIMIT_ENV, "lots"), (QUERY_THREADS_ENV, "0"), (QUERY_THREADS_ENV, "many")],
+    )
+    def test_malformed_override_exits_64(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        var: str,
+        value: str,
+    ) -> None:
+        monkeypatch.setenv(var, value)
+        with pytest.raises(SystemExit) as excinfo:
+            _run_query("SELECT 1", query_corpus)
+        assert excinfo.value.code == EXIT_CODES["invalid_input"]
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "invalid_input"
+        assert var in err["hint"]
+
+    def test_connection_carries_the_cap_and_threads(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The settings are read back through caller SQL — the only honest witness."""
+        monkeypatch.setenv(QUERY_MEMORY_LIMIT_ENV, "3GiB")
+        monkeypatch.setenv(QUERY_THREADS_ENV, "3")
+        _run_query(
+            "SELECT current_setting('memory_limit') AS mem, "
+            "current_setting('threads') AS threads, "
+            "current_setting('autoinstall_known_extensions') AS autoinstall, "
+            "current_setting('autoload_known_extensions') AS autoload",
+            query_corpus,
+        )
+        row = json.loads(capsys.readouterr().out)[0]
+        assert row["mem"] == "3.0 GiB"
+        assert row["mem"] != duckdb_default_memory_limit()
+        assert int(row["threads"]) == 3
+        assert row["autoinstall"] is False
+        assert row["autoload"] is False
+
+    @pytest.mark.parametrize(("threads", "memory"), [(4, "6GB"), (16, "8GB")])
+    def test_registration_fits_under_limits_that_used_to_oom(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        threads: int,
+        memory: str,
+    ) -> None:
+        """Finding 1 of the MicroVM review, as the review reproduced it on a workstation.
+
+        ``SET threads=N; SET memory_limit=...`` on every connection before the
+        CLI touches it (the review's shim), plus the same values through the
+        env so the CLI applies them too. Before the fix the edges reader
+        reserved 2 GiB a thread and every query exited 70 out of memory once
+        the glob matched two or more files (measured on main: one file
+        registers, two do not); the readers are now sized from the files.
+        """
+        import duckdb
+
+        for var in ("ATIF_SQL_CORPUS_ROOT", "ATIF_SQL_LANCE_URI", "ATIF_SQL_EMBED_MODEL_ID"):
+            monkeypatch.delenv(var, raising=False)
+        corpus = _write_two_session_corpus(tmp_path / "corpus")
+        monkeypatch.setenv(QUERY_MEMORY_LIMIT_ENV, memory)
+        monkeypatch.setenv(QUERY_THREADS_ENV, str(threads))
+        real_connect = duckdb.connect
+
+        def limited(*args: Any, **kwargs: Any) -> Any:
+            con = real_connect(*args, **kwargs)
+            con.execute(f"SET threads={threads}; SET memory_limit='{memory}'")
+            return con
+
+        monkeypatch.setattr(duckdb, "connect", limited)
+        _run_query("SELECT count(*) AS n FROM sessions", corpus)
+        assert json.loads(capsys.readouterr().out) == [{"n": 2}]
+
+
+class TestQueryNeverInstallsExtensions:
+    """Registration must not reach the network, even when an embeddings store exists."""
+
+    def test_store_present_and_extension_absent_binds_empty_without_installing(
+        self,
+        query_corpus: Path,
+        empty_extension_dir: tuple[Path, list[str]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        ext_dir, statements = empty_extension_dir
+        _write_lance_store(query_corpus / "embeddings_lance")
+        warnings, sink_id = _capture_warnings()
+        try:
+            _run_query("SELECT count(*) AS n FROM message_embeddings", query_corpus)
+        finally:
+            logger.remove(sink_id)
+        assert json.loads(capsys.readouterr().out) == [{"n": 0}]
+        assert not any(re.match(r"\s*INSTALL\b", s, re.IGNORECASE) for s in statements)
+        assert list(ext_dir.rglob("*")) == [], "something was installed into the extension dir"
+        assert any("--install-extension" in w for w in warnings)
+
+    def test_no_store_means_no_load_at_all(
+        self,
+        query_corpus: Path,
+        empty_extension_dir: tuple[Path, list[str]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _, statements = empty_extension_dir
+        _run_query("SELECT count(*) AS n FROM message_embeddings", query_corpus)
+        assert json.loads(capsys.readouterr().out) == [{"n": 0}]
+        assert not any(re.match(r"\s*(INSTALL|LOAD)\b", s, re.IGNORECASE) for s in statements)
+
+    def test_status_reports_the_missing_extension(
+        self,
+        query_corpus: Path,
+        tmp_path: Path,
+        empty_extension_dir: tuple[Path, list[str]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _write_lance_store(query_corpus / "embeddings_lance")
+        source = tmp_path / "source"
+        source.mkdir()
+        status(source_root=source, corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["lance_extension_installed"] is False
+        assert payload["embeddings_store_present"] is True
+        assert payload["vector_search"] == "extension_missing"
+
+    def test_search_exits_78_instead_of_pretending_the_store_is_empty(
+        self,
+        query_corpus: Path,
+        empty_extension_dir: tuple[Path, list[str]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _write_lance_store(query_corpus / "embeddings_lance")
+        with pytest.raises(SystemExit) as excinfo:
+            search("anything", corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["extension_missing"] == 78
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "extension_missing"
+        assert "--install-extension" in err["hint"]
+
+    def test_status_reports_ready_and_no_store(
+        self, query_corpus: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = tmp_path / "source"
+        source.mkdir()
+        status(source_root=source, corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["lance_extension_installed"] is True
+        assert payload["vector_search"] == "no_store"
+        _write_lance_store(query_corpus / "embeddings_lance")
+        status(source_root=source, corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        assert json.loads(capsys.readouterr().out)["vector_search"] == "ready"
+
+    def test_embed_install_extension_installs_and_exits(
+        self,
+        query_corpus: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The explicit install path: no scope flag needed, no Bedrock, JSON receipt."""
+        from atif_duck.infrastructure import registry as registry_mod
+
+        calls: list[object] = []
+
+        def fake_install(con: object) -> str:
+            calls.append(con)
+            return "/ext/lance.duckdb_extension"
+
+        monkeypatch.setattr(registry_mod, "install_lance_extension", fake_install)
+        embed(install_extension=True, corpus_root=query_corpus, fmt=OutputFormat.JSON)
+        assert json.loads(capsys.readouterr().out) == {
+            "extension": "lance",
+            "installed": True,
+            "install_path": "/ext/lance.duckdb_extension",
+        }
+        assert len(calls) == 1
+        assert not (query_corpus / "embeddings_lance").exists()
 
 
 class TestQueryLockedConfiguration:

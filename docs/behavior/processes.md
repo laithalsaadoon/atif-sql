@@ -270,14 +270,18 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:529`
 5. Create the macros, then the analytics views and analytics macros over the
    analytics parquets, which bind against both the parquets and the base views
    — `:1005`, `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`.
-6. Harden the connection in a fixed order: temp directory, memory cap, a
-   directory allowlist holding only the spill area, a file allowlist of the
-   analytics parquets, the config exemption list, then
-   `enable_external_access=false` and `lock_configuration=true` last —
-   `packages/atif-cli/src/atif_cli/app.py:138`.
-7. Execute the caller's statement and stream the cursor: a plain table on a
-   TTY, a JSON array of row objects on a pipe — `:606`,
-   `packages/atif-cli/src/atif_cli/output.py:154`.
+6. Harden the connection in a fixed order (the memory cap, thread count and
+   private spill directory were set before step 3, since registration is what
+   needs them): a directory allowlist holding only the spill area, a file
+   allowlist of the parquets the views read lazily, the config exemption
+   list, then `enable_external_access=false` and `lock_configuration=true`
+   last (`packages/atif-cli/src/atif_cli/app.py`, `_harden_query_connection`).
+7. Check the statement's kinds with DuckDB's parser and refuse `COPY`,
+   `EXPORT`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE`
+   before anything runs (exit 70, `sandbox_refused`); then execute the
+   caller's statement and stream the cursor: a plain table on a TTY, a JSON
+   array of row objects on a pipe (`packages/atif-cli/src/atif_cli/output.py:154`).
+   The spill directory is removed on exit.
 8. Classify any DuckDB failure into parse, catalog, or runtime — or an
    embedding-provider mismatch — and exit 64, 65, or 70 with a JSON error
    envelope — `packages/atif-cli/src/atif_cli/duck_errors.py:34`, `:66`.
