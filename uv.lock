@@ -210,7 +210,7 @@ requires-dist = [
     { name = "atif-models", editable = "packages/atif-models" },
     { name = "graspologic-native", specifier = ">=1.3.1,<2" },
     { name = "hdbscan", specifier = ">=0.8.44" },
-    { name = "lancedb", specifier = ">=0.30,<0.38" },
+    { name = "lancedb", specifier = ">=0.30,<0.39" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", specifier = ">=2.4.4,<2.6" },
     { name = "polars", specifier = ">=1.40.0" },
@@ -322,7 +322,7 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.42.91" },
     { name = "duckdb", specifier = ">=1.5.2,<2" },
-    { name = "lancedb", specifier = ">=0.30,<0.38" },
+    { name = "lancedb", specifier = ">=0.30,<0.39" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "polars", specifier = ">=1.40.0" },
     { name = "pyarrow", specifier = ">=23.0.1" },
@@ -402,7 +402,7 @@ requires-dist = [
     { name = "graspologic-native", specifier = ">=1.3.1,<2" },
     { name = "harbor", specifier = ">=0.22.0,<1" },
     { name = "hdbscan", specifier = ">=0.8.44" },
-    { name = "lancedb", specifier = ">=0.30,<0.38" },
+    { name = "lancedb", specifier = ">=0.30,<0.39" },
     { name = "litellm", specifier = ">=1.92.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", specifier = ">=2.4.4,<2.6" },
@@ -440,30 +440,30 @@ wheels = [
 
 [[package]]
 name = "boto3"
-version = "1.43.92"
+version = "1.43.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore" },
     { name = "jmespath" },
     { name = "s3transfer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d5/bf/322eace5751ada6198727ee9210b34be12670151dd9c001e36738272a41a/boto3-1.43.92.tar.gz", hash = "sha256:30a1ff4bb729831c4890e0a0d121f9d43f066de724c5916e358c9f68f94749dd", size = 112652, upload-time = "2026-09-10T19:21:48.52Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/37/7a09d8320685b3b8c8a014e392e7595025d00965c46c5f410797905fab7a/boto3-1.43.93.tar.gz", hash = "sha256:196bfc8b4c9cd5505f9f7b963e30956db3a00fd47e20dd0ee3574a243c1fb212", size = 112752, upload-time = "2026-09-11T19:23:03.484Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/fa/51808a448896a4707321b6b325c21637f4e10f51beb3304525686693b8a7/boto3-1.43.92-py3-none-any.whl", hash = "sha256:aee16b1ad54caf6e7b8f48f2682d18b03a2feefaf7afaf56fed6204016fa687d", size = 140028, upload-time = "2026-09-10T19:21:46.45Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/68/f8f661b9e68daba4f775bfa1e750732ec52fc89b32d55f300aef530e1d62/boto3-1.43.93-py3-none-any.whl", hash = "sha256:3c948fe231490d446bf90bf3322d1452632107329d3683b37d88b7399bf481a0", size = 140022, upload-time = "2026-09-11T19:23:01.995Z" },
 ]
 
 [[package]]
 name = "botocore"
-version = "1.43.92"
+version = "1.43.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jmespath" },
     { name = "python-dateutil" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/45/cf/abc185dee932c8ebb3f35b608148226c1974e9c78af6b46a67901076dd36/botocore-1.43.92.tar.gz", hash = "sha256:a5efebb7d8fd9e7a47a1ac3138688dae4234fcb2f5355c51f7c7aced63ef6df8", size = 16096751, upload-time = "2026-09-10T19:21:43.374Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/a0/2ce10897323d67dd85de6190fdee159013a75741d1dc48b74d4815ec0592/botocore-1.43.93.tar.gz", hash = "sha256:82da355d18a7f784347b00444be33942834651f31b6c5ffef49999cd47364c5e", size = 16103276, upload-time = "2026-09-11T19:22:58.933Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/ea/84e86e2797afd7ce7e25c0da0b47c77fc636103659da17e2cc261e70da3a/botocore-1.43.92-py3-none-any.whl", hash = "sha256:a6f003615a3b6059628146e4a1d13bc132f7bc8f415c469a63d1c616bccee18f", size = 15788294, upload-time = "2026-09-10T19:21:39.287Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/7e/f858c401f32d980f924c8f8328b62fab463313834a9ad2326f44613b97ec/botocore-1.43.93-py3-none-any.whl", hash = "sha256:3ca57bb5d26d88b554a74de708a5c991f45306436c91aacca931252d1d4d54ff", size = 15794156, upload-time = "2026-09-11T19:22:55.964Z" },
 ]
 
 [[package]]
@@ -692,7 +692,7 @@ wheels = [
 
 [[package]]
 name = "commitizen"
-version = "4.18.0"
+version = "4.18.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "argcomplete" },
@@ -708,9 +708,9 @@ dependencies = [
     { name = "termcolor" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/1e/4918352e4b89ffd7b50cea166c834a28d046af8c7326351f873b2cc8d7b5/commitizen-4.18.0.tar.gz", hash = "sha256:9fab436e99420c97ee020bfeea17fe29903fb320a9cdd6e30c2c63bfbac4cb3b", size = 68288, upload-time = "2026-08-19T14:47:01.136Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/05/5740bfcd2e89e8be97757294335b5c480bcf60b134ef7bc84428c3a15884/commitizen-4.18.1.tar.gz", hash = "sha256:27379caedd00553344e44cc8cef039598b6d3e65f9b598e31d355489c481563d", size = 68482, upload-time = "2026-09-13T21:37:43.008Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/7d/f50f8c478977d4aed0902e1ca558a8b457fc985937ee751304abd6f45a1f/commitizen-4.18.0-py3-none-any.whl", hash = "sha256:3e11153209a9d9e05fd6b21761099ad22e131a5410f5b89b847d83baa1909661", size = 90324, upload-time = "2026-08-19T14:46:59.58Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/3e/c15f31a04a3432bce3312cde554ba73e8c5232a3615f08f39264a447c427/commitizen-4.18.1-py3-none-any.whl", hash = "sha256:16ed052ff775bf42cad85bc09075db110ca7ba84f49233fc642629a0da65862b", size = 90476, upload-time = "2026-09-13T21:37:41.152Z" },
 ]
 
 [[package]]
@@ -1586,7 +1586,7 @@ wheels = [
 
 [[package]]
 name = "lancedb"
-version = "0.37.1"
+version = "0.38.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecation" },
@@ -1598,10 +1598,10 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/2f/4ddcab82bb618c6c8de00725f3cf59585dcb9040964dde13cb0cae6ed3cd/lancedb-0.37.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c15c46f23cf6959c79fb93cdba2c76536cf784d3134386662da03dc6ccac3c26", size = 58474767, upload-time = "2026-08-10T10:41:45.675Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/5e/dac0fd9478a21685444f23e6ec937babf4ff48b1616b68e8137778d6ecb9/lancedb-0.37.1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:35d872d920cbfdc3771fbcd33f2c63bff6ff7203d6d2ba8fe4330e98eb859d12", size = 61666580, upload-time = "2026-08-10T10:41:49.535Z" },
-    { url = "https://files.pythonhosted.org/packages/1f/fa/ee1cdb1e904872d75fa0ff44ad35cd23494e810299c33e68de0687de7a71/lancedb-0.37.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:86597f4dbc51a33a07341550dc77d21a1ddd1f7539266eda5bb64c4f3bd11cca", size = 64802395, upload-time = "2026-08-10T10:41:52.969Z" },
-    { url = "https://files.pythonhosted.org/packages/42/55/65c69307373b7f05dea38465b7d3836c86390f0ebc79b5c56d2c0919f229/lancedb-0.37.1-cp310-abi3-win_amd64.whl", hash = "sha256:488eca15361dfc34439500c9e2607c4fb2b8bf190fa1003bd54b1d6eb40e0316", size = 70994296, upload-time = "2026-08-10T10:41:56.609Z" },
+    { url = "https://files.pythonhosted.org/packages/85/e5/556c3d9871231aa94e309293bac8bc24fe43f5965e0e294c82fc1cdc3d3b/lancedb-0.38.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:1559fa168fad17f5f67d6e072f7daa3cba3c7f66b82ef6cf4cf75a8e0a79c888", size = 60483495, upload-time = "2026-08-31T08:46:17.284Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/cb/fd9ac855ad4c4a7503e8c98133916dde30edb5a74ea04ea3da246ed0192a/lancedb-0.38.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b80362e1335e8fb71ece2d5c0665dd603af1f6715696fcc652a7053039b6a085", size = 64373373, upload-time = "2026-08-31T08:46:20.916Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/cf/3df2396facdba00b787abf0cbcfb05ad3c0d27b86e2a5eca1deb675fe54f/lancedb-0.38.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:2b20ce0a865f386e5460736c058a4baae6c618072436a55119b5b5052a655749", size = 67746344, upload-time = "2026-09-01T08:59:02.977Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/4d/a1e7febf279c15afdf8102d9458b5457be02b2173a17d2a472f83f9034a6/lancedb-0.38.0-cp310-abi3-win_amd64.whl", hash = "sha256:6e99b98c10ebfb68f36fff5d159246ce4ef5ee686d49c9298a3fc88f754a470d", size = 104137765, upload-time = "2026-09-01T08:59:17.369Z" },
 ]
 
 [[package]]
