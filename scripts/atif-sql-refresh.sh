@@ -140,6 +140,55 @@ case "${1:-}" in
   *) log "FATAL: unknown mode '${1:-}' (expected: materialize | structural | llm)"; exit 64 ;;
 esac
 
+# MEMORY CAP PER LANE. Each lane re-execs itself ONCE inside a transient
+# systemd user scope with a hard MemoryMax (and no swap), so a lane that
+# outgrows its budget is ended inside its own cgroup instead of pushing the
+# shared user slice to its limit. On 2026-09-25 01:43Z user-1001.slice hit
+# its 110 GiB MemoryMax with the structural lane holding 6.5 GB and a
+# materialize tick running; the kernel's OOM choice landed in the bonk fleet
+# and took hex-bonk down. The re-exec happens BEFORE the lane lock is taken,
+# so the capped copy owns the lock and the single-flight rules below are
+# unchanged. ATIF_SQL_REFRESH_MEMORY_MAX_<LANE> overrides a lane's budget
+# (any systemd size, e.g. 16G); `off` runs uncapped. With no reachable user
+# manager the lane runs uncapped and logs that it did.
+#
+# Budgets are measured peaks plus headroom (2026-09-25, 236k-embedding primary
+# corpus). structural peaked at ~17 GB in the terms stage (dense clusters x
+# vocabulary matrix, with HDBSCAN's 16 workers still alive). materialize is
+# set by its embed piggyback, not by materialize: DuckDB sizes memory_limit to
+# 80% of the scope's MemoryMax, and reading the corpus's 907 MB session needs
+# a limit between 16 and 20 GiB — MemoryMax=20G failed with OutOfMemory, 24G
+# passed. llm parses that same session in ~1.8 GB. Lower these only after the
+# embed pass stops re-reading unchanged sessions and terms stays sparse.
+case "$MODE" in
+  materialize) mem_max_default=24G ;;
+  structural)  mem_max_default=24G ;;
+  llm)         mem_max_default=8G ;;
+esac
+mem_max_var="ATIF_SQL_REFRESH_MEMORY_MAX_${MODE^^}"
+MEM_MAX="${!mem_max_var:-$mem_max_default}"
+# A malformed budget would make systemd-run refuse AFTER the exec, leaving the
+# only trace in cron's stderr — refuse it here, in the lane log, instead.
+if ! [[ "$MEM_MAX" =~ ^([0-9]+[KMGT]?|off)$ ]]; then
+  log "FATAL: $mem_max_var='$MEM_MAX' is not a size like 12G (or 'off')"
+  exit 64
+fi
+if [ -n "${ATIF_SQL_REFRESH_IN_SCOPE:-}" ]; then
+  log "[$MODE] capped: MemoryMax=$MEM_MAX, no swap, in $(sed -n 's|^0::.*/||p' /proc/self/cgroup)"
+elif [ "$MEM_MAX" != off ]; then
+  # cron exports neither variable; `systemd-run --user` needs the user bus.
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+  manager_state="$(systemctl --user is-system-running 2>/dev/null)"
+  if command -v systemd-run >/dev/null 2>&1 && case "$manager_state" in ""|offline|unknown) false ;; *) true ;; esac; then
+    export ATIF_SQL_REFRESH_IN_SCOPE=1
+    exec systemd-run --user --scope --quiet --collect --unit "atif-sql-refresh-$MODE-$$" \
+      -p MemoryMax="$MEM_MAX" -p MemorySwapMax=0 \
+      "$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")" "$MODE"
+  fi
+  log "[$MODE] no systemd user manager (state '${manager_state:-none}') — running WITHOUT the $MEM_MAX memory cap"
+fi
+
 # The rotated Bedrock bearer token, read at RUN TIME from
 # $ATIF_SQL_BEDROCK_TOKEN_FILE and never frozen: rotation rewrites the file's
 # contents under a live crontab. Export only when non-empty — botocore treats
