@@ -22,7 +22,10 @@
 #       never seen firing is hope, not a guard;
 #   (g) the Codex pass's own guards fire AND stand down: skipped against a CLI
 #       with no `--agent`, run against one that has it, and refused when
-#       ATIF_SQL_CORPUS_ROOT is pinned to the Claude corpus.
+#       ATIF_SQL_CORPUS_ROOT is pinned to the Claude corpus;
+#   (h) every lane runs under a real per-lane memory cap (read back from the
+#       cgroup the CLI actually ran in), `off` opts out, a malformed budget
+#       refuses the lane.
 #
 # Run by hand after an atif-sql upgrade, or wire into a nightly.
 # Exits the FAILURE COUNT (0 = green).
@@ -412,6 +415,59 @@ if grep -q 'set ATIF_SQL_CODEX_CORPUS_ROOT' "$shim_root/codex-with-run/atif-sql-
   ok "codex pass refuses a corpus root pinned to the Claude corpus"
 else
   fail "codex pass did not refuse a pinned ATIF_SQL_CORPUS_ROOT — two agents could land in one corpus"
+fi
+
+# ---------------------------------------------------------------------------
+# (h) THE MEMORY CAP MUST BE REAL. The shim's `analyze` records the cgroup it
+#     actually runs in and that cgroup's memory.max / memory.swap.max, read
+#     while the scope is alive. Default: a per-lane atif-sql-refresh-* scope
+#     capped at 24G with no swap. `off`: no such scope. Malformed: exit 64,
+#     FATAL in the lane log, analyze never called. Needs a user manager; the
+#     2026-09-25 outage is why the cap exists, so a host without one fails here.
+# ---------------------------------------------------------------------------
+cap_dir="$shim_root/cap"
+mkdir -p "$cap_dir"
+cat > "$cap_dir/atif-sql" <<SHIM
+#!/usr/bin/env bash
+case "\${1:-}" in
+  --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  analyze" ;;
+  analyze)
+    cg="\$(sed -n 's/^0:://p' /proc/self/cgroup)"
+    echo "\$cg \$(cat "/sys/fs/cgroup\$cg/memory.max") \$(cat "/sys/fs/cgroup\$cg/memory.swap.max")" >> "$cap_dir/calls.log"
+    ;;
+  *) exit 0 ;;
+esac
+SHIM
+chmod +x "$cap_dir/atif-sql"
+run_cap_tick() {
+  rm -f "$cap_dir/calls.log"
+  ATIF_SQL_CLI="$cap_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$cap_dir/run" \
+    ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" structural
+}
+
+run_cap_tick; rc=$?
+read -r cap_cg cap_max cap_swap < <(head -n 1 "$cap_dir/calls.log" 2>/dev/null)
+if [ "$rc" = 0 ] && [[ "${cap_cg:-}" == */atif-sql-refresh-structural-*.scope ]] \
+   && [ "${cap_max:-}" = $((24 * 1024 * 1024 * 1024)) ] && [ "${cap_swap:-}" = 0 ]; then
+  ok "memory cap: structural lane ran in ${cap_cg##*/} with memory.max=24G, swap 0"
+else
+  fail "memory cap missing: exit=$rc cgroup='${cap_cg:-}' memory.max='${cap_max:-}' swap.max='${cap_swap:-}' (want atif-sql-refresh-structural-*.scope, $((24 * 1024 * 1024 * 1024)), 0)"
+fi
+
+ATIF_SQL_REFRESH_MEMORY_MAX_STRUCTURAL=off run_cap_tick; rc=$?
+read -r cap_cg _ < <(head -n 1 "$cap_dir/calls.log" 2>/dev/null)
+if [ "$rc" = 0 ] && [ -n "${cap_cg:-}" ] && [[ "$cap_cg" != *atif-sql-refresh-* ]]; then
+  ok "memory cap: 'off' runs the lane uncapped"
+else
+  fail "memory cap: 'off' did not run the lane outside a refresh scope (exit=$rc cgroup='${cap_cg:-}')"
+fi
+
+ATIF_SQL_REFRESH_MEMORY_MAX_STRUCTURAL=12GiB run_cap_tick; rc=$?
+if [ "$rc" = 64 ] && [ ! -e "$cap_dir/calls.log" ] \
+   && grep -q "FATAL: ATIF_SQL_REFRESH_MEMORY_MAX_STRUCTURAL='12GiB'" "$cap_dir/run/atif-sql-refresh.log"; then
+  ok "memory cap: a malformed budget refuses the lane (exit 64, FATAL logged)"
+else
+  fail "memory cap: malformed budget was not refused (exit=$rc; want 64, FATAL line, no analyze call)"
 fi
 
 printf '\n%s\n' "selftest: $fails failure(s)"
