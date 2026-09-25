@@ -12,6 +12,13 @@ Roots: ``ATIF_PARITY_CLAUDE_ROOT`` (default ``$CLAUDE_CONFIG_DIR/projects`` or
 ``~/.claude/projects``) and ``ATIF_PARITY_CODEX_ROOT`` (default
 ``$CODEX_HOME/sessions`` or ``~/.codex/sessions``). ``ATIF_PARITY_LIMIT=0``
 means every session, which is how the full-corpus run before a release goes.
+
+Each session is SNAPSHOTTED before either converter reads it: the newest
+sessions are usually live, and a transcript appended between harbor's read and
+ours reads as a divergence that neither converter caused (seen 2026-09-25:
+``total_steps: harbor=7880 ours=7881``). The snapshot keeps the
+``<slug>/<stem>.jsonl`` + ``<slug>/<stem>/`` layout both converters discover
+side-files by, and trims every file to its last complete line.
 """
 
 from __future__ import annotations
@@ -28,6 +35,26 @@ from harbor_oracle import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _copy_complete_lines(src: Path, dst: Path) -> None:
+    """Copy ``src`` up to and including its last newline: a live writer's partial line stays out."""
+    data = src.read_bytes()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(data[: data.rfind(b"\n") + 1])
+
+
+def _snapshot(session: Path, into: Path) -> Path:
+    """Freeze one session (and its ``<stem>/`` side-files) under ``into``, same relative layout."""
+    frozen = into / session.parent.name / session.name
+    _copy_complete_lines(session, frozen)
+    side_dir = session.parent / session.stem
+    if side_dir.is_dir():
+        for side_file in side_dir.rglob("*.jsonl"):
+            _copy_complete_lines(
+                side_file, frozen.parent / session.stem / side_file.relative_to(side_dir)
+            )
+    return frozen
 
 
 def _limit() -> int | None:
@@ -73,7 +100,7 @@ def _report(divergences: dict[Path, list[str]], total: int) -> str:
 
 
 class TestLiveParity:
-    def test_claude_code(self) -> None:
+    def test_claude_code(self, tmp_path: Path) -> None:
         require_harbor_private_api("claude-code")
         sessions = _claude_sessions()
         if not sessions:
@@ -82,8 +109,9 @@ class TestLiveParity:
 
         divergences: dict[Path, list[str]] = {}
         for session in sessions:
-            theirs = harbor_claude_code_trajectory(session)
-            ours = convert_claude_code_session(session)
+            frozen = _snapshot(session, tmp_path)
+            theirs = harbor_claude_code_trajectory(frozen)
+            ours = convert_claude_code_session(frozen)
             ours_dict = None if ours is None else ours.to_json_dict()
             if theirs is None or ours_dict is None:
                 if theirs is not ours_dict:
@@ -96,7 +124,7 @@ class TestLiveParity:
                 divergences[session] = diffs
         assert not divergences, _report(divergences, len(sessions))
 
-    def test_codex(self) -> None:
+    def test_codex(self, tmp_path: Path) -> None:
         require_harbor_private_api("codex")
         rollouts = _codex_rollouts()
         if not rollouts:
@@ -105,8 +133,9 @@ class TestLiveParity:
 
         divergences: dict[Path, list[str]] = {}
         for rollout in rollouts:
-            theirs = harbor_codex_trajectory(rollout)
-            ours = convert_codex_rollout(rollout)
+            frozen = _snapshot(rollout, tmp_path)
+            theirs = harbor_codex_trajectory(frozen)
+            ours = convert_codex_rollout(frozen)
             ours_dict = None if ours is None else ours.to_json_dict()
             if theirs is None or ours_dict is None:
                 if theirs is not ours_dict:
