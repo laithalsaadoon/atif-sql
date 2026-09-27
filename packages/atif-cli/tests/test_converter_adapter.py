@@ -50,7 +50,9 @@ class TestAdapterMapping:
             "steps": [],
         }
 
-        def _stub(path: Path, *, include_subagents: bool) -> tuple[ConversionResult, LossReport]:
+        def _stub(
+            path: Path, *, include_subagents: bool, archive: object = None
+        ) -> tuple[ConversionResult, LossReport]:
             del path, include_subagents
             return _fake_convert_and_audit(trajectory)
 
@@ -77,7 +79,9 @@ class TestAdapterMapping:
     def test_validation_errors_raise_instead_of_materializing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        def _stub(path: Path, *, include_subagents: bool) -> tuple[ConversionResult, LossReport]:
+        def _stub(
+            path: Path, *, include_subagents: bool, archive: object = None
+        ) -> tuple[ConversionResult, LossReport]:
             del path, include_subagents
             return _fake_convert_and_audit({"steps": []}, validation_errors=("step 3: bad shape",))
 

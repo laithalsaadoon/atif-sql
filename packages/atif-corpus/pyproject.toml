@@ -19,6 +19,7 @@ dependencies = [
     "loguru>=0.7.3",
     "pydantic>=2.13.2",
     "pydantic-settings>=2.13.1",
+    "zstandard>=0.25.0",
 ]
 
 [project.urls]

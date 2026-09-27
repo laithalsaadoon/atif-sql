@@ -32,7 +32,7 @@ The exit-code contract, read from source and confirmed by running the CLI:
 One of these codes exists to be told apart from a crash rather than from another code.
 **`suspicious_scan: 78`** is raised only by
 `materialize` (`packages/atif-cli/src/atif_cli/app.py:429-443`), when the source scan finds
-zero sessions over a non-empty corpus and ghost removal is refused; it shares 78 with
+zero sessions over a non-empty corpus and marking sessions source-removed is refused; it shares 78 with
 `terminal_state` because both mean an operator has to act, and carries its own `kind` string
 because the remedy is a path rather than a store.
 
@@ -98,7 +98,7 @@ shell-side refresh log.
 | Torn-session exclusion | stderr WARNING, one line per excluded dir | `Skipping incomplete session dir` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:173-177` |
 | Empty-store fallback | stderr WARNING at VSS bind | `No Lance embeddings table at` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:897-902` |
 | Unreadable-source warnings | stderr WARNING during the scan | `NOT treated as deleted`, `NOT treating it as deleted` | `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:133-138`, `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:179-184` |
-| Ghost-removal suppression | stderr WARNING | `skipping ghost removal`, `keeping session` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:566-570`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:416-420` |
+| Source-removal marking suppression | stderr WARNING | `not marking any session source-removed`, `keeping session` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:566-570`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:416-420` |
 | Watermark degradation | stderr WARNING | `treating corpus as unmaterialized` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:171`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:174` |
 | Bedrock retry narration | stderr WARNING, one per backoff | `bedrock invoke retry` (LLM), `Retrying` … `seconds as it raised` (embeddings) | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:112-121`, `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:94-101` |
 | Degraded-effort retry | stderr WARNING | `finish_reason=length at effort=` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:237-243` |
@@ -236,19 +236,19 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:11-22`,
   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:93-102`
 - **`SuspiciousEmptyScanError`:** a wrong `source_root` — a typo, an unmounted
-  disk, a stale env var — makes the scan empty, and ghost collection would then
-  delete the entire corpus. Signal: a traceback naming the error, with the
+  disk, a stale env var — makes the scan empty, and the pass would then
+  mark the entire corpus source-removed. Signal: a traceback naming the error, with the
   scanned root and the materialized session count in the message, and nothing
-  removed. Mitigation: the guard runs before ghost removal and refuses the
+  removed. Mitigation: the guard runs before any session is marked and refuses the
   pass; an operator who genuinely emptied the source tree deletes the corpus
   directory explicitly.
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:97-104`,
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:553-559`
 - **Absence mistaken for deletion:** `Path.glob` swallows `PermissionError` and
   yields nothing, which would make every session under an unlistable project
-  directory a ghost. Signal: a WARNING naming the directory count, and a pass
-  that removed nothing. Mitigation: only `FileNotFoundError` on `stat` counts
-  as gone; an unlistable directory disables ghost collection for the whole
+  directory look deleted. Signal: a WARNING naming the directory count, and a pass
+  that marked nothing. Mitigation: only `FileNotFoundError` on `stat` counts
+  as gone; an unlistable directory disables source-removal marking for the whole
   pass, and the affected session ids are resolved from the watermark so their
   entries are retained.
   `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:83-95`,

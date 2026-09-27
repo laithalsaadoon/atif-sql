@@ -9,7 +9,7 @@ import os
 import shutil
 from collections.abc import Collection, Iterator
 from pathlib import Path
-from typing import TypedDict, Unpack, override
+from typing import Any, TypedDict, Unpack, override
 
 import pytest
 from corpus_fixtures import LIVE_NS, NOW_NS, SESSION_A, SESSION_B, STALE_NS, write_session
@@ -102,9 +102,9 @@ class TestFirstPass:
         assert meta["harbor_version"] == VERSIONS["harbor_version"]
         assert meta["converter_version"] == VERSIONS["converter_version"]
         assert meta["source_mtime_ns"] == STALE_NS
-        # main + flat subagent + workflow-nested subagent; NOT the .meta.json decoy
-        assert len(meta["source_files"]) == 3
-        assert not any(f.endswith(".meta.json") for f in meta["source_files"])
+        # main + flat subagent + workflow-nested subagent + the subagent's sidecar
+        assert len(meta["source_files"]) == 4
+        assert sum(f.endswith(".meta.json") for f in meta["source_files"]) == 1
         assert any("workflows/wf_001" in f for f in meta["source_files"])
 
     def test_watermark_written_across_all_source_files(
@@ -114,7 +114,8 @@ class TestFirstPass:
         run(source_root, corpus_root, FakeConverter())
 
         watermark = json.loads(CorpusLayout(corpus_root=corpus_root).watermark_path.read_text())
-        assert len(watermark) == 3
+        # main + two side-file transcripts + the subagent's meta.json sidecar
+        assert len(watermark) == 4
         assert all(mtime == STALE_NS for mtime in watermark.values())
 
 
@@ -175,6 +176,21 @@ class TestQuiescenceAndWatermark:
         report = run(source_root, corpus_root, converter)
         assert report.materialized_count == 1
 
+    def test_a_sidecar_change_alone_triggers_rematerialization(
+        self, source_root: Path, corpus_root: Path
+    ) -> None:
+        """The converter reads ``agent-*.meta.json``, so an edit to one with no
+        transcript write must still re-convert the session."""
+        write_session(source_root, SESSION_A, mtime_ns=STALE_NS, with_side_files=True)
+        converter = FakeConverter()
+        run(source_root, corpus_root, converter)
+
+        sidecar = source_root / "-proj-a" / SESSION_A / "subagents" / "agent-aaaa.meta.json"
+        sidecar.write_text('{"agentType":"Explore"}\n')
+        os.utime(sidecar, ns=(STALE_NS + 1, STALE_NS + 1))
+        report = run(source_root, corpus_root, converter)
+        assert report.materialized_count == 1
+
     def test_removed_session_paths_drop_from_watermark(
         self, source_root: Path, corpus_root: Path
     ) -> None:
@@ -198,10 +214,10 @@ class TestQuiescenceAndWatermark:
         the published trajectory still embeds the deleted file's records."""
         write_session(source_root, SESSION_A, mtime_ns=STALE_NS, with_side_files=True)
 
-        # Pass 1: materializes cleanly, watermark covers all three sources.
+        # Pass 1: materializes cleanly, watermark covers all four sources.
         run(source_root, corpus_root, FakeConverter())
         watermark_path = CorpusLayout(corpus_root=corpus_root).watermark_path
-        assert len(json.loads(watermark_path.read_text())) == 3
+        assert len(json.loads(watermark_path.read_text())) == 4
 
         # A side-file is deleted: the published trajectory is now wrong.
         deleted = source_root / "-proj-a" / SESSION_A / "subagents" / "agent-aaaa.jsonl"
@@ -252,23 +268,84 @@ class TestQuiescenceAndWatermark:
         assert str(deleted) not in watermark  # full pass drops it properly
 
 
-class TestGhostRemoval:
-    def test_deleted_source_removes_corpus_session_dir(
+def _meta(corpus_root: Path, session_id: str) -> dict[str, Any]:
+    meta = json.loads(
+        CorpusLayout(corpus_root=corpus_root).meta_path(session_id).read_text(encoding="utf-8")
+    )
+    assert isinstance(meta, dict)
+    return meta
+
+
+class TestSourceRemovalRetention:
+    def test_deleted_source_keeps_and_marks_the_corpus_session(
         self, source_root: Path, corpus_root: Path
     ) -> None:
         main = write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
         write_session(source_root, SESSION_B, mtime_ns=STALE_NS)
         run(source_root, corpus_root, FakeConverter())
         layout = CorpusLayout(corpus_root=corpus_root)
-        assert layout.session_dir(SESSION_A).is_dir()
+        trajectory_before = layout.trajectory_path(SESSION_A).read_bytes()
+        assert _meta(corpus_root, SESSION_A)["source_present"] is True
 
         main.unlink()
         report = run(source_root, corpus_root, FakeConverter())
 
         assert report.sessions_removed == 1
         assert report.removed_session_ids == (SESSION_A,)
-        assert not layout.session_dir(SESSION_A).exists()
-        assert layout.session_dir(SESSION_B).is_dir()
+        assert report.retained_count == 1
+        assert layout.trajectory_path(SESSION_A).read_bytes() == trajectory_before
+        meta = _meta(corpus_root, SESSION_A)
+        assert meta["source_present"] is False
+        assert meta["source_removed_at"] == VERSIONS["materialized_at"]
+        assert _meta(corpus_root, SESSION_B)["source_present"] is True
+
+    def test_a_marked_session_is_not_marked_again(
+        self, source_root: Path, corpus_root: Path
+    ) -> None:
+        """The mark lands once, with the pass that first saw the source gone."""
+        main = write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
+        write_session(source_root, SESSION_B, mtime_ns=STALE_NS)
+        run(source_root, corpus_root, FakeConverter())
+        main.unlink()
+        run(source_root, corpus_root, FakeConverter())
+        meta_after_mark = CorpusLayout(corpus_root=corpus_root).meta_path(SESSION_A).read_bytes()
+
+        later = materialize(
+            source_root=source_root,
+            corpus_root=corpus_root,
+            converter=FakeConverter(),
+            now_ns=NOW_NS,
+            materialized_at="2026-01-03T00:00:00+00:00",
+            harbor_version=VERSIONS["harbor_version"],
+            converter_version=VERSIONS["converter_version"],
+        )
+
+        assert later.removed_session_ids == ()
+        assert later.retained_count == 1
+        assert (
+            CorpusLayout(corpus_root=corpus_root).meta_path(SESSION_A).read_bytes()
+            == meta_after_mark
+        )
+
+    def test_a_returning_source_is_reconverted_and_unmarked(
+        self, source_root: Path, corpus_root: Path
+    ) -> None:
+        main = write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
+        write_session(source_root, SESSION_B, mtime_ns=STALE_NS)
+        run(source_root, corpus_root, FakeConverter())
+        saved = main.read_bytes()
+        main.unlink()
+        run(source_root, corpus_root, FakeConverter())
+
+        main.write_bytes(saved)
+        os.utime(main, ns=(STALE_NS, STALE_NS))
+        report = run(source_root, corpus_root, FakeConverter())
+
+        assert report.materialized_count == 1
+        assert report.retained_count == 0
+        meta = _meta(corpus_root, SESSION_A)
+        assert meta["source_present"] is True
+        assert "source_removed_at" not in meta
 
     def test_no_removal_when_nothing_vanished(self, source_root: Path, corpus_root: Path) -> None:
         write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
@@ -298,10 +375,11 @@ class TestGhostRemoval:
 
         shutil.rmtree(source_root)
         source_root.mkdir()
-        with pytest.raises(SuspiciousEmptyScanError, match="refusing to remove"):
+        with pytest.raises(SuspiciousEmptyScanError, match="refusing to mark them"):
             run(source_root, corpus_root, FakeConverter())
-        # nothing was removed
+        # nothing was removed, and nothing was marked either
         assert CorpusLayout(corpus_root=corpus_root).session_dir(SESSION_A).is_dir()
+        assert _meta(corpus_root, SESSION_A)["source_present"] is True
 
     def test_empty_scan_over_empty_corpus_is_fine(
         self, source_root: Path, corpus_root: Path
@@ -520,7 +598,7 @@ class TestUnmaterializedScanCost:
         run(source_root, corpus_root, FakeConverter())
         layout = CorpusLayout(corpus_root=corpus_root)
         watermark = json.loads(layout.watermark_path.read_text())
-        assert len(watermark) == 4  # A: main + 2 side-files, B: main
+        assert len(watermark) == 5  # A: main + 2 side-files + sidecar, B: main
 
         scanned: list[int] = []
 
@@ -766,15 +844,15 @@ class TestUnlistableProjectDirs:
         assert report.removed_session_ids == ()
         assert layout.session_dir(SESSION_A).is_dir()
 
-    def test_genuinely_deleted_project_dir_still_ghosts_its_sessions(
+    def test_genuinely_deleted_project_dir_still_marks_its_sessions(
         self, source_root: Path, corpus_root: Path
     ) -> None:
         """The unlistable guard must not blunt real deletion: a project dir
-        that is GONE (not merely unreadable) still ghosts its sessions."""
+        that is GONE (not merely unreadable) still marks its sessions."""
         write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
         write_session(source_root, SESSION_B, mtime_ns=STALE_NS)
         # A second project keeps the scan non-empty, so the removal under test
-        # is ghost GC rather than the wrong-source-root guard.
+        # is source-removal marking rather than the wrong-source-root guard.
         survivor = source_root / "-proj-b" / "cccc.jsonl"
         survivor.parent.mkdir(parents=True)
         survivor.write_text('{"type":"user","uuid":"u-1"}\n')
@@ -787,6 +865,7 @@ class TestUnlistableProjectDirs:
         assert sorted(report.removed_session_ids) == sorted([SESSION_A, SESSION_B])
         assert report.unreadable_session_ids == ()
         assert CorpusLayout(corpus_root=corpus_root).session_dir("cccc").is_dir()
+        assert CorpusLayout(corpus_root=corpus_root).session_dir(SESSION_A).is_dir()
 
     def test_session_dir_lost_in_the_swap_window_is_replanned(
         self, source_root: Path, corpus_root: Path
@@ -851,10 +930,10 @@ class TestTransientStatErrors:
         assert recovered.up_to_date_count == 2
         assert recovered.sessions_removed == 0
 
-    def test_genuinely_deleted_session_is_still_ghosted(
+    def test_genuinely_deleted_session_is_still_marked(
         self, source_root: Path, corpus_root: Path
     ) -> None:
-        """Only FileNotFoundError ghosts a session; the dir is deleted, not tombstoned."""
+        """Only FileNotFoundError marks a session source-removed; its dir is kept."""
         main = write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
         write_session(source_root, SESSION_B, mtime_ns=STALE_NS)
         run(source_root, corpus_root, FakeConverter())
@@ -863,7 +942,8 @@ class TestTransientStatErrors:
         report = run(source_root, corpus_root, FakeConverter())
 
         assert report.removed_session_ids == (SESSION_A,)
-        assert not CorpusLayout(corpus_root=corpus_root).session_dir(SESSION_A).exists()
+        assert CorpusLayout(corpus_root=corpus_root).trajectory_path(SESSION_A).is_file()
+        assert _meta(corpus_root, SESSION_A)["source_present"] is False
 
 
 class TestReport:

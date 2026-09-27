@@ -212,7 +212,7 @@ class TestCodexMaterialization:
         assert second.materialized_count == 0
         assert second.up_to_date_count == 1
 
-    def test_a_deleted_rollout_removes_its_corpus_dir(
+    def test_a_deleted_rollout_keeps_its_corpus_dir_marked(
         self, codex_source_root: Path, tmp_path: Path
     ) -> None:
         corpus_root = tmp_path / "corpus"
@@ -222,7 +222,10 @@ class TestCodexMaterialization:
         rollout.unlink()
         report = _materialize_codex(codex_source_root, corpus_root)
         assert report.removed_session_ids == (SESSION_A,)
-        assert not CorpusLayout(corpus_root=corpus_root).session_dir(SESSION_A).exists()
+        layout = CorpusLayout(corpus_root=corpus_root)
+        assert layout.trajectory_path(SESSION_A).is_file()
+        meta = json.loads(layout.meta_path(SESSION_A).read_text(encoding="utf-8"))
+        assert meta["source_present"] is False
 
     def test_a_touched_rollout_rematerializes(
         self, codex_source_root: Path, tmp_path: Path

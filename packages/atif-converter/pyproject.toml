@@ -29,6 +29,7 @@ dependencies = [
     # harbor. Floor matches harbor 0.22.0's own requirement.
     "litellm>=1.92.0",
     "loguru>=0.7.3",
+    "zstandard>=0.25.0",
 ]
 
 [project.urls]

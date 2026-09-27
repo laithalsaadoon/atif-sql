@@ -21,7 +21,9 @@ from atif_corpus.infrastructure.settings import (
 
 
 class TestScanner:
-    def test_discovers_main_and_all_side_files_excluding_meta(self, source_root: Path) -> None:
+    def test_discovers_main_and_all_side_files_including_meta_sidecars(
+        self, source_root: Path
+    ) -> None:
         write_session(source_root, SESSION_A, mtime_ns=STALE_NS, with_side_files=True)
         sessions = scan_source_root(source_root)
         assert len(sessions) == 1
@@ -31,7 +33,8 @@ class TestScanner:
         assert f"{SESSION_A}.jsonl" in names
         assert "agent-aaaa.jsonl" in names
         assert "agent-bbbb.jsonl" in names  # workflow-nested, per contract rglob
-        assert "agent-aaaa.meta.json" not in names
+        # The converter reads the sidecar, so a change to it alone must restale.
+        assert "agent-aaaa.meta.json" in names
         assert session.newest_mtime_ns == STALE_NS
 
     def test_missing_root_yields_empty(self, tmp_path: Path) -> None:
