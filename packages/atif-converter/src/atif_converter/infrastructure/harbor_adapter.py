@@ -24,6 +24,7 @@ from loguru import logger
 if TYPE_CHECKING:
     from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
 
+from atif_converter.domain.blobs import Blob
 from atif_converter.domain.errors import (
     ConversionError,
     EmptySessionError,
@@ -39,7 +40,9 @@ class ConversionResult:
     ``convert_session`` returns the raw harbor output (``edges_lines`` and
     ``events_lines`` empty); ``convert_and_audit`` returns the ENRICHED
     trajectory plus the ready-to-write edges.jsonl and session_events.jsonl
-    lines derived from the raw records.
+    lines derived from the raw records, and the inline attachments it lifted
+    out of the trajectory (``blobs``, one per distinct content hash) for the
+    corpus to store.
     """
 
     trajectory: dict[str, Any]
@@ -47,6 +50,7 @@ class ConversionResult:
     edges_lines: tuple[str, ...] = ()
     #: session_events.jsonl lines (:mod:`atif_converter.domain.session_events`).
     events_lines: tuple[str, ...] = ()
+    blobs: tuple[Blob, ...] = ()
 
     @property
     def is_valid(self) -> bool:

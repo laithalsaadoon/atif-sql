@@ -23,7 +23,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from atif_converter.domain.codex_edges import codex_edges_jsonl_lines
+from atif_converter.domain.blobs import BlobCollector, extract_codex_blobs
+from atif_converter.domain.codex_edges import build_codex_edges, codex_edges_jsonl_lines
 from atif_converter.domain.codex_enrichment import enrich_codex_trajectory
 from atif_converter.domain.codex_fidelity import (
     CODEX_STRUCTURAL_GAPS,
@@ -32,6 +33,7 @@ from atif_converter.domain.codex_fidelity import (
 )
 from atif_converter.domain.errors import SourceMutatedDuringConversion
 from atif_converter.domain.fidelity import AnyRecordType, LossReport
+from atif_converter.domain.result_signals import annotate_codex_trajectory
 from atif_converter.domain.session_events import (
     codex_session_events,
     session_events_jsonl_lines,
@@ -164,9 +166,17 @@ def convert_codex_and_audit(
     """
     loaded = read_session(rollout_jsonl)
     snapshot = loaded.snapshot
+    # Attachments out BEFORE conversion, named by the same record ids the
+    # enrichment pass writes into ``source_uuids`` (an edge's uuid depends on
+    # the record's ids and position, never on the content being rewritten).
+    records = loaded.record_pairs()
+    record_keys = [str(edge["uuid"]) for edge in build_codex_edges(records)]
+    collector = BlobCollector()
+    blob_index = extract_codex_blobs(
+        [record for record, _src in records], collector, record_keys=record_keys
+    )
     result = convert_loaded_codex_session(loaded)
 
-    records = loaded.record_pairs()
     census = codex_census_from_records(rollout_jsonl, records)
     events = codex_session_events(records)
     report = _loss_report(
@@ -179,6 +189,7 @@ def convert_codex_and_audit(
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole rollout's worth of steps.
     enriched = enrich_codex_trajectory(result.trajectory, records, copy_input=False)
+    annotate_codex_trajectory(enriched, [record for record, _src in records], blob_index)
     del records, loaded, events
     _refuse_if_mutated(snapshot, archive)
 
@@ -188,6 +199,7 @@ def convert_codex_and_audit(
             validation_errors=validate_trajectory(enriched),
             edges_lines=edges_lines,
             events_lines=events_lines,
+            blobs=collector.blobs,
         ),
         report,
     )

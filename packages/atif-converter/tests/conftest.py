@@ -194,3 +194,6 @@ def synthetic_session(tmp_path: Path) -> Path:
 # fixtures through conftest. The redundant alias is the explicit re-export form,
 # which is what tells a type checker the import is deliberate.
 from codex_fixtures import codex_rollout as codex_rollout  # noqa: E402, PLC0414
+from subagent_fixtures import (  # noqa: E402
+    parallel_subagent_session as parallel_subagent_session,  # noqa: PLC0414
+)

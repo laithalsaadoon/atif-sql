@@ -49,6 +49,20 @@ class ArchivedSource:
 
 
 @dataclass(frozen=True, slots=True)
+class BlobOutput:
+    """One attachment's bytes, content-addressed, for the corpus blob store.
+
+    ``sha256`` is the lowercase hex digest of ``data`` and ``extension`` the
+    file extension its media type maps to (``png``, ``jpg``, ``pdf``, ``bin``);
+    the writer validates both before either becomes part of a path.
+    """
+
+    sha256: str
+    extension: str
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class ConversionOutput:
     """Everything one conversion yields that the corpus writes to disk.
 
@@ -70,6 +84,10 @@ class ConversionOutput:
       ``archive_dir`` it was handed (empty when it was handed none, or when
       the adapter does not archive). Every entry must exist on disk as
       ``<archive_dir>/<relative_path>.zst``; the use case checks that.
+    * ``blobs`` — the inline attachments the converter replaced with a
+      ``[image sha256:<hash> ...]`` placeholder, one per distinct hash. The
+      writer stores each under ``<corpus_root>/blobs/`` BEFORE it publishes
+      the session that references it.
     """
 
     trajectory_dict: dict[str, Any]
@@ -77,6 +95,7 @@ class ConversionOutput:
     edges_lines: list[str]
     events_lines: list[str] = field(default_factory=list)
     source_archive: tuple[ArchivedSource, ...] = ()
+    blobs: tuple[BlobOutput, ...] = ()
 
 
 class ConverterPort(Protocol):

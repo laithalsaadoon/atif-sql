@@ -31,6 +31,7 @@ discover the transcript inside it, which is the shape this module builds.
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,19 @@ import pytest
 GOLDENS_DIR = Path(__file__).parent / "goldens"
 
 _CONVERT_METHOD = "_convert_events_to_trajectory"
+
+#: Where the port departs from harbor ON PURPOSE, one pattern per decision,
+#: matched against :func:`diff_paths` lines. Anything not named here is still
+#: a parity failure. Keep each entry narrow (a path AND a direction), so a
+#: divergence the decision did not cover still fails.
+#:
+#: * ``steps[i].extra.agent_id`` present only in ours: harbor reads
+#:   ``event["agent_id"]``, a key no transcript carries (they spell it
+#:   ``agentId``), so its sidechain steps never name their subagent. See
+#:   ``_normalize_assistant_event`` in ``domain/claude_code_conversion.py``.
+DELIBERATE_DIVERGENCES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\$\.steps\[\d+\]\.extra\.agent_id: only in ours = "),
+)
 
 
 def harbor_has_private_api(agent: str) -> bool:
@@ -219,10 +233,16 @@ def _pricing_divergence_expected(ours: dict[str, Any]) -> bool:
 def parity_diffs(expected: dict[str, Any], ours: dict[str, Any]) -> list[str]:
     """:func:`diff_paths` minus the documented deliberate divergences.
 
-    Only :data:`PRICING_DIVERGENCE_PATHS` are forgiven, and only when
-    :func:`_pricing_divergence_expected` says the pricing policy explains them.
+    Two kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
+    pattern matches, always; and the :data:`PRICING_DIVERGENCE_PATHS`, only
+    when :func:`_pricing_divergence_expected` says the pricing policy explains
+    them.
     """
-    diffs = diff_paths(expected, ours)
+    diffs = [
+        line
+        for line in diff_paths(expected, ours)
+        if not any(pattern.match(line) for pattern in DELIBERATE_DIVERGENCES)
+    ]
     if not _pricing_divergence_expected(ours):
         return diffs
     # When the label was harbor's only final_metrics.extra key, ours has no

@@ -557,6 +557,10 @@ class TestSidechains:
         )
         assert out is not None
         assert out["agent"]["extra"] == {"git_branches": ["main"], "agent_ids": ["ag-9"]}
+        # ...and the step itself names its agent, from the same ``agentId``
+        # (harbor reads ``agent_id`` here and gets nothing; see
+        # harbor_oracle.DELIBERATE_DIVERGENCES).
+        assert out["steps"][1]["extra"]["agent_id"] == "ag-9"
 
 
 class TestRecordFiltering:

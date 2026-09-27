@@ -36,6 +36,8 @@ Mapping decisions (ConversionResult -> ConversionOutput):
   line termination).
 * ``events_lines``     <- ``ConversionResult.events_lines`` (session_events.jsonl,
   same serialization and termination rules as the edges).
+* ``blobs``            <- ``ConversionResult.blobs`` (the inline attachments the
+  converter replaced with placeholders), one ``BlobOutput`` per content hash.
 * ``source_archive``   <- the files a
   :class:`~atif_converter.infrastructure.source_archive.SourceArchiveWriter`
   wrote into ``archive_dir`` while the use case re-verified its input, so the
@@ -64,7 +66,12 @@ from atif_converter.application.convert_codex import convert_codex_and_audit
 from atif_converter.domain.agents import DEFAULT_AGENT, AgentSource
 from atif_converter.domain.errors import EmptySessionError, TrajectoryValidationError
 from atif_converter.infrastructure.source_archive import SourceArchiveWriter
-from atif_corpus.domain.ports import ArchivedSource, ConversionOutput, EmptySourceError
+from atif_corpus.domain.ports import (
+    ArchivedSource,
+    BlobOutput,
+    ConversionOutput,
+    EmptySourceError,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -126,6 +133,10 @@ class RealConverter:
             loss_report_dict=report.to_json(),
             edges_lines=list(result.edges_lines),
             events_lines=list(result.events_lines),
+            blobs=tuple(
+                BlobOutput(sha256=blob.ref.sha256, extension=blob.ref.extension, data=blob.data)
+                for blob in result.blobs
+            ),
             source_archive=(
                 ()
                 if archive is None

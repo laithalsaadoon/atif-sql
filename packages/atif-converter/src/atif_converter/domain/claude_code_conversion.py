@@ -619,8 +619,15 @@ def _normalize_assistant_event(
             extra[key] = value
     if event.get("id"):
         extra["id"] = event["id"]
-    if event.get("agent_id"):
-        extra["agent_id"] = event["agent_id"]
+    # DELIBERATE DIVERGENCE from harbor 0.22.0, which reads ``agent_id``: every
+    # transcript spells the field ``agentId`` (the key ``_agent_extra`` above
+    # already reads), so harbor's lookup never matched and no sidechain step
+    # carried its subagent's id. The snake_case spelling is still honored for
+    # a record that has it. The parity oracle names this divergence
+    # (``tests/harbor_oracle.py::DELIBERATE_DIVERGENCES``).
+    agent_id = event.get("agentId") or event.get("agent_id")
+    if agent_id:
+        extra["agent_id"] = agent_id
     if event.get("cwd"):
         extra.setdefault("cwd", event["cwd"])
     if event.get("userType") and event.get("userType") != "external":

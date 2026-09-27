@@ -133,7 +133,15 @@ def snapshot_json_reading(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> 
     assert set(sources.json_session_ids) == set(ALL_SESSION_IDS)
     snapshot_views(con, "json")
     # Not vacuous: the fixture exercises every step-derived surface.
-    for view in ("steps", "tool_calls", "tool_results", "skill_usage", "tasks_state_current"):
+    for view in (
+        "steps",
+        "tool_calls",
+        "tool_results",
+        "skill_usage",
+        "tasks_state_current",
+        "images",
+        "subagents",
+    ):
         n = con.execute(f"SELECT count(*) FROM json_{view}").fetchone()
         assert n is not None and n[0] > 0, view
 

@@ -22,6 +22,14 @@ the read, or anywhere before the check, fails the session: a stat pair alone
 would miss a same-length rewrite inside one mtime tick, so the re-check hashes
 the bytes again. That second hash pass is the one read the audit still pays
 beyond the parse.
+
+ATTACHMENTS AND TYPED SIGNALS. Before conversion, every inline base64
+attachment in the loaded records is replaced by a placeholder and its bytes
+collected (:mod:`atif_converter.domain.blobs`), so neither the trajectory nor
+the loss report nor the edges ever carry base64. After enrichment,
+:mod:`atif_converter.domain.result_signals` writes the typed tool-outcome,
+attachment and subagent fields, the subagent links read from the same pass's
+``agent-*.meta.json`` sidecars.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ from typing import Any
 
 from loguru import logger
 
+from atif_converter.domain.blobs import BlobCollector, extract_claude_code_blobs
 from atif_converter.domain.edges import edges_jsonl_lines
 from atif_converter.domain.enrichment import enrich_trajectory
 from atif_converter.domain.errors import SourceMutatedDuringConversion
@@ -40,6 +49,7 @@ from atif_converter.domain.fidelity import (
     FidelityGap,
     LossReport,
 )
+from atif_converter.domain.result_signals import annotate_claude_code_trajectory
 from atif_converter.domain.session_events import (
     claude_reported_cost,
     claude_session_events,
@@ -52,8 +62,16 @@ from atif_converter.infrastructure.harbor_adapter import (
     read_session,
     validate_trajectory,
 )
-from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
+from atif_converter.infrastructure.raw_records import (
+    LoadedSession,
+    SessionSnapshot,
+    mutated_files,
+)
 from atif_converter.infrastructure.source_archive import SourceArchiveWriter
+
+#: ``agent-<id>.meta.json``: the sidecar's name carries the subagent id.
+_SIDECAR_PREFIX = "agent-"
+_SIDECAR_SUFFIX = ".meta.json"
 
 #: Gaps every conversion exhibits regardless of session content. The parent
 #: chain is flattened into a timestamp-sorted step list, and nothing after
@@ -166,6 +184,18 @@ def _stamp_reported_cost(enriched: dict[str, Any], reported: dict[str, Any]) -> 
     extra.update(reported)
 
 
+def _sidecars_by_agent_id(loaded: LoadedSession) -> dict[str, Any]:
+    """Parsed ``agent-<id>.meta.json`` sidecars keyed by ``<id>``; first path wins."""
+    by_agent: dict[str, Any] = {}
+    for path, value in loaded.sidecars.items():
+        name = path.name
+        if name.startswith(_SIDECAR_PREFIX) and name.endswith(_SIDECAR_SUFFIX):
+            agent_id = name[len(_SIDECAR_PREFIX) : -len(_SIDECAR_SUFFIX)]
+            if agent_id:
+                by_agent.setdefault(agent_id, value)
+    return by_agent
+
+
 def _refuse_if_mutated(
     snapshot: SessionSnapshot, archive: SourceArchiveWriter | None = None
 ) -> None:
@@ -221,6 +251,11 @@ def convert_and_audit(
     """
     loaded = read_session(session_jsonl)
     snapshot = loaded.snapshot
+    collector = BlobCollector()
+    blob_index = extract_claude_code_blobs(
+        (record for records in loaded.records_by_file.values() for record in records),
+        collector,
+    )
     result = convert_loaded_session(loaded, include_subagents=include_subagents)
 
     pairs = loaded.record_pairs()
@@ -232,6 +267,9 @@ def convert_and_audit(
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole large transcript's worth of steps.
     enriched = enrich_trajectory(result.trajectory, records, copy_input=False)
+    annotate_claude_code_trajectory(
+        enriched, records, blob_index, sidecars=_sidecars_by_agent_id(loaded)
+    )
     _stamp_reported_cost(enriched, claude_reported_cost(pairs))
     report = _loss_report(
         census,
@@ -246,5 +284,6 @@ def convert_and_audit(
         validation_errors=validate_trajectory(enriched),
         edges_lines=edges_lines,
         events_lines=events_lines,
+        blobs=collector.blobs,
     )
     return enriched_result, report

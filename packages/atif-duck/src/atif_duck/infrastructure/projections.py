@@ -103,6 +103,9 @@ def step_columns(access: StepMemberAccess) -> tuple[tuple[str, str], ...]:
       agent wrote the session.
     * ``is_sidechain`` / ``is_compact_summary`` / ``source_uuids`` come from
       ``step.extra`` per the CONTRACT enrichment pass.
+    * ``agent_id`` names the subagent a sidechain step belongs to (NULL on the
+      main chain); ``images`` lists the attachments pasted into a user
+      message, each already moved to the corpus blob store.
     """
     message_parts = access.json("message", "[*].text")
     return (
@@ -136,6 +139,8 @@ def step_columns(access: StepMemberAccess) -> tuple[tuple[str, str], ...]:
         ),
         (f"{access.json('llm_call_count')}::BIGINT", "llm_call_count"),
         (access.json("extra", ".source_uuids"), "source_uuids"),
+        (access.string("extra", ".agent_id"), "agent_id"),
+        (access.json("extra", ".images"), "images"),
     )
 
 
@@ -162,9 +167,16 @@ CALL_COLUMNS: tuple[tuple[str, str], ...] = (
 #: ``ObservationResult``. ``source_call_id`` is ATIF's join key back to the
 #: tool_calls array, surfaced under the SAME name ``tool_use_id`` that
 #: ``tool_calls`` exposes, so the two views join with ``USING (tool_use_id)``.
+#: The four typed columns after ``content`` come from ``extra``, where the
+#: converter's result-signals pass writes them: NULL means the transcript did
+#: not say, never "false" or "0" (see ``atif_converter.domain.result_signals``).
 RESULT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("json_extract_string(res, '$.source_call_id')", "tool_use_id"),
     ("json_extract(res, '$.content')", "content"),
+    ("json_extract(res, '$.extra.is_error')::BOOLEAN", "is_error"),
+    ("json_extract(res, '$.extra.exit_code')::BIGINT", "exit_code"),
+    ("json_extract(res, '$.extra.interrupted')::BOOLEAN", "interrupted"),
+    ("json_extract(res, '$.extra.images')", "images"),
 )
 
 

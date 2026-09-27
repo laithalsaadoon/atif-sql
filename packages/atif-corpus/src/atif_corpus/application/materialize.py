@@ -140,6 +140,7 @@ from atif_corpus.domain.sessions import (
 from atif_corpus.domain.source_layout import CLAUDE_CODE_LAYOUT, SourceLayout
 from atif_corpus.infrastructure.atomic import (
     replace_dir_atomic,
+    write_blob_atomic,
     write_json_atomic,
     write_text_atomic,
 )
@@ -152,7 +153,7 @@ from atif_corpus.infrastructure.source_archive import (
 )
 
 if TYPE_CHECKING:
-    from atif_corpus.domain.ports import ArtifactProducer, ConverterPort
+    from atif_corpus.domain.ports import ArtifactProducer, BlobOutput, ConverterPort
     from atif_corpus.domain.sessions import SessionSource
     from atif_corpus.infrastructure.scanner import SourceScan
 
@@ -453,6 +454,30 @@ def _link_or_copy_tree(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, copy_function=_link)
 
 
+def _store_blobs(layout: CorpusLayout, blobs: Sequence[BlobOutput]) -> int:
+    """Write a session's attachments into the shared blob store; return how many were new.
+
+    WHY A SHARED STORE, NOT THE SESSION DIR. A blob is named by its content
+    hash, so writing one is idempotent and order-free: two sessions (or two
+    pool workers) holding the same screenshot store it once, and nothing
+    about a blob ever needs the per-session swap's all-or-nothing guarantee.
+    Putting blobs in the session dir would store every shared image once per
+    session and copy it again on every re-conversion.
+
+    WHY BEFORE THE SWAP. Every blob a session references is on disk before
+    the session that references it publishes, so a reader can never hold a
+    placeholder whose bytes are missing. A pass that dies between the two
+    leaves only unreferenced blobs, which cost space and nothing else.
+    """
+    written = 0
+    for blob in blobs:
+        if write_blob_atomic(layout.blob_path(blob.sha256, blob.extension), blob.data):
+            written += 1
+    if blobs:
+        logger.debug("materialize: {} blob(s) referenced, {} newly stored", len(blobs), written)
+    return written
+
+
 def _write_session(
     layout: CorpusLayout,
     job: _Job,
@@ -482,6 +507,9 @@ def _write_session(
     artifact is fsynced before its rename so the ordering holds across power
     loss too. The producer sees the staged ``trajectory.json`` already on
     disk and the same dict in memory; whatever it writes rides the same swap.
+    The session's attachments go to the shared blob store (outside the
+    staging dir, see :func:`_store_blobs`) before any of that, so every blob
+    a published session references is already on disk.
 
     An archive job restores the previous archive into
     ``.staging/<id>.src-<pid>/`` (swept like any other staging residue if the
@@ -524,6 +552,7 @@ def _write_session(
                 # An adapter that archives nothing leaves no half-promise on disk.
                 shutil.rmtree(archive_dir, ignore_errors=True)
                 archive_meta = {}
+        _store_blobs(layout, output.blobs)
         write_json_atomic(staging / TRAJECTORY_FILENAME, output.trajectory_dict, compact=True)
         write_json_atomic(staging / LOSS_REPORT_FILENAME, output.loss_report_dict)
         write_text_atomic(
