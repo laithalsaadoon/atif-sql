@@ -23,6 +23,12 @@ scanner tier yields zero `error`-severity findings workspace-wide, so `E` never 
 0.00%, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
 (`pyproject.toml:561-568`) — that is a measurement artifact, not a gap.
 
+Note (2026-09-27): the scores, LOC figures, and coverage below were measured before the trajectory
+and structural pipelines were cut. `atif_analytics.application.use_cases.trajectory`, `.community`,
+and `.cluster` no longer exist, and `parquet_cache` lost `replace_sessions` (the trajectory
+pipeline was its one caller) and with it `_shard_may_hold`, so part of that file's drill-down
+describes code that's gone. The ranking hasn't been re-measured.
+
 | File | Trend | Open findings | Top owner | Citation |
 | --- | --- | --- | --- | --- |
 | `atif_duck.infrastructure.registry` | ↑ rising | 9 warn, 0 error | bgagent 100% | `packages/atif-duck/src/atif_duck/infrastructure/registry.py` (1294 LOC) |

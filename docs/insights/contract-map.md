@@ -126,14 +126,16 @@ write side — any layout change starts there and then greps the three reader mo
 
 ## The static SQL catalog
 
-**Producer:** `packages/atif-duck/src/atif_duck/domain/catalog.py:28` (`VIEW_NAMES`), with
-`VIEW_SCHEMA:51`, `MACRO_NAMES:230`, `MACRO_SIGNATURES:247`, `ANALYTICS_VIEW_NAMES:269`,
-`ANALYTICS_MACRO_SIGNATURES:287`, `TABLE_MACRO_NAMES:308`, `DESCRIPTIONS:326`
+**Producer:** `packages/atif-duck/src/atif_duck/domain/catalog.py:30` (`VIEW_NAMES`), with
+`VIEW_SCHEMA:56`, `MACRO_NAMES:268`, `MACRO_SIGNATURES:287`, `ANALYTICS_VIEW_NAMES:314`,
+`ANALYTICS_VIEW_SCHEMA:328`, `ANALYTICS_MACRO_SIGNATURES:397`, `TABLE_MACRO_NAMES:413`,
+`DESCRIPTIONS:431`
 
 **Consumer(s):**
 
-- `packages/atif-cli/src/atif_cli/app.py:1099-1118` — the `schema` command reads `VIEW_SCHEMA` and
-  `MACRO_SIGNATURES` and answers with no DuckDB connection.
+- `packages/atif-cli/src/atif_cli/app.py:1745-1778` — the `schema` command reads `VIEW_SCHEMA`,
+  `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES`, tags each object
+  with its `requires` value, and answers with no DuckDB connection.
 - `packages/atif-duck/src/atif_duck/domain/examples.py:36-42` — the examples generator imports all
   seven catalogs and derives one runnable query per object.
 - `packages/atif-cli/src/atif_cli/app.py:1025-1046` — the `examples` command calls
@@ -278,17 +280,15 @@ either a `layers` contract or a place in the `independence` list in the same com
 
 **Consumer(s):**
 
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:55` (annotated at
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:86`, `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:349`)
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:79` (`packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:127`,
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:163`, `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:428`)
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:73` (`packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:107`,
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:344`)
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:76` (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:244`,
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:538`)
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:87` (`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:141`,
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:65` (annotated at
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:98`, `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:375`)
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:79` (`packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:116`,
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:357`)
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:81` (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:240`,
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:534`)
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:90` (`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:141`,
   `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:364`)
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:28` — the provider
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:32` — the provider
   factory and the usage/budget plumbing.
 - `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:143` — the one production
   implementation.
@@ -825,10 +825,19 @@ rather than skipping a file that no longer contains the current version — the 
 - **The Lance schema version sidecar** — `SCHEMA_VERSION = 2` and `schema_version.json` at
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:61-67`, kept as a sidecar rather
   than a column because reading it must not require the table.
-- **The analytics parquet layout** — 11 artifact names at
-  `packages/atif-analytics/src/atif_analytics/domain/layout.py:22-41`, of which atif-duck pins 9 as
-  `_ANALYTICS_SOURCES` (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:53-64`).
-  `REFUSALS_DIRNAME` (`packages/atif-analytics/src/atif_analytics/domain/layout.py:32`) has no view, so the refusal audit its docstring calls
+- **The user-step authorship rule table** — `AUTHOR_VALUES`, `AUTHOR_STRIP_CHARS`,
+  `AUTHOR_PREFIX_RULES`, and `INTERRUPT_PREFIXES` at
+  `packages/atif-duck/src/atif_duck/domain/authorship.py:37-102`, which the `step_author` macro and
+  the `user_steps`, `human_turns`, and `session_outcomes` views compile from. atif-analytics can't
+  import atif-duck, so `packages/atif-analytics/src/atif_analytics/domain/authorship.py:37-102`
+  carries a twin that its pipelines and transcript renderer read. The twin is pinned as source
+  text by `packages/atif-duck/tests/test_authorship_twin_pin.py:64`, and
+  `packages/atif-cli/tests/test_authorship_parity.py:53` runs the SQL and the Python over the same
+  steps.
+- **The analytics parquet layout** — the artifact names at
+  `packages/atif-analytics/src/atif_analytics/domain/layout.py:25-41`, of which atif-duck pins the
+  pipeline directories as `_ANALYTICS_SOURCES` (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:61-66`).
+  `REFUSALS_DIRNAME` (`packages/atif-analytics/src/atif_analytics/domain/layout.py:39`) has no view, so the refusal audit its docstring calls
   queryable is not reachable from SQL.
 - **The CLI exit-code taxonomy** — `EXIT_CODES` at
   `packages/atif-cli/src/atif_cli/errors.py:25-39`, consumed at 12 sites in

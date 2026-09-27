@@ -118,30 +118,25 @@ Exit codes: `64` parse error or a malformed `ATIF_SQL_QUERY_*` override, `65` ca
 atif-sql analyze [OPTIONS]
 ```
 
-Run the analytics pipelines — cluster, terms, community, plus the LLM classify, trajectory, conflicts, friction, and perceived stages.
-`packages/atif-cli/src/atif_cli/app.py:659`
+Run the LLM analytics pipelines: classify, conflicts, friction, and perceived.
+`packages/atif-cli/src/atif_cli/app.py:1240`
 
 Flags:
 
-- `--since-days` — restrict LLM stages to sessions whose last step is within N days; default `30`, and structural stages always run over the full store. `:629`
-- `--limit` — cap the number of sessions, newest-first, per LLM stage. `:630`
-- `--max-sessions` — hard per-run session ceiling per LLM pipeline; overrides `ATIF_SQL_LLM_MAX_SESSIONS_PER_RUN`, default 50. `:631`
-- `--max-cost-usd` — hard per-run dollar ceiling across all LLM pipelines, checked against running actual usage; overrides `ATIF_SQL_LLM_MAX_COST_USD_PER_RUN`, default 25.0. `:632`
-- `--no-dry-run` — execute the LLM stages for real, which costs money; the default is a dry run emitting plan dicts and cost estimates. `:633`
-- `--structural-only` — run only cluster, terms, and community, the hourly cron lane that fires at minute 17. `:634`
-- `--llm-only` — run only classify, trajectory, conflicts, friction, and perceived, the nightly lane. `:635`
-- `--skip-cluster` — opt out of the cluster stage. `:636`
-- `--skip-terms` — opt out of the terms stage. `:637`
-- `--skip-community` — opt out of the community stage. `:638`
-- `--skip-classify` — opt out of the classify stage. `:639`
-- `--skip-trajectory` — opt out of the trajectory stage. `:640`
-- `--skip-conflicts` — opt out of the conflicts stage. `:641`
-- `--skip-friction` — opt out of the friction stage. `:642`
-- `--skip-perceived` — opt out of the perceived stage. `:643`
-- `--force-cluster` — recompute clustering even when the mtime sidecar says the input is unchanged. `:644`
-- `--force-community` — recompute community detection even when the mtime sidecar says the input is unchanged. `:645`
-- `--corpus-root` — override the materialized corpus root. `:646`
-- `--format` — summary format. `:647`
+- `--since-days` — restrict the stages to sessions whose last step is within N days; default `30`. `:1242`
+- `--limit` — cap the number of sessions, newest-first, per stage. `:1243`
+- `--max-sessions` — hard per-run session ceiling per LLM pipeline; overrides `ATIF_SQL_LLM_MAX_SESSIONS_PER_RUN`, default 50. `:1244`
+- `--max-cost-usd` — hard per-run dollar ceiling across all LLM pipelines, checked against running actual usage; overrides `ATIF_SQL_LLM_MAX_COST_USD_PER_RUN`, default 25.0. `:1245`
+- `--no-dry-run` — execute the LLM stages for real, which costs money; the default is a dry run emitting plan dicts and cost estimates. `:1246`
+- `--llm-only` — accepted and ignored. Every stage is an LLM stage now, and the flag stays so old crontab lines keep parsing. `:1247`
+- `--skip-classify` — opt out of the classify stage. `:1248`
+- `--skip-conflicts` — opt out of the conflicts stage. `:1249`
+- `--skip-friction` — opt out of the friction stage. `:1250`
+- `--skip-perceived` — opt out of the perceived stage. `:1251`
+- `--corpus-root` — override the materialized corpus root. `:1252`
+- `--format` — summary format. `:1253`
+
+classify and conflicts skip non-interactive sessions (`session_outcomes.kind` of `turn_audit` or `one_shot_job`), and friction and perceived read human turns only. The deterministic authorship views (`user_steps`, `human_turns`, `session_outcomes`) are plain views, so they need no `analyze` run.
 
 ## embed
 
@@ -210,14 +205,14 @@ Exit codes: `0` ok, `64` unknown `--category` or `--requires` value. `packages/a
 atif-sql schema [OPTIONS]
 ```
 
-List every registered view with its columns and every macro signature.
-`packages/atif-cli/src/atif_cli/app.py:1087`
+List every core and analytics view with its columns and every macro signature, each with its `requires` value.
+`packages/atif-cli/src/atif_cli/app.py:1727`
 
 Flags:
 
-- `--format` — a TTY listing, or a JSON object carrying `views`, `macros`, and `examples_hint`. `:1057`
+- `--format` — a TTY listing, or a JSON object carrying `views`, `view_requires` (view name to `requires`), `macros` (each with `name`, `params`, and `requires`), and `examples_hint`. `:1729`
 
-The answer comes from the static `VIEW_SCHEMA` and `MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `:1067`
+The answer comes from the static `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `requires` is `core` for an object that binds on any corpus, `analytics` for one that binds once `analyze` has written its parquet, and `vss` for one that needs the embedding store. `:1744`
 
 ## cron
 
@@ -228,7 +223,7 @@ atif-sql cron COMMAND
 Inspect and manually install the `atif-sql` refresh cron lanes.
 `packages/atif-cli/src/atif_cli/cron.py:38`
 
-The group is attached to the root router by `app.command(cron_app)` at `packages/atif-cli/src/atif_cli/app.py:66`, and its three lanes — `materialize` on `*/10 * * * *`, `structural` on `17 * * * *`, `llm` on `20 10 * * *` — are declared once in `LANES` at `packages/atif-cli/src/atif_cli/cron.py:47`.
+The group is attached to the root router by `app.command(cron_app)` at `packages/atif-cli/src/atif_cli/app.py:98`, and its lanes — `materialize` on `*/10 * * * *` and `llm` on `20 10 * * *` — are declared once in `LANES` at `packages/atif-cli/src/atif_cli/cron.py:47`. The `structural` lane was removed on 2026-09-27 and is listed in `REMOVED_LANES` (`:56`). `scripts/atif-sql-refresh.sh` still accepts `structural` (and `struct`) and exits 0 after logging `[structural] lane removed 2026-09-27 ...`, so a crontab line nobody has deleted yet stays quiet.
 
 ### cron install
 
@@ -236,12 +231,12 @@ The group is attached to the root router by `app.command(cron_app)` at `packages
 atif-sql cron install [OPTIONS]
 ```
 
-Print the crontab block for the three refresh lanes and never write it.
-`packages/atif-cli/src/atif_cli/cron.py:180`
+Print the crontab block for the refresh lanes and never write it. The block includes one comment per removed lane asking you to delete its line.
+`packages/atif-cli/src/atif_cli/cron.py:185`
 
 Flags:
 
-- `--script` — path to `atif-sql-refresh.sh`. `packages/atif-cli/src/atif_cli/cron.py:180`
+- `--script` — path to `atif-sql-refresh.sh`. `packages/atif-cli/src/atif_cli/cron.py:185`
 
 Without the flag the script is located by walking up from this module (`:147`); a tree where `scripts/atif-sql-refresh.sh` is unreachable exits `64` demanding `--script` (`:175`).
 

@@ -1,6 +1,6 @@
 # atif-sql · Dependency graph
 
-Seven internal modules and their thirteen highest-frequency external dependencies. Internal nodes are
+The internal modules and their highest-frequency external dependencies. Internal nodes are
 the uv workspace members declared by `[tool.uv.workspace] members = ["packages/*"]`
 (`pyproject.toml:99-100`); external nodes are first-order distributions taken from a member's own
 `[project.dependencies]`, never from the installed transitive closure.
@@ -26,7 +26,6 @@ flowchart LR
     loguru[(loguru)]:::external
     polars[(polars)]:::external
     pydantic[(pydantic)]:::external
-    numpy[(numpy)]:::external
     duckdb[(duckdb)]:::external
     pydsettings[(pydantic-settings)]:::external
     tenacity[(tenacity)]:::external
@@ -47,9 +46,8 @@ flowchart LR
     cli --> cyclopts
     converter --> harbor
     duck --> duckdb
-    analytics -->|all 7 members| loguru
+    converter -->|all members| loguru
     analytics --> polars
-    analytics --> numpy
     analytics --> pyarrow
     embed --> lancedb
     embed --> pydsettings
@@ -63,22 +61,13 @@ flowchart LR
 
 ## Legend (overflow)
 
-Six declared external distributions are elided to hold the 20-node cap. Edge count is the number of
-internal modules whose `src/` imports the distribution, measured by grepping every `*.py` under
-`packages/*/src` for a `from X` or `import X` line at any indentation.
+Some declared external distributions are left off the diagram. Importing modules are found by
+grepping every `*.py` under `packages/*/src` for a `from X` or `import X` line at any indentation.
 
-| elided node | edges | importing module | declared at | import site |
-| --- | --- | --- | --- | --- |
-| scipy | 1 | atif-analytics | `packages/atif-analytics/pyproject.toml:37` | `packages/atif-analytics/src/atif_analytics/domain/structure/community.py:82` |
-| umap-learn | 1 | atif-analytics | `packages/atif-analytics/pyproject.toml:38` | `packages/atif-analytics/src/atif_analytics/domain/structure/cluster.py:48` |
-| scikit-learn | 1 | atif-analytics | `packages/atif-analytics/pyproject.toml:36` | `packages/atif-analytics/src/atif_analytics/domain/structure/terms.py:39` |
-| hdbscan | 1 | atif-analytics | `packages/atif-analytics/pyproject.toml:26` | `packages/atif-analytics/src/atif_analytics/domain/structure/cluster.py:47` |
-| graspologic-native | 1 | atif-analytics | `packages/atif-analytics/pyproject.toml:25` | `packages/atif-analytics/src/atif_analytics/domain/structure/community.py:261` |
-| pytz | 0 | none | `packages/atif-duck/pyproject.toml:25` | no import site; DuckDB's own client imports it to materialize TIMESTAMPTZ, per the comment at `:22-24` |
-
-All five clustering and community-detection libraries hang off atif-analytics alone, so the elision
-costs the diagram no structural information: it drops five leaves from one node that already carries
-four drawn external edges.
+| elided node | importing module | declared at | import site |
+| --- | --- | --- | --- |
+| litellm | atif-converter | `packages/atif-converter/pyproject.toml:30` | `packages/atif-converter/src/atif_converter/domain/pricing.py:353`, a lazy import behind the bundled pricing table |
+| pytz | none | `packages/atif-duck/pyproject.toml:29` | no import site; DuckDB's own client imports it to materialize TIMESTAMPTZ, per the comment at `:26-28` |
 
 ## Internal edges
 
@@ -109,32 +98,31 @@ PyPI namespace.
 ## External edges and where each is sourced
 
 One edge per external distribution, drawn from the member whose files import it most often. Ties break
-on import-site count, then on the member's own src line count, descending. `files` counts importing
-files across all seven members' `src/`.
+on import-site count, then on the member's own src line count, descending.
 
-| external node | files | edge drawn from | declared at | import site |
-| --- | --- | --- | --- | --- |
-| loguru | 33 | atif-analytics | `packages/atif-analytics/pyproject.toml:28` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:30` |
-| polars | 13 | atif-analytics | `packages/atif-analytics/pyproject.toml:33` | `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py:18` |
-| pydantic | 7 | atif-models | `packages/atif-models/pyproject.toml:26` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:41` |
-| numpy | 6 | atif-analytics | `packages/atif-analytics/pyproject.toml:32` | `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py:17` |
-| duckdb | 5 | atif-duck | `packages/atif-duck/pyproject.toml:20` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:60` |
-| pydantic-settings | 4 | atif-embed | `packages/atif-embed/pyproject.toml:27` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:16` |
-| tenacity | 2 | atif-embed | `packages/atif-embed/pyproject.toml:28` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:36` |
-| pyarrow | 2 | atif-analytics | `packages/atif-analytics/pyproject.toml:34` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:137` |
-| lancedb | 2 | atif-embed | `packages/atif-embed/pyproject.toml:22` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:42` |
-| anyio | 2 | atif-models | `packages/atif-models/pyproject.toml:19` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:29` |
-| cyclopts | 2 | atif-cli | `packages/atif-cli/pyproject.toml:37` | `packages/atif-cli/src/atif_cli/app.py:35` |
-| boto3 | 2 | atif-embed | `packages/atif-embed/pyproject.toml:20` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:136` |
-| harbor | 1 | atif-converter | `packages/atif-converter/pyproject.toml:23` | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161` |
+| external node | edge drawn from | declared at | import site |
+| --- | --- | --- | --- |
+| loguru | atif-converter | `packages/atif-converter/pyproject.toml:31` | `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:75` |
+| polars | atif-analytics | `packages/atif-analytics/pyproject.toml:25` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:41` |
+| pydantic | atif-models | `packages/atif-models/pyproject.toml:26` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:41` |
+| duckdb | atif-duck | `packages/atif-duck/pyproject.toml:20` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:60` |
+| pydantic-settings | atif-embed | `packages/atif-embed/pyproject.toml:27` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:16` |
+| tenacity | atif-embed | `packages/atif-embed/pyproject.toml:28` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:36` |
+| pyarrow | atif-analytics | `packages/atif-analytics/pyproject.toml:26` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:137` |
+| lancedb | atif-embed | `packages/atif-embed/pyproject.toml:22` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:42` |
+| anyio | atif-models | `packages/atif-models/pyproject.toml:19` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:29` |
+| cyclopts | atif-cli | `packages/atif-cli/pyproject.toml:37` | `packages/atif-cli/src/atif_cli/app.py:35` |
+| boto3 | atif-embed | `packages/atif-embed/pyproject.toml:20` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:136` |
+| harbor | atif-converter | `packages/atif-converter/pyproject.toml:23` | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161` |
 
 Three readings the drawn edge deliberately compresses:
 
-- **loguru is universal.** All seven members declare it — `packages/atif-analytics/pyproject.toml:28`,
-  `packages/atif-cli/pyproject.toml:38`, `packages/atif-converter/pyproject.toml:24`,
+- **loguru is universal.** Every member declares it — `packages/atif-analytics/pyproject.toml:24`,
+  `packages/atif-cli/pyproject.toml:43`, `packages/atif-converter/pyproject.toml:31`,
   `packages/atif-corpus/pyproject.toml:19`, `packages/atif-duck/pyproject.toml:21`,
   `packages/atif-embed/pyproject.toml:23`, `packages/atif-models/pyproject.toml:25` — and the edge is
-  drawn from atif-analytics only because 17 of the 33 importing files are its. The edge label states
+  drawn from atif-converter only because more of the importing files are its than any other
+  member's. The edge label states
   the real fan-out.
 - **atif-corpus has no drawn external edge.** It declares three externals — loguru
   (`packages/atif-corpus/pyproject.toml:19`), pydantic (`:20`), pydantic-settings (`:21`) — and each is

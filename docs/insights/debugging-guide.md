@@ -78,6 +78,7 @@ On a pipe the envelope is the last line on stderr, in this shape:
 | `analyze` crashes with a raw traceback and exit 1 | The `analyze` command body has no `except`, so nothing maps analytics errors into `EXIT_CODES` | Read the traceback's innermost frame; the exit code carries no information here | `packages/atif-cli/src/atif_cli/app.py:739-757` |
 | `atif-sql examples` raises a bare `KeyError` naming `ARG_EXEMPLARS` or `DESCRIPTIONS` | A catalog drift tripwire firing at example-build time, not query time | Add the missing exemplar or description entry named in the message | `packages/atif-duck/src/atif_duck/domain/examples.py:150-158`, `packages/atif-duck/src/atif_duck/domain/examples.py:165-175` |
 | A cron lane logs `analytics not yet installed, skipping` and exits 0 | The resolved CLI predates the `analyze` subcommand; `~/.local/bin/atif-sql` wins over the workspace venv | Check which binary the lane resolved, in the CLI-resolution order the script documents | `scripts/atif-sql-refresh.sh:180-185`, `scripts/atif-sql-refresh.sh:150-158` |
+| The refresh log shows `[structural] lane removed 2026-09-27 ...` once an hour | A crontab line still calls the `structural` lane, which the script accepts and exits 0 on | Delete the `:17` line; `atif-sql cron install` prints a reminder comment for it | `scripts/atif-sql-refresh.sh:141-144`, `packages/atif-cli/src/atif_cli/cron.py:56` |
 
 ## Log and error surfaces
 
@@ -102,15 +103,15 @@ shell-side refresh log.
 | Watermark degradation | stderr WARNING | `treating corpus as unmaterialized` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:171`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:174` |
 | Bedrock retry narration | stderr WARNING, one per backoff | `bedrock invoke retry` (LLM), `Retrying` … `seconds as it raised` (embeddings) | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:112-121`, `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:94-101` |
 | Degraded-effort retry | stderr WARNING | `finish_reason=length at effort=` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:237-243` |
-| Cost-ceiling events | stderr, WARNING or ERROR at 3 consecutive skips | `cost ceiling hit` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:169-178`, `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:205` |
+| Cost-ceiling events | stderr, WARNING or ERROR at 3 consecutive skips | `cost ceiling hit` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:110-121`, `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:226` |
 | Terminally failed embed batch | stderr ERROR | `failed terminally`, `the next run re-picks these rows` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:377-384` |
 | Clipped embedding input | stderr WARNING | `Clipping text at position`, `content past the cap will not match a search` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:332-338` |
 | Refresh-script log | a file appended under the script's `.run/` sibling, one `date -Is`-stamped line per event; the directory is gitignored, so the path is named in prose only | `refresh complete (mode=`, `skip[`, `TERMINAL:`, `FATAL:` | `scripts/atif-sql-refresh.sh:100-103`, `scripts/atif-sql-refresh.sh:337` |
 | Refresh log, machine-read subset | `atif-sql cron status` stdout | only two line shapes are parsed: completion and skip | `packages/atif-cli/src/atif_cli/cron.py:55-56` |
 | Lane lock state | `atif-sql cron status`, from a nonblocking flock probe plus the pidfile | `RUNNING (pid …)` versus `idle` | `packages/atif-cli/src/atif_cli/cron.py:109-124`, `packages/atif-cli/src/atif_cli/cron.py:127-144` |
 | Embed terminal marker | one file per corpus beside the refresh log; three lines — store path, store mtime, reason | the reason string, parsed out of the exit-78 envelope | `scripts/atif-sql-refresh.sh:238-249` |
-| Analytics durable state | `<corpus_root>/analytics/state.db`, sqlite in WAL mode; three tables, no read command | `retry_queue`, `budget_skips`, `session_checkpoint` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:106-108`, `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:43-62` |
-| Analyze summary | stdout JSON | `budget_exhausted`, `llm_spent_usd`, `consecutive_skips` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:179`, `packages/atif-analytics/src/atif_analytics/application/analyze.py:202-204` |
+| Analytics durable state | `<corpus_root>/analytics/state.db`, sqlite in WAL mode, no read command | `retry_queue`, `budget_skips`, `session_checkpoint` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:81-83`, `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:43-62` |
+| Analyze summary | stdout JSON | `budget_exhausted`, `llm_spent_usd`, `consecutive_skips` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:121`, `packages/atif-analytics/src/atif_analytics/application/analyze.py:144-146` |
 | Per-session loss accounting | `loss_report.json` inside each corpus session dir | `gaps_observed`, `records_dropped`, `records_total` | `packages/atif-converter/src/atif_converter/domain/fidelity.py:114-137` |
 
 Two properties of this surface change how you read it.
@@ -288,7 +289,7 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   treat a mid-stage abort as leaving nothing durable behind: no checkpoint, no
   cache row, no retry entry for the unstarted units.
   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:141-152`,
-  `packages/atif-analytics/src/atif_analytics/application/analyze.py:164-198`
+  `packages/atif-analytics/src/atif_analytics/application/analyze.py:103-142`
 - **Deterministic truncation and the one-rung ladder:** resending a
   `finish_reason=length` request with identical parameters truncates identically
   and doubles the bill, so the single retry degrades `reasoning_effort` instead.

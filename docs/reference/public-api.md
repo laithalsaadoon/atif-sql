@@ -41,9 +41,9 @@ class AnalyticsSettings(BaseSettings):
 ```
 
 Env-driven configuration for the analytics pipelines, read under the `ATIF_SQL_` prefix with `.env`
-support, carrying the corpus root, the Lance URI, and every pipeline knob.
+support, carrying the corpus root and every pipeline knob.
 
-`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:68-191`
+`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:60-114`
 
 ### build_examples
 
@@ -55,7 +55,7 @@ Derives the full example inventory from the static catalogs in a fixed order —
 view, analytics views, then core macros, the VSS macro, analytics macros — so the CLI listing and the
 JSON array are deterministic across runs.
 
-`packages/atif-duck/src/atif_duck/domain/examples.py:178-239`
+`packages/atif-duck/src/atif_duck/domain/examples.py:191-252`
 
 ### build_plan
 
@@ -239,13 +239,14 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
     "semantic_search": ("query_vec", "k"),
     "skill_rank": ("last_n_days",),
     "skill_source_mix": ("last_n_days",),
+    "step_author": ("src", "msg"),
 }
 ```
 
-Hand-maintained parameter names for all nine core macros, kept static because DuckDB's
+Hand-maintained parameter names for every core macro, kept static because DuckDB's
 `duckdb_functions()` returns NULL `parameters` for table macros and cannot recover them at runtime.
 
-`packages/atif-duck/src/atif_duck/domain/catalog.py:242-257`
+`packages/atif-duck/src/atif_duck/domain/catalog.py:287-298`
 
 ### main
 
@@ -359,14 +360,15 @@ def register(
     lance_uri: Path | None = None,
     expected_model: str | None = None,
     expected_dim: int | None = None,
-) -> None:
+) -> RawSources:
 ```
 
-Registers raw readers, views, VSS, and macros over `corpus_root` in dependency order on one DuckDB
-connection; every call re-scans the whole corpus into TEMP tables, so the cost is O(corpus) per
+Registers raw readers, views, VSS, core macros, the authorship surface (`step_author`, `user_steps`,
+`human_turns`, `session_outcomes`), and the analytics views and macros over `corpus_root` in
+dependency order on one DuckDB connection; every call re-scans the whole corpus into TEMP tables, so the cost is O(corpus) per
 connection and a caller should reuse one connection per process.
 
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212-1278`
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1679-1753`
 
 ### run_analyze
 
@@ -377,26 +379,18 @@ def run_analyze(
     since_days: int | None = 30,
     limit: int | None = None,
     dry_run: bool = True,
-    structural_only: bool = False,
-    llm_only: bool = False,
-    skip_cluster: bool = False,
-    skip_terms: bool = False,
-    skip_community: bool = False,
     skip_classify: bool = False,
-    skip_trajectory: bool = False,
     skip_conflicts: bool = False,
     skip_friction: bool = False,
     skip_perceived: bool = False,
-    force_cluster: bool = False,
-    force_community: bool = False,
 ) -> dict[str, Any]:
 ```
 
-Runs the analytics pipeline end to end, structure first and then the LLM stages, returning a
-per-stage summary dict; `structural_only` and `llm_only` are mutually exclusive lane selectors and the
-`skip_*` flags subtract individual stages from whichever lane runs.
+Runs the LLM stages in order (classify, conflicts, friction, perceived) over one shared corpus
+reader and one run budget, returning a per-stage summary dict; the `skip_*` flags subtract individual
+stages.
 
-`packages/atif-analytics/src/atif_analytics/application/analyze.py:36-207`
+`packages/atif-analytics/src/atif_analytics/application/analyze.py:36-149`
 
 ### run_backfill
 
@@ -446,11 +440,11 @@ validator's error list so a caller can report the exact schema violations.
 VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
 ```
 
-The hand-maintained column schema for all 16 core views, where column order is load-bearing: a drift
+The hand-maintained column schema for every core view, where column order is load-bearing: a drift
 test asserts tuple equality against DuckDB `DESCRIBE` output, so editing view DDL without updating
 this dict fails CI instead of surfacing as a runtime mystery.
 
-`packages/atif-duck/src/atif_duck/domain/catalog.py:47-225`
+`packages/atif-duck/src/atif_duck/domain/catalog.py:56-260`
 
 ## See also
 

@@ -7,6 +7,15 @@ kept because it records WHICH shape was chosen and why. When it disagrees
 with the code, the code is authoritative: read this file for design intent,
 not as a description of current behavior.
 
+Note (2026-09-27): the trajectory pipeline and the structural
+pipelines (cluster, terms, community) were removed, along with their views,
+macros, and the structural cron lane. atif-analytics now runs the LLM
+pipelines classify, conflicts, friction, and perceived. classify labels only
+work category and goal (autonomy tier and success were dropped as
+unreliable) and runs on small (luna). The cron lanes are materialize and
+llm. The trajectory, autonomy-tier, and structural lines below describe the
+original build.
+
 ## New packages
 - atif-models: model alias registry + structured-output LLM client. NO other
   package hardcodes a model id.
