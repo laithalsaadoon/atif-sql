@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 from codex_fixtures import codex_rollout_records, write_codex_rollout
 from harbor_oracle import (
+    PRICING_DIVERGENCE_PATHS,
     diff_paths,
     harbor_claude_code_trajectory,
     parity_diffs,
@@ -97,8 +98,12 @@ class TestSubagentAgentId:
         assert theirs is not None
         assert ours is not None
         raw = diff_paths(theirs, ours.to_json_dict())
-        assert raw, "the fixture must exercise the divergence the filter names"
-        assert all(".extra.agent_id: only in ours" in line for line in raw)
+        agent_id_lines = [line for line in raw if ".extra.agent_id: only in ours" in line]
+        assert agent_id_lines, "the fixture must exercise the divergence the filter names"
+        # The fixture's model has no price, so the pricing policy's own named
+        # divergence (NULL, not harbor's $0) shows up beside it; nothing else may.
+        others = {line.split(":", 1)[0] for line in raw if line not in agent_id_lines}
+        assert others <= {*PRICING_DIVERGENCE_PATHS, "$.final_metrics.extra"}
         assert parity_diffs(theirs, ours.to_json_dict()) == []
 
 
