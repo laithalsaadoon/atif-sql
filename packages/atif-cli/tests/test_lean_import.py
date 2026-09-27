@@ -19,10 +19,10 @@ _FORBIDDEN_EAGER_IMPORTS = (
     "harbor",
     "atif_converter",
     "atif_duck.infrastructure",
-    # atif-analytics drags umap/boto3-adjacent subtrees; the analyze command
-    # defers it into its body.
+    # atif-analytics drags polars and the Bedrock provider stack; the analyze
+    # command defers it into its body.
     "atif_analytics",
-    "umap",
+    "polars",
     # VSS stack: lancedb costs ~2.6s of import, boto3 hundreds of ms; both
     # belong inside the embed/search command bodies.
     "atif_embed",

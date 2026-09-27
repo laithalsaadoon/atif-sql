@@ -132,11 +132,9 @@ stateDiagram-v2
 - `exhausted` is terminal in effect and has no outgoing edge. `drain` never returns it, so the
   pipeline never dispatches it, so it never fails again and is never marked done. The guard is
   `keep -= blocked` at
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:123`, spelled
-  `active_sessions -= blocked` in
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:193` and
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:135`, spelled
   `already |= blocked` in
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:280`, whose unit is a
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:276`, whose unit is a
   message uuid rather than a session id. `exhausted` is a parking state rather than a deleted row:
   the module issues no `DELETE`, and raising `max_attempts` on a `drain` call re-admits it.
 - `completed --> backoff` is real, and the attempt counter survives it. `enqueue` clears
@@ -147,17 +145,16 @@ stateDiagram-v2
   immediately under the default `MAX_ATTEMPTS_DEFAULT` of 5 (`:42`). Every state name here is a row
   predicate, not a stored string; the table has no status column (`:45-56`).
 
-All five pipelines named by `PIPELINE_NAMES`
-(`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:35-41`) fire
+Every pipeline named by `PIPELINE_NAMES`
+(`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:37-42`) fire
 the identical four-call sequence — `drain`, then `blocked_units`, then `enqueue` on failure and
 `mark_done` on success:
 
 | pipeline | `drain` | `blocked_units` | `enqueue` | `mark_done` |
 | --- | --- | --- | --- | --- |
-| `classify` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:108` | `:117` | `:249` | `:276` |
-| `trajectory` | `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:180` | `:187` | `:319` | `:415` |
-| `conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:126` | `:133` | `:251` | `:318` |
-| `user_friction` | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:266` | `:274` | `:480` | `:500` |
+| `classify` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:120` | `:129` | `:265` | `:290` |
+| `conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:135` | `:142` | `:264` | `:331` |
+| `user_friction` | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:262` | `:270` | `:476` | `:496` |
 | `perceived` | `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:160` | `:167` | `:287` | `:336` |
 
 Defined at: `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:12`

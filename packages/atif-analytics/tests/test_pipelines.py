@@ -8,17 +8,21 @@ NO live LLM calls: every provider is the deterministic
 
 from __future__ import annotations
 
-from typing import Any, override
+from typing import Any
 
 import polars as pl
 import pytest
-from analytics_fixtures import SESSION_IDS, FakeProvider
+from analytics_fixtures import (
+    S1_MACHINE_UUIDS,
+    SESSION_IDS,
+    FakeProvider,
+    write_session,
+)
 
 from atif_analytics.application.use_cases._shared import RunBudget
 from atif_analytics.application.use_cases.classify import classify_sessions
 from atif_analytics.application.use_cases.conflicts import detect_conflicts
 from atif_analytics.application.use_cases.friction import detect_user_friction
-from atif_analytics.application.use_cases.trajectory import trajectory_messages
 from atif_analytics.infrastructure.corpus_reader import CorpusReader
 from atif_analytics.infrastructure.parquet_cache import ParquetCache
 from atif_analytics.infrastructure.settings import AnalyticsSettings
@@ -67,7 +71,9 @@ def test_classify_writes_rows_and_checkpoints(
     df = cache.read_all()
     assert df is not None
     assert set(df["session_id"].to_list()) == set(SESSION_IDS)
-    assert df["autonomy_tier"].to_list() == ["assisted", "assisted"]
+    # The dropped LLM labels are not written at all.
+    assert df.columns == ["session_id", "work_category", "goal", "confidence", "classified_at"]
+    assert df["work_category"].to_list() == ["sde", "sde"]
     assert df["goal"][0] == "Fix the flaky auth test."
     # Checkpoint stamped for both sessions at current bounds.
     ckpt = load_as_map(ports["state_db"], "classify")
@@ -135,28 +141,6 @@ def test_classify_exhausted_retry_session_is_not_billed_again(
     assert all("flaky auth test" not in p for p in billed_sessions)
     # The exhausted session is still not checkpointed (the queue owns it).
     assert SESSION_IDS[0] not in load_as_map(ports["state_db"], "classify")
-
-
-def test_trajectory_backing_off_session_is_not_billed(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
-) -> None:
-    """A freshly-failed session (backoff pending) is skipped, not re-billed."""
-    retry_queue.enqueue(
-        ports["state_db"], pipeline="trajectory", unit_id=SESSION_IDS[0], error="boom"
-    )
-    provider = FakeProvider()
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=provider,
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    df = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df is not None
-    assert set(df["session_id"].to_list()) == {SESSION_IDS[1]}
 
 
 def test_classify_session_cap_limits_real_run(
@@ -230,9 +214,7 @@ def test_classify_refusal_is_terminal_and_writes_sentinel_row(
     assert df is not None
     sentinel = df.filter(pl.col("session_id") == SESSION_IDS[0]).to_dicts()[0]
     assert sentinel["goal"] == "[refused]"
-    assert sentinel["autonomy_tier"] == "unknown"
     assert sentinel["work_category"] == "unknown"
-    assert sentinel["success"] == "unknown"
     assert sentinel["confidence"] == 0.0
     # The anti-join sees the sentinel, so a rerun never re-bills the session.
     provider2 = FakeProvider(refuse_prompts_containing="flaky auth test")
@@ -265,7 +247,7 @@ def test_classify_dry_run_plan_math(settings: AnalyticsSettings, reader: CorpusR
     # meaningless rather than merely wrong.
     assert SPEC.pricing_in is not None
     assert SPEC.pricing_out is not None
-    expected = (expected_in * SPEC.pricing_in + 2 * 300 * SPEC.pricing_out) / 1_000_000
+    expected = (expected_in * SPEC.pricing_in + 2 * 150 * SPEC.pricing_out) / 1_000_000
     assert plan["estimated_cost_usd"] == round(expected, 4)
     # The budget ceilings surface in the plan.
     assert plan["max_sessions_per_run"] == 50
@@ -308,142 +290,55 @@ def test_classify_dry_run_caps_session_count(
     assert plan["max_sessions_per_run"] == 1
 
 
-# ---------------------------------------------------------------------------
-# trajectory
-# ---------------------------------------------------------------------------
+AUDIT_SID = "cccccccc-3333-3333-3333-333333333333"
+ONE_SHOT_SID = "dddddddd-4444-4444-4444-444444444444"
+RETRY = "Your previous attempt hit a transient error. Try that again."
 
 
-def test_trajectory_writes_one_row_per_window(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
+def _add_non_interactive_sessions(settings: AnalyticsSettings) -> None:
+    """A turn audit and a one-shot job, both NEWER than the fixture sessions."""
+    write_session(
+        settings.corpus_root,
+        AUDIT_SID,
+        [
+            ("user", "You are auditing an agent turn for integrity. Transcript follows."),
+            ("agent", '{"ok": true}'),
+        ],
+        day=25,
+    )
+    write_session(
+        settings.corpus_root,
+        ONE_SHOT_SID,
+        [
+            ("user", "Run the nightly report."),
+            ("agent", "Working."),
+            ("user", RETRY),
+            ("user", "Stop hook feedback: cite the source."),
+            ("agent", "Brief posted with sources."),
+        ],
+        day=26,
+    )
+
+
+@pytest.mark.parametrize("run_stage", [classify_sessions, detect_conflicts])
+def test_turn_audits_and_one_shot_jobs_are_never_billed(
+    settings: AnalyticsSettings, ports: dict[str, Any], run_stage: Any
 ) -> None:
-    provider = FakeProvider()
-    n = trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=provider,
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    windows_expected = len(reader.text_windows(SESSION_IDS[0])) + len(
-        reader.text_windows(SESSION_IDS[1])
-    )
-    assert n == windows_expected
-    df = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df is not None
-    assert df.height == windows_expected
-    # Session-first rows carry null prev + null delta.
-    firsts = df.filter(pl.col("prev_uuid").is_null())
-    assert firsts.height == 2
-    assert firsts["delta"].null_count() == 2
-    # Rerun is a no-op (checkpoint) and does not duplicate rows.
-    n2 = trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=provider,
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    assert n2 == 0
-    df2 = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df2 is not None
-    assert df2.height == windows_expected
+    """Only interactive sessions reach the model; the rest are checkpointed as skipped.
 
-
-def test_trajectory_refused_chunk_becomes_placeholders(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
-) -> None:
-    # Refuse session one's chunks (its window XML contains the flaky text).
-    provider = FakeProvider(refuse_prompts_containing="flaky auth test")
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=provider,
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    df = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df is not None
-    s1 = df.filter(pl.col("session_id") == SESSION_IDS[0])
-    # Every session-one row is a neutral placeholder at confidence 0.
-    assert s1.height == len(reader.text_windows(SESSION_IDS[0]))
-    assert (s1["confidence"] == 0.0).all()
-    assert (s1["transition_kind"] == "none").all()
-    # Refusal is terminal: nothing queued for retry.
-    assert retry_queue.pending_count(ports["state_db"], pipeline="trajectory") == 0
-
-
-def test_trajectory_failure_enqueues_session(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
-) -> None:
-    provider = FakeProvider(fail_prompts_containing="flaky auth test")
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=provider,
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    assert retry_queue.pending_count(ports["state_db"], pipeline="trajectory") == 1
-    # Session two (no marker) still wrote its rows.
-    df = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df is not None
-    assert set(df["session_id"].to_list()) == {SESSION_IDS[1]}
-
-
-def test_trajectory_flushes_paid_chunks_before_abandoning_session(
-    settings: AnalyticsSettings,
-    reader: CorpusReader,
-    ports: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Successful chunks' rows land even when a LATER chunk fails.
-
-    Paid work is never discarded: the failed session flushes its completed
-    chunks, is NOT checkpointed, and the retry re-run replaces its rows
-    without duplication (replace_sessions semantics preserved).
+    The one-shot job has three user-role steps, but only one is human (a
+    retry nudge and a Stop hook are not the user), so it is one_shot_job,
+    not interactive. Both extra sessions are the NEWEST in the corpus, so a
+    cap of two would spend both slots on them if the gate ran after the cap.
     """
-    # Force multi-chunk sessions (fixture sessions are < 16 windows).
-    from atif_analytics.domain.trajectory import WindowRow, chunk_windows
-
-    def _two_per_chunk(windows: list[WindowRow]) -> list[list[WindowRow]]:
-        return chunk_windows(windows, chunk_size=2)
-
-    monkeypatch.setattr(
-        "atif_analytics.application.use_cases.trajectory.chunk_windows",
-        _two_per_chunk,
-    )
-
-    class _SecondChunkFails(FakeProvider):
-        """Fail session one's SECOND chunk; session one's windows carry the
-        flaky-test text only in the early turns, so key off call order."""
-
-        def __init__(self) -> None:
-            super().__init__()
-            self._s1_calls = 0
-
-        @override
-        async def classify_structured(self, *, system: str, prompt: str, schema: type) -> Any:
-            if "flaky auth test" in prompt or 'uuid="u-0' in prompt:
-                self._s1_calls += 1
-                if self._s1_calls == 2:
-                    self.calls.append((schema.__name__, prompt))
-                    from atif_models.domain.ports import ProviderUnavailable
-
-                    msg = "scripted second-chunk failure"
-                    raise ProviderUnavailable(msg)
-            return await super().classify_structured(system=system, prompt=prompt, schema=schema)
-
-    provider = _SecondChunkFails()
-    trajectory_messages(
-        settings,
+    _add_non_interactive_sessions(settings)
+    reader = CorpusReader(settings.corpus_root)
+    assert reader.session_kind(AUDIT_SID) == "turn_audit"
+    assert reader.session_kind(ONE_SHOT_SID) == "one_shot_job"
+    capped = settings.model_copy(update={"llm_max_sessions_per_run": 2})
+    provider = FakeProvider()
+    run_stage(
+        capped,
         dry_run=False,
         reader=reader,
         provider=provider,
@@ -451,71 +346,47 @@ def test_trajectory_flushes_paid_chunks_before_abandoning_session(
         checkpoint=ports["checkpoint"],
         retry=ports["retry"],
     )
-    df = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df is not None
-    s1 = df.filter(pl.col("session_id") == SESSION_IDS[0])
-    # First chunk (2 windows) flushed; the session's remaining windows are not.
-    assert s1.height == 2
-    # The failed session is queued and NOT checkpointed.
-    assert retry_queue.pending_count(ports["state_db"], pipeline="trajectory") == 1
-    assert SESSION_IDS[0] not in load_as_map(ports["state_db"], "trajectory")
+    prompts = [p for _, p in provider.calls]
+    assert len(prompts) == 2
+    assert not any("auditing an agent turn" in p or "nightly report" in p for p in prompts)
+    pipeline = "classify" if run_stage is classify_sessions else "conflicts"
+    stamped = set(load_as_map(ports["state_db"], pipeline))
+    assert {AUDIT_SID, ONE_SHOT_SID} <= stamped
 
-    # Retry re-run (drain due now): the session reprocesses whole and
-    # replace_sessions drops the partial flush — no duplicate window pairs.
-    import sqlite3
 
-    con = sqlite3.connect(ports["state_db"])
-    con.execute("UPDATE retry_queue SET next_attempt_at = '2000-01-01T00:00:00+00:00'")
-    con.commit()
-    con.close()
-    trajectory_messages(
+def test_classify_dry_run_skips_non_interactive(settings: AnalyticsSettings) -> None:
+    _add_non_interactive_sessions(settings)
+    plan = classify_sessions(
         settings,
-        dry_run=False,
-        reader=reader,
+        dry_run=True,
+        reader=CorpusReader(settings.corpus_root),
         provider=FakeProvider(),
         spec=SPEC,
+    )
+    assert isinstance(plan, dict)
+    assert plan["candidates"] == 4
+    assert plan["skipped_not_interactive"] == 2
+    assert plan["llm_calls"] == 2
+
+
+def test_classify_renders_machine_text_under_its_author(
+    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
+) -> None:
+    """The model reads a Stop hook as [stop_hook ...], never as [user ...]."""
+    provider = FakeProvider()
+    classify_sessions(
+        settings,
+        dry_run=False,
+        reader=reader,
+        provider=provider,
+        spec=SPEC,
         checkpoint=ports["checkpoint"],
         retry=ports["retry"],
     )
-    df2 = ParquetCache(ports["layout"].trajectory_dir).read_all()
-    assert df2 is not None
-    s1_after = df2.filter(pl.col("session_id") == SESSION_IDS[0])
-    expected = len(reader.text_windows(SESSION_IDS[0]))
-    assert s1_after.height == expected
-    assert s1_after["curr_uuid"].n_unique() == expected
-
-
-def test_trajectory_dry_run_counts_chunks(
-    settings: AnalyticsSettings, reader: CorpusReader
-) -> None:
-    plan = trajectory_messages(
-        settings, dry_run=True, reader=reader, provider=FakeProvider(), spec=SPEC
-    )
-    assert isinstance(plan, dict)
-    turns = len(reader.text_windows(SESSION_IDS[0])) + len(reader.text_windows(SESSION_IDS[1]))
-    assert plan["turns"] == turns
-    # Chunks are per-session (each session's windows are chunked separately).
-    expected_calls = sum((len(reader.text_windows(sid)) + 15) // 16 for sid in SESSION_IDS)
-    assert plan["llm_calls"] == expected_calls
-    assert plan["candidates"] == 2
-    assert plan["capped_candidates"] == 2
-    # Input tokens are measured from the windows' clipped text lengths plus
-    # the per-call envelope (system prompt + schema reminder) — the estimate
-    # must be at least the raw window text and no more than raw + envelope*2.
-    from atif_analytics.application.prompts import TRAJECTORY_SYSTEM_PROMPT
-    from atif_analytics.application.use_cases.trajectory import _SCHEMA_REMINDER
-
-    raw_chars = sum(
-        min(len(w[5] or ""), 2000) + min(len(w[6]), 2000)
-        for sid in SESSION_IDS
-        for w in reader.text_windows(sid)
-    )
-    envelope = len(TRAJECTORY_SYSTEM_PROMPT) + len(_SCHEMA_REMINDER)
-    lo = raw_chars // 4
-    hi = (raw_chars * 2 + expected_calls * envelope * 2) // 4
-    assert lo <= plan["estimated_input_tokens"] <= hi
-    assert plan["max_sessions_per_run"] == 50
-    assert plan["max_cost_usd_per_run"] == 25.0
+    s1 = next(p for _, p in provider.calls if "flaky auth test" in p)
+    assert "[stop_hook 2026-08-20T10:01:01.000Z] Stop hook feedback" in s1
+    assert "[harness 2026-08-20T10:01:02.000Z] Your previous attempt" in s1
+    assert "[user 2026-08-20T10:01:02" not in s1
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +514,13 @@ def test_friction_tiers_and_llm_rows(
     # Everything else went to the LLM and came back 'none'.
     assert by_uuid["u-01"]["source"] == "llm"
     assert by_uuid["u-01"]["label"] == "none"
-    # The system marker never produced a row.
-    assert "u-marker" not in by_uuid
+    # Machine-written user-role text never produced a row: not the Stop
+    # hook, not the continuation marker, and not the retry nudge or the
+    # screenshot metadata, whose repeats rule 1 stamped as unmet_expectation
+    # when every user-role step was a candidate.
+    for machine in S1_MACHINE_UUIDS:
+        assert machine not in by_uuid
+    assert set(by_uuid) == {"u-01", "u-04", "u-05", "u-06", "v-01", "v-03"}
     # LLM prompts wrap the message in the template.
     friction_prompts = [p for name, p in provider.calls if name == "UserFrictionSignal"]
     assert all("SHORT USER MESSAGE" in p for p in friction_prompts)

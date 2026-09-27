@@ -4,7 +4,18 @@
 
 Reads complete session transcripts from the MATERIALIZED corpus and emits one
 row per session into the ``session_classifications`` sharded cache with
-autonomy_tier, work_category, success, goal, and confidence fields.
+work_category, goal, and confidence fields. It runs on the SMALL model tier.
+
+Only ``interactive`` sessions are classified (``session_kind`` in
+:mod:`atif_analytics.domain.transcript`, the rule atif-duck's
+``session_outcomes.kind`` applies). A turn audit is a machine prompt and a
+verdict, and a one-shot job's goal is its one prompt; both are checkpointed
+as skipped without a call, and a session that later grows past one human
+turn is re-admitted by the checkpoint. What a session achieved is
+``session_outcomes.outcome``, computed from the steps, not asked of a model:
+the LLM ``success`` and ``autonomy_tier`` labels were dropped on 2026-09-27
+because they were not reproducible (802 success / 586 failure on the same
+turn-audit outcome).
 Pull-once / write-many shape: anti-join against the parquet, dispatch
 parallel structured-output calls under the provider's concurrency limiter,
 write results in chunks of ``max(batch_size * 4, 256)`` for crash-resilience.
@@ -15,8 +26,7 @@ leaves this machine.
 
 Error routing (CONTRACT-V2 taxonomy): :class:`RefusalError` is terminal —
 the session is checkpointed with a DOCUMENTED sentinel audit row
-(``autonomy_tier/work_category/success='unknown'``, ``goal='[refused]'``,
-``confidence=0.0``) so the refusal is queryable and never re-billed;
+(``work_category='unknown'``, ``goal='[refused]'``, ``confidence=0.0``) so the refusal is queryable and never re-billed;
 :class:`ProviderUnavailable` (and any other exception) goes to the retry
 queue for a later run.
 """
@@ -57,18 +67,20 @@ if TYPE_CHECKING:
 
 _PARQUET_SCHEMA: dict[str, Any] = {
     "session_id": pl.Utf8,
-    "autonomy_tier": pl.Utf8,
     "work_category": pl.Utf8,
-    "success": pl.Utf8,
     "goal": pl.Utf8,
     "confidence": pl.Float32,
     "classified_at": pl.Datetime("us", "UTC"),
 }
 
-#: Dry-run OUTPUT budget per session (~300 structured-output tokens). Input
+#: Dry-run OUTPUT budget per session (~150 structured-output tokens: two
+#: labels and a one-sentence goal). Input
 #: is MEASURED from the rendered transcript (chars/4), never a static prior:
 #: a real transcript runs an order of magnitude past any fixed guess.
-_AVG_OUT_TOKENS = 300
+_AVG_OUT_TOKENS = 150
+
+#: The one session kind classify spends on.
+_CLASSIFIED_KIND = "interactive"
 
 
 def _already_done(cache: ParquetCache) -> set[str]:
@@ -131,6 +143,7 @@ async def _classify_async(
     max_sessions = settings.llm_max_sessions_per_run
     pending: list[tuple[str, str]] = []
     empty_sids: list[str] = []
+    not_interactive: list[str] = []
     deferred = 0
     for sid in bounds:
         if sid in already and sid not in retry_ids:
@@ -139,6 +152,11 @@ async def _classify_async(
             continue
         if len(pending) >= max_sessions:
             deferred += 1
+            continue
+        # Kind gate BEFORE rendering: a turn audit or a one-shot job is
+        # checkpointed at current bounds and never billed; growth re-admits.
+        if reader.session_kind(sid) != _CLASSIFIED_KIND:
+            not_interactive.append(sid)
             continue
         text = reader.session_text(sid)
         if not text:
@@ -149,14 +167,16 @@ async def _classify_async(
             continue
         pending.append((sid, text))
 
-    if empty_sids:
+    if empty_sids or not_interactive:
         checkpoint.mark_completed(
             pipeline="classify",
-            rows=[(sid, *bounds.get(sid, (None, None))) for sid in empty_sids],
+            rows=[(sid, *bounds.get(sid, (None, None))) for sid in (*empty_sids, *not_interactive)],
         )
         logger.info(
-            "classify: checkpointed {} sessions with empty transcripts as skipped",
+            "classify: checkpointed {} empty-transcript and {} non-interactive "
+            "(turn audit / one-shot job) sessions as skipped",
             len(empty_sids),
+            len(not_interactive),
         )
 
     if deferred:
@@ -222,22 +242,18 @@ async def _classify_async(
 
                 if isinstance(res, RefusalError):
                     # Terminal: write the DOCUMENTED refusal sentinel row
-                    # (autonomy_tier/work_category/success='unknown',
-                    # goal='[refused]', confidence 0.0) so refusal-skips are
-                    # queryable, then checkpoint so we never re-bill. The
-                    # sentinel is semantically inert for the views: 'unknown'
-                    # is already a legal success value, the fake categorical
-                    # values sit at confidence 0.0, and goal='[refused]' is
-                    # the audit marker. (conflicts, whose rows are uuid-keyed
-                    # pairs, uses the refusals sidecar instead.)
+                    # (work_category='unknown', goal='[refused]', confidence
+                    # 0.0) so refusal-skips are queryable, then checkpoint so
+                    # we never re-bill. The fake category sits at confidence
+                    # 0.0 and goal='[refused]' is the audit marker.
+                    # (conflicts, whose rows are uuid-keyed pairs, uses the
+                    # refusals sidecar instead.)
                     logger.info("classify: {} refused (terminal) — sentinel row", sid)
                     refused_sids.append(sid)
                     ok_rows.append(
                         {
                             "session_id": sid,
-                            "autonomy_tier": "unknown",
                             "work_category": "unknown",
-                            "success": "unknown",
                             "goal": "[refused]",
                             "confidence": 0.0,
                             "classified_at": now,
@@ -251,9 +267,7 @@ async def _classify_async(
             ok_rows.append(
                 {
                     "session_id": sid,
-                    "autonomy_tier": res.autonomy_tier,
                     "work_category": res.work_category,
-                    "success": res.success,
                     "goal": res.goal,
                     "confidence": float(res.confidence),
                     "classified_at": now,
@@ -304,27 +318,39 @@ def _dry_run_plan(
     Input tokens are MEASURED per pending session from the actual rendered
     transcript (chars/4) instead of a static average, and the plan surfaces
     the budget ceilings plus the capped session count — what WOULD run.
+    The kind gate applies here as in the real run: only interactive
+    sessions count toward the cap and the estimate.
     """
     already = _already_done(cache)
     bounds = reader.session_bounds(since_days=since_days, limit=limit)
     pending = [sid for sid in bounds if sid not in already]
     max_sessions = settings.llm_max_sessions_per_run
-    capped = pending[:max_sessions]  # newest-first, same cap as the real run
+    capped: list[str] = []  # newest-first, same cap as the real run
+    skipped_kind = 0
+    for sid in pending:
+        if len(capped) >= max_sessions:
+            break
+        if reader.session_kind(sid) != _CLASSIFIED_KIND:
+            skipped_kind += 1
+            continue
+        capped.append(sid)
     in_tokens = sum(tokens_for_chars(len(reader.session_text(sid))) for sid in capped)
     out_tokens = len(capped) * _AVG_OUT_TOKENS
     pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)
     cost = estimate_cost_tokens(in_tokens, out_tokens, pricing)
     logger.info(
-        "classify --dry-run: {} sessions pending ({} would run under the cap). "
-        "Estimated cost ~${:.2f} (model={})",
+        "classify --dry-run: {} sessions pending ({} would run under the cap, {} "
+        "skipped as turn audits or one-shot jobs). Estimated cost ~${:.2f} (model={})",
         len(pending),
         len(capped),
+        skipped_kind,
         cost,
         spec.model_id,
     )
     return {
         "pipeline": "classify",
         "candidates": len(pending),
+        "skipped_not_interactive": skipped_kind,
         "capped_candidates": len(capped),
         "llm_calls": len(capped),
         "estimated_input_tokens": in_tokens,

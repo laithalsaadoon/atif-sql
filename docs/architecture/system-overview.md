@@ -46,12 +46,13 @@ materialize use case records the failure against that session and continues, so 
 transcript never aborts a sync (`packages/atif-corpus/src/atif_corpus/domain/ports.py:41`).
 
 `atif-duck` reads the corpus root and never imports the packages that wrote it
-(`docs/CONTRACT.md:52`). Its one public `register` registers raw readers, views, vector search, and
-macros in that order, because views bind against the raw TEMP tables at CREATE time
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1222`); the raw readers are
+(`docs/CONTRACT.md:52`). Its one public `register` registers raw readers, views, vector search,
+macros, the authorship views, and the analytics surface in that order, because views bind against
+the raw TEMP tables at CREATE time
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1740`); the raw readers are
 `CREATE TEMP TABLE` over `read_json` (`:13`), and every view and macro name is declared in a static
-catalog (`packages/atif-duck/src/atif_duck/domain/catalog.py:28`, 417 LOC). `atif-analytics` is the
-largest module at 35 source files; it writes parquet plus one SQLite WAL `state.db` under
+catalog (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`). `atif-analytics` is the
+largest module by source files; it writes parquet plus one SQLite WAL `state.db` under
 `<corpus_root>/analytics/` (`packages/atif-analytics/src/atif_analytics/domain/layout.py:6`).
 `atif-embed` backfills Cohere Embed v4 vectors into LanceDB
 (`packages/atif-embed/pyproject.toml:4`), which `atif-duck` reads back through DuckDB's lance

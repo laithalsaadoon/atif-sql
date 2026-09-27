@@ -40,14 +40,13 @@ per run, per pipeline) is stated per row.
 | `watermark.json` must parse as a mapping of path to int | Corpus | `packages/atif-corpus/src/atif_corpus/application/materialize.py:160-176` | degrade to empty (one full re-materialization pass), WARNING logged — never a refusal to sync |
 | A scan finding zero sessions while the corpus holds materialized ones is not a deletion | Corpus | `packages/atif-corpus/src/atif_corpus/application/materialize.py:97-104` and `packages/atif-corpus/src/atif_corpus/application/materialize.py:553-559`; test `packages/atif-corpus/tests/test_materialize.py:292` | raise `SuspiciousEmptyScanError`; nothing is removed |
 | Only a genuine `FileNotFoundError` proves a source vanished; any other `OSError` means unreadable | Corpus | `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:83-96` and `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:176-186`; test `packages/atif-corpus/tests/test_materialize.py:819` | session lands in `SourceScan.unreadable`, is never ghosted, and its watermark entries are retained |
-| `structural_only` and `llm_only` are mutually exclusive | Analytics | `packages/atif-analytics/src/atif_analytics/application/analyze.py:61-63` | raise `ValueError` |
-| A retry-queue or checkpoint `pipeline` must be one of the five contract names | Analytics | `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:96-98`, `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:35-41`; tests `packages/atif-analytics/tests/test_state.py:145` and `packages/atif-analytics/tests/test_state.py:150` | raise `ValueError` |
-| Every LLM-output `confidence` is bounded to the closed interval 0.0 to 1.0 (dimensionless, per emitted row) | Analytics | `packages/atif-analytics/src/atif_analytics/domain/models.py:82-85`, `packages/atif-analytics/src/atif_analytics/domain/models.py:171-174`, `packages/atif-analytics/src/atif_analytics/domain/models.py:275-278`, `packages/atif-analytics/src/atif_analytics/domain/models.py:367-370`, `packages/atif-analytics/src/atif_analytics/domain/models.py:471-474` | pydantic `ValidationError` at `model_validate`, translated to `ProviderUnavailable` (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:307-311`); the unit goes to the retry queue |
-| Every categorical LLM-output field is a closed `Literal` union, and free text is length-capped (goal 280 chars, rationale 200 chars, evidence 280 chars, summary 280 chars, a turn uuid 64 chars) | Analytics | `packages/atif-analytics/src/atif_analytics/domain/models.py:31`, `packages/atif-analytics/src/atif_analytics/domain/models.py:72-75`, `packages/atif-analytics/src/atif_analytics/domain/models.py:357-360`, `packages/atif-analytics/src/atif_analytics/domain/models.py:393-396`, `packages/atif-analytics/src/atif_analytics/domain/models.py:449-452`, `packages/atif-analytics/src/atif_analytics/domain/models.py:460-463` | same pydantic rejection path |
+| A retry-queue or checkpoint `pipeline` must be one of the contract names in `PIPELINE_NAMES` | Analytics | `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:96-98`, `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:37-42`; tests `packages/atif-analytics/tests/test_state.py:145` and `packages/atif-analytics/tests/test_state.py:150` | raise `ValueError` |
+| Every LLM-output `confidence` is bounded to the closed interval 0.0 to 1.0 (dimensionless, per emitted row) | Analytics | `packages/atif-analytics/src/atif_analytics/domain/models.py:66-69`, `packages/atif-analytics/src/atif_analytics/domain/models.py:146-149`, `packages/atif-analytics/src/atif_analytics/domain/models.py:238-241`, `packages/atif-analytics/src/atif_analytics/domain/models.py:342-345` | pydantic `ValidationError` at `model_validate`, translated to `ProviderUnavailable` (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:307-311`); the unit goes to the retry queue |
+| Every categorical LLM-output field is a closed `Literal` union, and free text is length-capped (goal 280 chars, rationale 200 chars, evidence 280 chars, summary 280 chars, a turn uuid 64 chars) | Analytics | `packages/atif-analytics/src/atif_analytics/domain/models.py:35`, `packages/atif-analytics/src/atif_analytics/domain/models.py:56-59`, `packages/atif-analytics/src/atif_analytics/domain/models.py:82-85`, `packages/atif-analytics/src/atif_analytics/domain/models.py:228-231`, `packages/atif-analytics/src/atif_analytics/domain/models.py:320-323`, `packages/atif-analytics/src/atif_analytics/domain/models.py:331-334` | same pydantic rejection path |
 | A returned `turn_uuid` must be in the session's USER-role main-chain text-step header uuid set | Analytics | `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:123-134` and `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:303-312`; tests `packages/atif-analytics/tests/test_perceived.py:161`, `packages/atif-analytics/tests/test_resource_guards.py:617` | row dropped with a WARNING; an EMPTY universe drops every row (fails closed) |
 | A returned conflict pair's two uuids must BOTH be real `edges.jsonl` uuids for that session | Analytics | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:266-296`; test `packages/atif-analytics/tests/test_resource_guards.py:590` | pair dropped; an unreadable universe drops every pair (fails closed) |
 | An untrusted step body may not present itself as a turn header | Analytics | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:64-73`; tests `packages/atif-analytics/tests/test_resource_guards.py:561` and `packages/atif-analytics/tests/test_resource_guards.py:576` | coerce: `[uuid=` is rewritten to `(uuid=` case-insensitively, length preserved, before any header is built |
-| A friction candidate is a user-role main-chain text step with a uuid, 1 to `friction_max_chars` characters (default 300, per message), CLI bookkeeping text excluded | Analytics | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:154-175`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:81-86`; test `packages/atif-analytics/tests/test_friction_tiers.py:98` | filtered out at the candidate boundary; no LLM call is ever made for it |
+| A friction candidate is a human turn (a main-chain user step whose author is `human`) with a uuid, 1 to `friction_max_chars` characters (default 300, per message); hook feedback, task notifications, retry nudges and image metadata never qualify | Analytics | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:151-169`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:141-143`; test `packages/atif-analytics/tests/test_friction_tiers.py:98` | filtered out at the candidate boundary; no LLM call is ever made for it |
 | `ATIF_SQL_LLM_FAMILY` must name a family with a wired provider adapter | Models | `packages/atif-models/src/atif_models/infrastructure/settings.py:25` and `packages/atif-models/src/atif_models/infrastructure/settings.py:41-54`; tests `packages/atif-models/tests/test_settings.py:59` and `packages/atif-models/tests/test_settings.py:64` | raise `ValueError` at settings load — a startup refusal instead of a Bedrock 400 on every call |
 | `size_for` accepts only a pipeline with an `llm_size_<pipeline>` field | Models | `packages/atif-models/src/atif_models/infrastructure/settings.py:67-77`; test `packages/atif-models/tests/test_settings.py:88` | raise `KeyError` |
 | A schema with a schema-valued `additionalProperties` (a `dict[str, X]` field) cannot be expressed in OpenAI strict mode | Models | `packages/atif-models/src/atif_models/domain/schema.py:63-69`; test `packages/atif-models/tests/test_schema.py:71` | raise `ValueError` at body-build time |
@@ -118,14 +117,12 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 | A checkpoint skip requires BOTH `last_ts` and `last_mtime` to be non-advancing; either bound moving forward re-admits the session | Application code | `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:136-176`; tests `packages/atif-analytics/tests/test_state.py:48` and `packages/atif-analytics/tests/test_state.py:57` |
 | `state.db` is corpus-scoped at `<corpus_root>/analytics/state.db`, so one corpus's completions can never skip another's re-scoring | Application code | `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:22-24` |
 | Sidechain steps are excluded from every rendered transcript, because the prompts are calibrated on transcripts with no subagent content and harbor inlines sidechains | Application code | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:24-27`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:132-134`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:162`; test `packages/atif-analytics/tests/test_transcript.py:50` |
-| A compact-summary step is synthetic text: it never participates in a trajectory window and never counts toward a human-AI pair | Application code | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:199-217`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:253` |
+| A compact-summary step is synthetic text: its author is `harness`, so it never counts toward a human-AI pair and renders under the `harness` label | Application code | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:135-138`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:245` |
 | Only `render_session_text` writes a real `[uuid=` header; every body is escaped first | Application code | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:33-38`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:160-161`, `packages/atif-analytics/src/atif_analytics/domain/transcript.py:173-183`; test `packages/atif-analytics/tests/test_resource_guards.py:561` |
-| `CLI_BOOKKEEPING_TEXTS` is defined once in the domain and shared by the friction candidate filter and the perceived-eligibility pair counter | Application code | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:78-86`, `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:94-100`; test `packages/atif-analytics/tests/test_perceived.py:80` |
+| Who wrote a user step is a prefix match over `AUTHOR_PREFIX_RULES` after stripping leading space, tab, CR and LF, first rule wins, with a compaction summary always `harness`; the SQL `step_author` macro and the Python twin in atif-analytics must agree | Application code | `packages/atif-duck/src/atif_duck/domain/authorship.py:51`, `packages/atif-analytics/src/atif_analytics/domain/authorship.py:108-122`; tests `packages/atif-duck/tests/test_authorship_twin_pin.py:64`, `packages/atif-cli/tests/test_authorship_parity.py:53` |
+| classify and conflicts admit only `interactive` sessions: a `turn_audit` (opens on an audit prompt) or `one_shot_job` (at most one human turn) is checkpointed as skipped without a call | Application code | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:146-176`, `packages/atif-analytics/src/atif_analytics/domain/authorship.py:130` |
 | The `source` column vocabulary `regex` / `sql` / `llm` / `refused` names the row's PROVENANCE TIER, not the engine that computed it, and downstream views bind to those literals | Application code | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:29-33`, `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:86-89` |
 | Two friction stamp rules matching one uuid resolve by higher confidence, ties keeping the first stamp, with rules applied in the fixed order 1 to 3 | Application code | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:183-195` |
-| Structural hyperparameter defaults are pinned by contract and `seed = 42` threads into every UMAP and Leiden call, so a same-seed rerun reproduces the clustering | Application code | `packages/atif-analytics/src/atif_analytics/domain/config.py:10-12`, `packages/atif-analytics/src/atif_analytics/domain/config.py:20-40`, `packages/atif-analytics/src/atif_analytics/domain/config.py:43-60` |
-| A session's community id is `-1` when it is a singleton or unclusterable — an out-of-band sentinel that survives `Int32` serialization | Application code | `packages/atif-analytics/src/atif_analytics/domain/structure/community.py:84-86` |
-| A community-detection resolution `γ` must be strictly positive: CPM at `γ = 0` has no null term and collapses every graph to one community | Application code | `packages/atif-analytics/src/atif_analytics/domain/structure/community.py:100-102` |
 
 ### Models and embeddings
 
@@ -147,8 +144,8 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 
 | Invariant | Where enforced | Citation |
 | --- | --- | --- |
-| Registration order is raw TEMP tables, then views, then VSS, then macros, then the v2 analytics views and macros — each layer binds against the previous at CREATE time | Application code | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1228-1234`; test `packages/atif-duck/tests/test_duck_views.py:615` |
-| `DESCRIPTIONS` covers the catalog exactly (16 views plus 9 macros plus 12 analytics views plus 13 analytics macros equals 50) | Application code | `packages/atif-duck/src/atif_duck/domain/catalog.py:326`; test `packages/atif-duck/tests/test_examples.py:178` |
+| Registration order is raw TEMP tables, then views, then VSS, then macros, then the authorship macro and views, then the v2 analytics views and macros — each layer binds against the previous at CREATE time | Application code | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1740-1752`; test `packages/atif-duck/tests/test_duck_views.py:615` |
+| `DESCRIPTIONS` covers the catalog exactly | Application code | `packages/atif-duck/src/atif_duck/domain/catalog.py:431`; test `packages/atif-duck/tests/test_examples.py:178` |
 | `cost_estimate`'s `est_cost_usd` covers PRICED steps only and is meaningful only when `unpriced_steps = 0`; an inner join would return a partial number indistinguishable from a complete one | Application code | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1053-1058`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1066-1077`; tests `packages/atif-duck/tests/test_duck_views.py:407` and `packages/atif-duck/tests/test_duck_views.py:482` |
 | Both `cost_estimate` counters filter on `model_name IS NOT NULL`, because user steps carry no model and would otherwise make every session look like a pricing gap | Application code | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1060-1063`; test `packages/atif-duck/tests/test_duck_views.py:533` |
 | An absent or unattachable Lance store degrades to an empty `message_embeddings` TABLE with the right schema, so `semantic_search` always binds | Application code | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:884-905`; tests `packages/atif-duck/tests/test_vss.py:112` and `packages/atif-duck/tests/test_vss.py:248` |
@@ -172,18 +169,14 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 | Corpus slug | a corpus root path | `default` for `~/.claude`, else `<sanitized-dirname (<= 32 chars)>-<8 hex of sha256>` | `packages/atif-corpus/src/atif_corpus/domain/slug.py:45-50`; test `packages/atif-corpus/tests/test_slug.py:24` |
 | Loss accounting for one session | raw record counts by `RecordType`, side-file classification | `records_converted` (user plus assistant records), `records_dropped` (total minus converted), `gaps_observed` | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:62-90`, `packages/atif-converter/src/atif_converter/domain/fidelity.py:109-112` |
 | Completed human-to-AI exchange count | a session's `StepEvent` list | integer pair count, the perceived-error eligibility input | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:236-262`; test `packages/atif-analytics/tests/test_perceived.py:63` |
-| Sentiment delta for a trajectory window | `prev_sentiment`, `curr_sentiment` over the encoding negative equals -1, neutral equals 0, positive equals 1 | `curr - prev` as a float in the closed interval -2.0 to 2.0, or `None` when there is no previous turn | `packages/atif-analytics/src/atif_analytics/domain/trajectory.py:31-32`, `packages/atif-analytics/src/atif_analytics/domain/trajectory.py:130-134`, `packages/atif-analytics/src/atif_analytics/domain/trajectory.py:171-183` |
 | Content stamp for an embeddable text | the exact text sent to the embedder | blake2b digest, 16 bytes hex-encoded (128 bits) | `packages/atif-embed/src/atif_embed/domain/text_stamp.py:26-40` |
-| c-TF-IDF term weights | one pseudo-document per cluster plus a frozen `TermsConfig` | `(cluster_id, term, weight, rank)` rows, ranks 1-based, non-positive weights dropped, top 10 per cluster | `packages/atif-analytics/src/atif_analytics/domain/structure/terms.py:44-74` |
-| CPM partition quality | a weighted graph, a label vector, and `γ` | scalar objective in the same units as the stored `quality` column | `packages/atif-analytics/src/atif_analytics/domain/structure/community.py:288-308` |
-| Resolution-profile call budget | the configured `γ` range | maximum distinct `γ` the bisection can evaluate, clamped by `_PROFILE_MAX_CALLS` (512 Leiden calls) | `packages/atif-analytics/src/atif_analytics/domain/structure/community.py:134-170` |
-| `friction_rate(since_days)` | `user_friction` label counts per session; user-role main-chain non-empty `steps` as denominator | per-session `rate` plus seven label counters | `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:344-384` |
-| `success_rate_by_work(since_days)` | `session_classifications` rows | `unknown_fraction` over ALL sessions; success, failure and partial rates over KNOWN outcomes only | `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:271-293` |
+| `friction_rate(since_days)` | `user_friction` label counts per session; `human_turns` rows as denominator | per-session `rate` plus one counter per friction label | `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:276-319` |
+| `session_outcomes` | a session's main-chain `steps`, each labeled by `step_author` | `kind` from the opening user step's author and the human-turn count (`turn_audit`, `one_shot_job` at one human turn or fewer, else `interactive`); `outcome` is the first that holds of an audit verdict `pass` or `block` as the last agent message, any Stop hook block (`reviewer_blocked`), any interrupt (`interrupted`), else `clean_end` | `packages/atif-duck/src/atif_duck/infrastructure/authorship.py:84-132` |
 | `semantic_search(query_vec, k)` | a unit-norm query vector and `k` | top-`k` `(uuid, sim, distance)` ordered by cosine distance | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1145-1152`; test `packages/atif-duck/tests/test_vss.py:195` |
 | `todo_velocity(sid)` | `todo_state_current` rows for one session | completed count divided by distinct subject count, `NULL` when there are no subjects | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1101-1107`; test `packages/atif-duck/tests/test_duck_views.py:566` |
 | `subagent_fanout(sid)` | `subagent_spawns` rows for one session | count of Task/Agent launch INTENTS, not side-transcript files | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1116-1124`; test `packages/atif-duck/tests/test_duck_views.py:572` |
 
-Three of these need the formula spelled out.
+Some of these need the formula spelled out.
 
 **`cost_estimate(sid)`.** Per step, uncharged-cache base input is
 `prompt_tokens - cached_tokens`, because ATIF's `prompt_tokens` is the TOTAL (input plus
@@ -200,23 +193,15 @@ input) are deliberately not modeled, matching the macro
 `packages/atif-duck/tests/test_duck_views.py:470` for sanity bounds).
 
 **`human_ai_pair_count`.** Walk the step list in materialized order. Skip any step that
-is sidechain, compact-summary, or has empty text. A user-role step arms a pending pair —
-unless its stripped text is one of the two `CLI_BOOKKEEPING_TEXTS` strings, which are
-Claude Code's own user-role injections and are skipped outright. An assistant-role step
-completes the pending pair and disarms it. Consecutive user turns therefore collapse into
-one pending pair, because judging a perceived error requires the human RESPONDING to AI
-output (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:236-262`). The
+is sidechain, compact-summary, or has empty text. A human turn arms a pending pair; a
+user-role step a human didn't write (hook feedback, notifications, harness text) is
+skipped outright. An assistant-role step completes the pending pair and disarms it.
+Consecutive human turns therefore collapse into one pending pair, because judging a
+perceived error requires the human RESPONDING to AI output
+(`packages/atif-analytics/src/atif_analytics/domain/transcript.py:230-256`). The
 perceived pipeline admits a session only at 2 or more pairs
-(`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:101-103`,
-`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:118-120`).
-
-**c-TF-IDF.** `CountVectorizer` (lowercased, unicode-stripped accents, `min_df = 2`,
-`max_df = 0.95`, ngram range 1 to 2) produces a clusters-by-vocabulary count matrix. Term
-frequency is L1-normalized per cluster row. The IDF factor is
-`log(1 + sum(avg) / max(col_sum, 1e-9))` where `avg = col_sum / total`, and the weight is
-the row-normalized TF times that IDF. Terms are ranked descending per cluster and the top
-10 kept, with non-positive weights dropped
-(`packages/atif-analytics/src/atif_analytics/domain/structure/terms.py:44-74`).
+(`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:106`,
+`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:121-123`).
 
 ## Policy and gates
 
@@ -233,17 +218,17 @@ the row-normalized TF times that IDF. Terms are ranked descending per cluster an
   `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:176-193`;
   tests `packages/atif-analytics/tests/test_resource_guards.py:84` and `packages/atif-analytics/tests/test_resource_guards.py:113`.
 - **Cost ceiling:** one `RunBudget` of `llm_max_cost_usd_per_run` (default 25.0 USD per
-  `analyze` run, shared across all five LLM pipelines) is priced from running actuals and
+  `analyze` run, shared across every LLM pipeline) is priced from running actuals and
   checked at every dispatch batch boundary; when crossed, remaining LLM work stops and
   nothing is stamped for unstarted units.
   `packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:93-97`,
-  `packages/atif-analytics/src/atif_analytics/application/analyze.py:122-144`,
+  `packages/atif-analytics/src/atif_analytics/application/analyze.py:65-87`,
   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:90-143`;
   test `packages/atif-analytics/tests/test_analyze.py:75`.
 - **Budget-skip starvation escalation:** a stage skipped for budget records a durable
   `budget_skips` row, and the log escalates from WARNING to ERROR once the SAME stage has
   been starved 3 consecutive runs; a stage that actually runs clears its rows, so the row
-  count IS the streak. `packages/atif-analytics/src/atif_analytics/application/analyze.py:148-180`,
+  count IS the streak. `packages/atif-analytics/src/atif_analytics/application/analyze.py:103-140`,
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:54-62`,
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:217-246`; test `packages/atif-analytics/tests/test_analyze.py:99`.
 - **Retry attempt cap:** a `(pipeline, unit_id)` stops being drained at 5 attempts, which
@@ -257,9 +242,6 @@ the row-normalized TF times that IDF. Terms are ranked descending per cluster an
   `packages/atif-analytics/src/atif_analytics/domain/friction.py:100-114`,
   `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:178-232`;
   tests `packages/atif-analytics/tests/test_friction_tiers.py:47`, `packages/atif-analytics/tests/test_friction_tiers.py:79`, `packages/atif-analytics/tests/test_friction_tiers.py:87`, `packages/atif-analytics/tests/test_friction_tiers.py:92`.
-- **Zero-cost visualization is off:** `compute_viz_coords` defaults to False because the
-  2-d UMAP projection measured 66% of the cluster stage's wall clock and nothing consumes
-  the coordinates. `packages/atif-analytics/src/atif_analytics/domain/config.py:37-40`.
 
 ### Model selection
 
@@ -271,10 +253,10 @@ the row-normalized TF times that IDF. Terms are ranked descending per cluster an
   for a future adapter and is rejected at settings load until one exists.
   `packages/atif-models/src/atif_models/infrastructure/settings.py:20-25`,
   `packages/atif-models/src/atif_models/infrastructure/settings.py:41-54`; tests `packages/atif-models/tests/test_settings.py:69` and `packages/atif-models/tests/test_settings.py:72`.
-- **Per-pipeline size assignment:** classify, trajectory and perceived take `medium`,
-  conflicts takes `large` (the hardest judgment task), friction takes `small` (a
-  per-message enum) — each overridable via `ATIF_SQL_LLM_SIZE_<PIPELINE>`.
-  `packages/atif-models/src/atif_models/infrastructure/settings.py:56-65`; test `packages/atif-models/tests/test_settings.py:26`.
+- **Per-pipeline size assignment:** classify and friction take `small`, perceived takes
+  `medium`, conflicts takes `large` (the hardest judgment task) — each overridable via
+  `ATIF_SQL_LLM_SIZE_<PIPELINE>`.
+  `packages/atif-models/src/atif_models/infrastructure/settings.py:56-66`; test `packages/atif-models/tests/test_settings.py:26`.
 
 ### Freshness and data safety
 
@@ -328,11 +310,11 @@ the row-normalized TF times that IDF. Terms are ranked descending per cluster an
 
 ### Scheduling
 
-- **Three cron lanes, split by cost:** `materialize` every 10 minutes (cheap incremental),
-  `structural` hourly at minute 17 (zero LLM cost), `llm` once daily at 10:20 (the lane
-  that spends). `packages/atif-cli/src/atif_cli/cron.py:43-51`.
+- **Cron lanes, split by cost:** `materialize` every 10 minutes (cheap incremental)
+  and `llm` once daily at 10:20 (the lane that spends).
+  `packages/atif-cli/src/atif_cli/cron.py:43-50`.
 - **`cron install` never writes a crontab:** it prints the block for a human to paste,
-  after checking `crontab -l`. `packages/atif-cli/src/atif_cli/cron.py:180-197`.
+  after checking `crontab -l`. `packages/atif-cli/src/atif_cli/cron.py:184-202`.
 
 ## See also
 

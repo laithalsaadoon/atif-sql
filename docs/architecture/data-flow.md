@@ -87,8 +87,8 @@ sequenceDiagram
 2. A DuckDB connection is opened with no path or URI, so the engine runs in-process against
    memory — `:591`.
 3. Registration builds the whole catalog on that connection in a fixed order — raw TEMP tables,
-   base views, VSS, macros, analytics views, analytics macros — because each later stage binds
-   against the earlier one at `CREATE` time — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`.
+   base views, VSS, macros, the authorship macro and views, analytics views, analytics macros —
+   because each later stage binds against the earlier one at `CREATE` time — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1679`.
 4. The raw readers materialize `meta.json`, `edges.jsonl`, and `loss_report.json` as TEMP TABLEs
    over globs into `<corpus_root>/sessions/`. The trajectory is split per session: a session whose
    `meta.columnar_schema` is current and whose four parquet files are present is read lazily with
@@ -124,7 +124,6 @@ sequenceDiagram
     participant Duck as atif-duck
     participant DB as DuckDB
     participant Disk as corpus disk
-    participant Lance as Lance store
 
     CLI->>DB: duckdb.connect()
     CLI->>DB: threads, memory_limit, private temp_directory, autoinstall off
@@ -149,43 +148,39 @@ sequenceDiagram
 
 1. The `analyze` command loads `AnalyticsSettings`, reuses the same corpus-root resolution the
    other commands share, and stamps explicit `--max-sessions` / `--max-cost-usd` ceilings over the
-   env defaults so a crontab line carries its spend cap visibly — `packages/atif-cli/src/atif_cli/app.py:659`.
-2. The pipeline runner builds one shared `CorpusReader` for every stage, runs the three structural
-   stages, then loops the five LLM stages; the lane selectors and `skip_*` flags subtract stages
-   from whichever lane runs — `packages/atif-analytics/src/atif_analytics/application/analyze.py:36`.
+   env defaults so a crontab line carries its spend cap visibly — `packages/atif-cli/src/atif_cli/app.py:1240`.
+2. The pipeline runner builds one shared `CorpusReader` for every stage and loops the LLM
+   stages (classify, conflicts, friction, perceived); the `skip_*` flags subtract stages —
+   `packages/atif-analytics/src/atif_analytics/application/analyze.py:36`.
 3. Corpus rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json`
    behind a bounded memo — not through DuckDB, which the `forbidden` import contract puts out of
-   this package's reach — `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:269`.
-4. The structural lane (cluster, then terms, then community) reads vectors straight out of the
-   Lance store and writes single parquet files, bypassing the sharded cache — `packages/atif-analytics/src/atif_analytics/infrastructure/lance_reader.py:28`.
-5. Before the LLM lane starts, one `RunBudget` is constructed from the per-run dollar ceiling
-   (`packages/atif-analytics/src/atif_analytics/application/analyze.py:140`); all five LLM stages
-   then go through one call site, each receiving the shared reader and that budget, and a stage that
-   finds the budget exhausted is skipped with nothing stamped — `:181`.
-6. A stage drops the sessions whose checkpoint row still matches their mtime and last step
-   timestamp, so a re-run costs nothing for unchanged work — `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:136`.
-7. The concrete provider satisfies `LlmStructuredProvider` structurally, and its synchronous inner
+   this package's reach — `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:274`.
+   The reader also labels each session's kind with the same rule `session_outcomes.kind` applies, so
+   classify and conflicts can skip `turn_audit` and `one_shot_job` sessions — `:298`.
+4. Before the first stage starts, one `RunBudget` is constructed from the per-run dollar ceiling
+   (`packages/atif-analytics/src/atif_analytics/application/analyze.py:83`); every stage then goes
+   through one call site, each receiving the shared reader and that budget, and a stage that finds
+   the budget exhausted is skipped with nothing stamped — `:123`.
+5. A stage drops the sessions whose checkpoint row still matches their mtime and last step
+   timestamp, so a re-run costs nothing for unchanged work — `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:137`.
+6. The concrete provider satisfies `LlmStructuredProvider` structurally, and its synchronous inner
    method is the only place a Bedrock `invoke_model` call is issued, under tenacity retry with
    token usage accumulated against the budget — `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:258`.
-8. Results land as sharded `part-<ns>.parquet` files under `<corpus_root>/analytics/`
+7. Results land as sharded `part-<ns>.parquet` files under `<corpus_root>/analytics/`
    (`packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`), and each
-   completed session is upserted into the SQLite WAL checkpoint — `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:179`.
+   completed session is upserted into the SQLite WAL checkpoint — `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:180`.
 
 ```mermaid
 sequenceDiagram
     participant CLI as atif-cli
     participant Ana as atif-analytics
     participant Disk as corpus disk
-    participant Lance as Lance store
     participant Models as atif-models
     participant Bedrock as Bedrock
 
     CLI->>Ana: run_analyze(settings, dry_run=false)
     Ana->>Disk: CorpusReader.load_steps (json over trajectory.json)
     Disk-->>Ana: StepEvent rows
-    Ana->>Lance: load_embeddings for cluster / community
-    Lance-->>Ana: uuids + vectors
-    Ana->>Disk: write cluster / terms / community parquet
     loop each LLM stage under one RunBudget
         Ana->>Disk: filter_unchanged against state.db
         Ana->>Models: classify_structured(prompt, schema)

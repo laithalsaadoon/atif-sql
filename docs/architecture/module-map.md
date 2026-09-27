@@ -13,69 +13,72 @@ below are ordered by total source LOC, descending; LOC figures are `wc -l` over 
 
 ## atif-analytics
 
-`run_analyze` composes eight pipelines in a fixed stage order — cluster, terms, community, classify,
-trajectory, conflicts, friction, perceived
-(`packages/atif-analytics/src/atif_analytics/application/analyze.py:36`). The first three are
-structural math at zero LLM cost (`:8`); the remaining five call a model and honor `dry_run`, which
-defaults to True as a cost guard so those stages return plan dicts instead of spending (`:19`). Every
-classifier system prompt lives in one module, four of them assembled by concatenating a shared
-appendix (`packages/atif-analytics/src/atif_analytics/application/prompts.py:1006`), and the pydantic
-v2 response schemas they bind against are pure domain models whose field descriptions are themselves
-part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). This is
-the one member permitted to import a sibling — atif-models and nothing else
-(`pyproject.toml:520`).
+`run_analyze` composes the LLM pipelines in a fixed stage order — classify, conflicts, friction,
+perceived (`packages/atif-analytics/src/atif_analytics/application/analyze.py:36`). Every stage calls
+a model and honors `dry_run`, which defaults to True as a cost guard so the stages return plan dicts
+instead of spending (`:13`). Every classifier system prompt lives in one module,
+each assembled by concatenating a shared appendix
+(`packages/atif-analytics/src/atif_analytics/application/prompts.py:739`), and the pydantic v2
+response schemas they bind against are pure domain models whose field descriptions are themselves
+part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
+wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
+table (`packages/atif-analytics/src/atif_analytics/domain/authorship.py`). This is the one member
+permitted to import a sibling — atif-models and nothing else (`pyproject.toml:520`).
 
-- `packages/atif-analytics/src/atif_analytics/application/prompts.py` (1021 LOC) — the task-framing
+- `packages/atif-analytics/src/atif_analytics/application/prompts.py` — the task-framing
   system prompts, public constants assembled at
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1006`.
-- `packages/atif-analytics/src/atif_analytics/domain/structure/community.py` (643 LOC) — pure
-  Leiden+CPM and mutual-kNN graph math, no I/O, with `graspologic-native` behind one solver seam
-  (`packages/atif-analytics/src/atif_analytics/domain/structure/community.py:261`).
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py` (638 LOC) — three
-  friction tiers behind a message-length pre-filter: regex fast path, deterministic stamp rules, then
-  the LLM (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:5`).
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py` (523 LOC) — one
-  window per text step, sent in chunks of at most 16 windows with a shared anchor turn
-  (`packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:13`).
-- `packages/atif-analytics/src/atif_analytics/domain/models.py` (516 LOC) — the response schemas, from
-  `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:22`) to
-  `PerceivedErrorsResult` (`:484`).
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py` (451 LOC) —
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:739`.
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py` — the
+  friction tiers behind a human-turn and message-length pre-filter: regex fast path, deterministic
+  stamp rules, then the LLM (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:5`).
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py` —
   LangSmith's Perceived Error definition on the conflicts chassis; clean sessions produce zero rows
   (`packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:16`).
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py` (426 LOC) — one row
-  per detected stance-conflict pair, keyed on two turn uuids, with refusals routed to a sidecar
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py` — one row
+  per detected stance-conflict pair, keyed on two turn uuids, with refusals routed to a sidecar;
+  non-interactive sessions are skipped
   (`packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:11`).
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py` (404 LOC) — one row
-  per session, anti-joined against the parquet cache and written in crash-resilient chunks
-  (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:8`).
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py` — one row
+  per interactive session carrying `work_category` and `goal`, anti-joined against the parquet cache
+  and written in crash-resilient chunks
+  (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:3`).
+- `packages/atif-analytics/src/atif_analytics/domain/models.py` — the response schemas, from
+  `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:22`) to
+  `PerceivedErrorsResult` (`:355`).
 
 ## atif-duck
 
-`register(con, corpus_root)` binds a DuckDB connection to a contract-shaped corpus tree and exposes 16
-views plus 9 macros (`packages/atif-duck/src/atif_duck/__init__.py:9`,
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`). Those names are not introspected
+`register(con, corpus_root)` binds a DuckDB connection to a contract-shaped corpus tree and exposes the
+core views and macros (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`,
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1679`). Those names are not introspected
 at runtime: a static catalog answers `atif-sql schema` in under 50 ms with no DuckDB bind, and two
 drift tests assert it column-for-column against `DESCRIBE` and signature-for-signature against the
-DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The 12 analytics views and 13 analytics
+DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The analytics views and
 macros register separately, each only when its backing parquet is populated, because a corpus with no
 `atif-sql analyze` run is the default state
-(`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`). It is the one member with
+(`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`). It is the one member with
 `domain/` and `infrastructure/` but no `application/`, a deliberate shape that is why it carries no
 layers contract among the seven (`pyproject.toml:462`).
 
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py` (1294 LOC) — the raw readers, the 16
-  core views, the 9 macros, and the Lance attach path
-  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:830`).
-- `packages/atif-duck/src/atif_duck/infrastructure/analytics.py` (581 LOC) — the v2 views and macros
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py` — the raw readers, most
+  of the core views and macros, and the Lance attach path
+  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:767`).
+- `packages/atif-duck/src/atif_duck/domain/catalog.py` — `VIEW_NAMES`
+  (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`), `MACRO_SIGNATURES` (`:287`), the
+  analytics catalogs (`:314`), and one `DESCRIPTIONS` entry per object (`:431`).
+- `packages/atif-duck/src/atif_duck/infrastructure/analytics.py` — the v2 views and macros
   over the analytics parquet outputs, gated on file presence
-  (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`).
-- `packages/atif-duck/src/atif_duck/domain/catalog.py` (417 LOC) — `VIEW_NAMES`
-  (`packages/atif-duck/src/atif_duck/domain/catalog.py:28`), `MACRO_SIGNATURES` (`:247`), the
-  analytics catalogs (`:269`), and one `DESCRIPTIONS` entry per object (`:326`).
-- `packages/atif-duck/src/atif_duck/domain/examples.py` (251 LOC) — `build_examples` derives one
+  (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`).
+- `packages/atif-duck/src/atif_duck/domain/examples.py` — `build_examples` derives one
   runnable query per catalog object from `ARG_EXEMPLARS` rather than hardcoding strings
-  (`packages/atif-duck/src/atif_duck/domain/examples.py:178`).
+  (`packages/atif-duck/src/atif_duck/domain/examples.py:191`).
+- `packages/atif-duck/src/atif_duck/domain/authorship.py` — the `step_author` rule table:
+  prefix matches after stripping leading whitespace, first rule wins, twinned in atif-analytics
+  (`packages/atif-duck/src/atif_duck/domain/authorship.py:50`).
+- `packages/atif-duck/src/atif_duck/infrastructure/authorship.py` — the `step_author` macro
+  and the `user_steps`, `human_turns`, and `session_outcomes` views, registered after the core macros
+  and before the analytics surface
+  (`packages/atif-duck/src/atif_duck/infrastructure/authorship.py:38`).
 - `packages/atif-duck/src/atif_duck/domain/embedding_guard.py` (83 LOC) — the read-side provider and
   dimension guard, a deliberate twin of atif-embed's copy because the independence contract forbids
   sharing it (`packages/atif-duck/src/atif_duck/domain/embedding_guard.py:5`).

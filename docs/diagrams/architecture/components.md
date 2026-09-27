@@ -26,6 +26,7 @@ classDiagram
         +register_views(con)
         +register_vss(con)
         +register_macros(con)
+        +register_authorship(con)
         +build_examples()
     }
     class EmbedBackfill {
@@ -35,7 +36,6 @@ classDiagram
     }
     class AnalyticsPipelines {
         +run_analyze(settings)
-        +run_clustering(settings)
         +classify_sessions(settings)
         +detect_conflicts(settings)
         +build_provider(settings)
@@ -70,7 +70,7 @@ console script declared at `packages/atif-cli/pyproject.toml:42`.
 | --- | --- | --- | --- |
 | `AtifCliApp` | atif-cli | `materialize` | `packages/atif-cli/src/atif_cli/app.py:352` |
 | `AtifCliApp` | atif-cli | `query` | `packages/atif-cli/src/atif_cli/app.py:529` |
-| `AtifCliApp` | atif-cli | `analyze` | `packages/atif-cli/src/atif_cli/app.py:659` |
+| `AtifCliApp` | atif-cli | `analyze` | `packages/atif-cli/src/atif_cli/app.py:1240` |
 | `AtifCliApp` | atif-cli | `embed` | `packages/atif-cli/src/atif_cli/app.py:766` |
 | `AtifCliApp` | atif-cli | `search` | `packages/atif-cli/src/atif_cli/app.py:860` |
 | `AtifConverter` | atif-converter | `convert_and_audit` | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105` |
@@ -81,28 +81,29 @@ console script declared at `packages/atif-cli/pyproject.toml:42`.
 | `CorpusMaterializer` | atif-corpus | `read_watermark` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:160` |
 | `CorpusMaterializer` | atif-corpus | `scan_source_root` | `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:211` |
 | `CorpusMaterializer` | atif-corpus | `build_plan` | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159` |
-| `DuckRegistry` | atif-duck | `register` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212` |
-| `DuckRegistry` | atif-duck | `register_views` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:317` |
-| `DuckRegistry` | atif-duck | `register_vss` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:830` |
-| `DuckRegistry` | atif-duck | `register_macros` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:989` |
-| `DuckRegistry` | atif-duck | `build_examples` | `packages/atif-duck/src/atif_duck/domain/examples.py:178` |
+| `DuckRegistry` | atif-duck | `register` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1679` |
+| `DuckRegistry` | atif-duck | `register_views` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:767` |
+| `DuckRegistry` | atif-duck | `register_vss` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1273` |
+| `DuckRegistry` | atif-duck | `register_macros` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1452` |
+| `DuckRegistry` | atif-duck | `register_authorship` | `packages/atif-duck/src/atif_duck/infrastructure/authorship.py:38` |
+| `DuckRegistry` | atif-duck | `build_examples` | `packages/atif-duck/src/atif_duck/domain/examples.py:191` |
 | `EmbedBackfill` | atif-embed | `run_backfill` | `packages/atif-embed/src/atif_embed/application/embed.py:61` |
 | `EmbedBackfill` | atif-embed | `embed_query` | `packages/atif-embed/src/atif_embed/application/embed.py:265` |
 | `EmbedBackfill` | atif-embed | `discover_unembedded` | `packages/atif-embed/src/atif_embed/application/embed.py:43` |
 | `AnalyticsPipelines` | atif-analytics | `run_analyze` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:36` |
-| `AnalyticsPipelines` | atif-analytics | `run_clustering` | `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py:50` |
-| `AnalyticsPipelines` | atif-analytics | `classify_sessions` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:342` |
-| `AnalyticsPipelines` | atif-analytics | `detect_conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:337` |
-| `AnalyticsPipelines` | atif-analytics | `build_provider` | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:32` |
+| `AnalyticsPipelines` | atif-analytics | `classify_sessions` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368` |
+| `AnalyticsPipelines` | atif-analytics | `detect_conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:350` |
+| `AnalyticsPipelines` | atif-analytics | `build_provider` | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36` |
 | `ModelRegistry` | atif-models | `resolve` | `packages/atif-models/src/atif_models/domain/registry.py:109` |
 | `ModelRegistry` | atif-models | `spec_for` | `packages/atif-models/src/atif_models/infrastructure/settings.py:79` |
 | `ModelRegistry` | atif-models | `estimate_cost` | `packages/atif-models/src/atif_models/domain/registry.py:125` |
 | `ModelRegistry` | atif-models | `classify_structured` | `packages/atif-models/src/atif_models/domain/ports.py:123`, the sole method of the `LlmStructuredProvider` Protocol at `packages/atif-models/src/atif_models/domain/ports.py:116`, implemented by `OpenAiBedrockProvider` at `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:217` |
 
-`register` calls the other three registrars in binding order at
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1267-1276`;
-`run_analyze` dispatches the five LLM stages from a table at
-`packages/atif-analytics/src/atif_analytics/application/analyze.py:154-160`.
+`register` calls the other registrars, then the analytics registrars, in
+binding order at
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1740-1752`;
+`run_analyze` dispatches the LLM stages from a table at
+`packages/atif-analytics/src/atif_analytics/application/analyze.py:97-102`.
 
 ### Relationships
 
@@ -150,14 +151,14 @@ atif-models", which grants reach that atif-cli does not take.
 | --- | --- |
 | `CorpusMaterializer -> AtifConverter` | `materialize` takes a `ConverterPort` parameter (`packages/atif-corpus/src/atif_corpus/application/materialize.py:480`), the Protocol at `packages/atif-corpus/src/atif_corpus/domain/ports.py:41`. `AtifCliApp` constructs the `RealConverter` adapter (`packages/atif-cli/src/atif_cli/converter_adapter.py:44`) and injects it at `packages/atif-cli/src/atif_cli/app.py:399`; that adapter's docstring names the independence contract as its reason to live in atif-cli (`packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`). |
 | `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:87`, over the `docs/CONTRACT.md` corpus layout — stated at `pyproject.toml:458-460`. |
-| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:138`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:74`. |
+| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`. |
 | `AtifCliApp -> ModelRegistry` | `AtifCliApp` never reaches atif-models. Model selection happens inside `AnalyticsPipelines`, whose `build_provider` resolves a spec through `spec_for` (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:44`) — so no model id is written down outside atif-models. |
 
 | Absent edge | How the same work reaches across the boundary |
 | --- | --- |
 | `CorpusMaterializer -> AtifConverter` | `materialize` takes a `ConverterPort` parameter (`packages/atif-corpus/src/atif_corpus/application/materialize.py:480`), the Protocol at `packages/atif-corpus/src/atif_corpus/domain/ports.py:41`. `AtifCliApp` constructs the `RealConverter` adapter (`packages/atif-cli/src/atif_cli/converter_adapter.py:44`) and injects it at `packages/atif-cli/src/atif_cli/app.py:399`; that adapter's docstring names the independence contract as its reason to live in atif-cli (`packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`). |
 | `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:87`, over the `docs/CONTRACT.md` corpus layout — stated at `pyproject.toml:458-460`. |
-| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:138`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:74`. |
+| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`. |
 
 ## See also
 

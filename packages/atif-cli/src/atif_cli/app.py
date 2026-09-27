@@ -1297,35 +1297,28 @@ def analyze(
     max_sessions: Annotated[int | None, cyclopts.Parameter(name="--max-sessions")] = None,
     max_cost_usd: Annotated[float | None, cyclopts.Parameter(name="--max-cost-usd")] = None,
     no_dry_run: Annotated[bool, cyclopts.Parameter(name="--no-dry-run")] = False,
-    structural_only: bool = False,
     llm_only: bool = False,
-    skip_cluster: bool = False,
-    skip_terms: bool = False,
-    skip_community: bool = False,
     skip_classify: bool = False,
-    skip_trajectory: bool = False,
     skip_conflicts: bool = False,
     skip_friction: bool = False,
     skip_perceived: bool = False,
-    force_cluster: bool = False,
-    force_community: bool = False,
     corpus_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
-    """Run the analytics pipelines: cluster/terms/community + LLM classify/trajectory/conflicts/friction/perceived.
+    """Run the four LLM analytics pipelines: classify, conflicts, friction, perceived.
 
     Defaults to a DRY RUN (plan dicts + cost estimates, zero LLM spend);
-    pass ``--no-dry-run`` to execute the LLM stages. ``--structural-only`` /
-    ``--llm-only`` select the cron lanes; ``--skip-<stage>`` subtracts
-    individual stages.
+    pass ``--no-dry-run`` to execute them. ``--skip-<stage>`` subtracts
+    individual stages. The deterministic surfaces (``user_steps``,
+    ``human_turns``, ``session_outcomes``) are views, so they need no run.
 
     Parameters
     ----------
     since_days
-        Restrict LLM stages to sessions whose last step is within N days
-        (default 30; structural stages always run over the full store).
+        Restrict the stages to sessions whose last step is within N days
+        (default 30).
     limit
-        Cap the number of sessions (newest-first) per LLM stage.
+        Cap the number of sessions (newest-first) per stage.
     max_sessions
         Hard per-run session ceiling per LLM pipeline (newest-first wins);
         overrides ``ATIF_SQL_LLM_MAX_SESSIONS_PER_RUN`` (default 50).
@@ -1336,22 +1329,19 @@ def analyze(
         the summary flags ``budget_exhausted``.
     no_dry_run
         Execute the LLM stages for real (costs money).
-    structural_only
-        Run only cluster/terms/community (the :17 cron lane).
     llm_only
-        Run only classify/trajectory/conflicts/friction/perceived (the
-        nightly lane).
-    skip_cluster, skip_terms, skip_community, skip_classify,
-    skip_trajectory, skip_conflicts, skip_friction, skip_perceived
+        Accepted and ignored: since the structural stages were cut
+        (2026-09-27) every stage is an LLM stage. Kept so existing crontab
+        lines and scripts keep parsing.
+    skip_classify, skip_conflicts, skip_friction, skip_perceived
         Opt out of one stage.
-    force_cluster, force_community
-        Recompute even when the mtime sidecar says the input is unchanged.
     corpus_root
         Override the materialized corpus root.
     fmt
         Summary format; ``auto`` = JSON on a pipe.
     """
     _refuse_root("analyze", fmt)
+    del llm_only  # a no-op flag; see the docstring
 
     from atif_analytics.application.analyze import run_analyze
     from atif_analytics.infrastructure.settings import AnalyticsSettings
@@ -1377,18 +1367,10 @@ def analyze(
         since_days=since_days,
         limit=limit,
         dry_run=not no_dry_run,
-        structural_only=structural_only,
-        llm_only=llm_only,
-        skip_cluster=skip_cluster,
-        skip_terms=skip_terms,
-        skip_community=skip_community,
         skip_classify=skip_classify,
-        skip_trajectory=skip_trajectory,
         skip_conflicts=skip_conflicts,
         skip_friction=skip_friction,
         skip_perceived=skip_perceived,
-        force_cluster=force_cluster,
-        force_community=force_community,
     )
     emit_json(summary, fmt)
 
@@ -1799,34 +1781,51 @@ def schema(
     *,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
-    """List every registered view (with columns) and every macro signature.
+    """List every view (with columns) and every macro signature, with what each requires.
 
     The canonical catalog for composing ``query`` calls. Answers from the
-    static :data:`atif_duck.domain.catalog.VIEW_SCHEMA` /
-    :data:`~atif_duck.domain.catalog.MACRO_SIGNATURES` dicts — no DuckDB
-    import, no connection, no view registration; sub-50ms by construction
-    (drift against the real DDL is caught by atif-duck's CI tests).
-    """
-    from atif_duck.domain.catalog import MACRO_SIGNATURES, VIEW_SCHEMA
+    static :mod:`atif_duck.domain.catalog` dicts (core :data:`VIEW_SCHEMA`
+    and :data:`MACRO_SIGNATURES`, then :data:`ANALYTICS_VIEW_SCHEMA` and
+    :data:`ANALYTICS_MACRO_SIGNATURES`) with no DuckDB import, no
+    connection, no view registration; sub-50ms by construction (drift
+    against the real DDL is caught by atif-duck's CI tests).
 
+    Each object carries ``requires``: ``core`` binds on any corpus,
+    ``analytics`` once ``atif-sql analyze`` has written its parquet, ``vss``
+    once ``atif-sql embed`` has built the store.
+    """
+    from atif_duck.domain.catalog import (
+        ANALYTICS_MACRO_SIGNATURES,
+        ANALYTICS_VIEW_SCHEMA,
+        MACRO_SIGNATURES,
+        VIEW_SCHEMA,
+    )
+    from atif_duck.domain.examples import object_requires
+
+    views = {**VIEW_SCHEMA, **ANALYTICS_VIEW_SCHEMA}
+    macros = {**MACRO_SIGNATURES, **ANALYTICS_MACRO_SIGNATURES}
     examples_hint = "tested example queries: atif-sql examples (or: atif-sql query --examples)"
     if resolve_format(fmt) is OutputFormat.TABLE:
-        for name, cols in VIEW_SCHEMA.items():
-            print(f"\n{name} ({len(cols)} cols)")
+        for name, cols in views.items():
+            print(f"\n{name} ({len(cols)} cols, requires: {object_requires(name)})")
             for col, col_type in cols:
                 print(f"  {col:<28} {col_type}")
-        print(f"\nMacros ({len(MACRO_SIGNATURES)})")
-        for macro, params in MACRO_SIGNATURES.items():
-            print(f"  {macro}({', '.join(params)})")
+        print(f"\nMacros ({len(macros)})")
+        for macro, params in macros.items():
+            call = f"{macro}({', '.join(params)})"
+            print(f"  {call:<44} requires: {object_requires(macro)}")
         print(f"\n{examples_hint}")
         return
     emit_json(
         {
             "views": {
-                name: [{"column": c, "type": t} for c, t in cols]
-                for name, cols in VIEW_SCHEMA.items()
+                name: [{"column": c, "type": t} for c, t in cols] for name, cols in views.items()
             },
-            "macros": [{"name": n, "params": list(p)} for n, p in MACRO_SIGNATURES.items()],
+            "view_requires": {name: object_requires(name) for name in views},
+            "macros": [
+                {"name": n, "params": list(p), "requires": object_requires(n)}
+                for n, p in macros.items()
+            ],
             "examples_hint": examples_hint,
         },
         fmt,

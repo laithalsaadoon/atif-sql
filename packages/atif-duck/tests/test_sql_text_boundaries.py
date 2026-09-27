@@ -15,7 +15,7 @@ Three properties, each pinned behaviorally and then structurally:
 * The two statement kinds DuckDB will not prepare (``ATTACH``, the producer's
   one-row session projection) still go through ``sql_literal``; a test each
   fails the moment that wrapping is removed. The AST audit in
-  ``sql_text_audit`` then proves every other placeholder in the four SQL
+  ``sql_text_audit`` then proves every other placeholder in the SQL
   modules resolves to a constant, a projection call, or ``sql_literal``, and
   a planted ``{user_input}`` is caught.
 """
@@ -43,11 +43,13 @@ _PACKAGES_DIR = Path(__file__).resolve().parents[2]
 _DUCK_INFRA = _PACKAGES_DIR / "atif-duck" / "src" / "atif_duck" / "infrastructure"
 _EMBED_INFRA = _PACKAGES_DIR / "atif-embed" / "src" / "atif_embed" / "infrastructure"
 
-#: The four modules that build SQL text.
+#: The modules that build SQL text.
 SQL_MODULES: dict[str, Path] = {
     "registry": _DUCK_INFRA / "registry.py",
     "columnar": _DUCK_INFRA / "columnar.py",
     "analytics": _DUCK_INFRA / "analytics.py",
+    "authorship": _DUCK_INFRA / "authorship.py",
+    "authorship_rules": _DUCK_INFRA.parent / "domain" / "authorship.py",
     "corpus_text_rows": _EMBED_INFRA / "corpus_text_rows.py",
 }
 
@@ -276,8 +278,8 @@ class TestAdversarialContentIsData:
             params=[ADVERSARIAL_SESSION, INJECTION],
         ).write_parquet(str(analytics / "part-0.parquet"))
         register(con, hostile_root)
-        assert _rows(con, "SELECT goal, autonomy FROM session_classifications") == [
-            (INJECTION, "L2")
+        assert _rows(con, "SELECT goal, category FROM session_classifications") == [
+            (INJECTION, "build")
         ]
         assert _rows(con, "SELECT goal FROM session_goals") == [(INJECTION,)]
 

@@ -4,7 +4,7 @@
 
 Companion surface for ``scripts/atif-sql-refresh.sh``. Two commands:
 
-* ``cron install`` prints the crontab block for the three lanes and NEVER
+* ``cron install`` prints the crontab block for the lanes and NEVER
   writes the crontab (CONTRACT-V2 §Cron: "no silent crontab writes") — the
   human pastes it after checking ``crontab -l``.
 * ``cron status`` reports, per lane: whether the flock is currently held
@@ -40,15 +40,20 @@ cron_app = cyclopts.App(
     help="Inspect and (manually) install the atif-sql refresh cron lanes.",
 )
 
-#: The three lanes and their crontab schedules — the single source the
+#: The lanes and their crontab schedules — the single source the
 #: ``install`` block is rendered from. Cadence rationale lives in the
-#: refresh script's header (materialize is the cheap incremental lane;
-#: structural is hourly zero-cost analytics; llm is the one that spends).
+#: refresh script's header (materialize is the cheap incremental lane; llm
+#: is the one that spends).
 LANES: tuple[tuple[str, str], ...] = (
     ("materialize", "*/10 * * * *"),
-    ("structural", "17 * * * *"),
     ("llm", "20 10 * * *"),
 )
+
+#: Lanes cut from the refresh script, with the date. The script still accepts
+#: each name and exits 0 with a one-line "lane removed" log, so a crontab
+#: line nobody deleted yet stays quiet; ``cron install`` names them so the
+#: human deletes the line.
+REMOVED_LANES: tuple[tuple[str, str], ...] = (("structural", "2026-09-27"),)
 
 #: ``date -Is`` prefix on every refresh-log line (fixed-offset ISO-8601).
 _TS = r"(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})"
@@ -77,7 +82,7 @@ class LaneStatus:
 
 
 def crontab_block(script: Path, log: Path) -> str:
-    """Render the three-lane crontab block for ``script`` logging to ``log``.
+    """Render the crontab block for ``script`` logging to ``log``.
 
     Pure. One line per lane, schedules from :data:`LANES`, stdout+stderr
     appended to the cron-side log (the script keeps its own structured log
@@ -178,7 +183,7 @@ def _resolve_script(script: Path | None) -> Path:
 
 @cron_app.command
 def install(*, script: Path | None = None) -> None:
-    """Print the crontab block for the three refresh lanes — never write it.
+    """Print the crontab block for the refresh lanes — never write it.
 
     CONTRACT-V2 §Cron: no silent crontab writes. Check ``crontab -l`` for an
     existing block, then paste this one via ``crontab -e``.
@@ -192,6 +197,8 @@ def install(*, script: Path | None = None) -> None:
     resolved = _resolve_script(script)
     log = resolved.parent / ".run" / "atif-sql-refresh.cron.log"
     print("# atif-sql refresh lanes — paste into `crontab -e` (check `crontab -l` first)")
+    for lane, removed_on in REMOVED_LANES:
+        print(f"# the {lane} lane was removed {removed_on}: delete any `{lane}` line")
     print(crontab_block(resolved, log))
 
 
@@ -291,6 +298,7 @@ def status(
 
 __all__ = [
     "LANES",
+    "REMOVED_LANES",
     "LaneRun",
     "LaneStatus",
     "cron_app",

@@ -17,7 +17,6 @@ from atif_analytics.infrastructure.parquet_cache import (
     ParquetCache,
     count_rows,
     iter_part_files,
-    replace_sessions,
 )
 from atif_analytics.infrastructure.sqlite_state import checkpointer, retry_queue
 
@@ -74,7 +73,7 @@ def test_checkpoint_none_bound_means_pending(db: Path) -> None:
 def test_checkpoint_is_per_pipeline(db: Path) -> None:
     checkpointer.mark_completed(db, pipeline="classify", rows=[("s1", T0, T0)])
     pending, _ = checkpointer.filter_unchanged(
-        [("s1", T0, T0)], pipeline="trajectory", checkpoint_db_path=db
+        [("s1", T0, T0)], pipeline="conflicts", checkpoint_db_path=db
     )
     assert pending == ["s1"]
 
@@ -148,11 +147,10 @@ def test_retry_unknown_pipeline_rejected(db: Path) -> None:
         retry_queue.enqueue(db, pipeline="nope", unit_id="s1", error="e")
 
 
-def test_pipeline_names_are_the_contract_five() -> None:
-    """The five pipelines the checkpoint and retry tables accept."""
+def test_pipeline_names_are_the_contract_four() -> None:
+    """The four pipelines the checkpoint and retry tables accept."""
     assert checkpointer.PIPELINE_NAMES == (
         "classify",
-        "trajectory",
         "conflicts",
         "user_friction",
         "perceived",
@@ -207,20 +205,6 @@ def test_sharded_write_and_read(tmp_path: Path) -> None:
     assert proj.columns == ["session_id"]
 
 
-def test_replace_sessions_drops_and_unlinks_empty_shards(tmp_path: Path) -> None:
-    target = tmp_path / "cache_dir"
-    cache = ParquetCache(target)
-    cache.write_part(_df(["a", "b"]))
-    cache.write_part(_df(["a"]))
-    removed = replace_sessions(target, key_column="session_id", session_ids=["a"])
-    assert removed == 2
-    out = cache.read_all()
-    assert out is not None
-    assert out["session_id"].to_list() == ["b"]
-    # The all-"a" shard was unlinked.
-    assert len(iter_part_files(target)) == 1
-
-
 def test_read_all_empty_returns_none(tmp_path: Path) -> None:
     assert ParquetCache(tmp_path / "nothing").read_all() is None
 
@@ -246,7 +230,6 @@ def test_torn_shard_is_skipped_by_every_reader(tmp_path: Path) -> None:
     assert out is not None
     assert out["session_id"].to_list() == ["a", "b"]
     assert count_rows(target) == 2
-    assert replace_sessions(target, key_column="session_id", session_ids=["a"]) == 1
 
 
 def test_retry_attempts_survive_concurrent_enqueues(db: Path) -> None:

@@ -29,12 +29,10 @@ uv tool install atif-sql     # the CLI on PATH
 uvx atif-sql schema          # or run it without installing
 ```
 
-Python 3.13 or newer. The install is substantial and deliberately so: 113 runtime dependencies,
-about 1.15 GiB on disk, because the analytics and vector paths carry `polars`, `pyarrow`,
-`scipy`, `scikit-learn`, `umap-learn`, `hdbscan`, `lancedb`, and `duckdb`. Prebuilt wheels cover
-CPython 3.13 on manylinux x86_64, macOS arm64, and Windows x86_64; Linux **aarch64** compiles
-`hdbscan` from source, which needs a C toolchain. Alpine and other musl targets are not
-supported. [RELEASING.md](RELEASING.md) carries the measurements.
+Python 3.13 or newer. The install is substantial and deliberately so, because the analytics and
+vector paths carry `polars`, `pyarrow`, `lancedb`, and `duckdb`. Prebuilt wheels cover CPython 3.13
+on manylinux x86_64 and aarch64, macOS arm64, and Windows x86_64. Alpine and other musl targets
+are not supported. [RELEASING.md](RELEASING.md) says how to measure the install.
 
 `atif-sql analyze`, `atif-sql embed`, and `atif-sql search` call Amazon Bedrock and cost money
 per invocation. Each one is dry-run by default and spends only when asked. Nothing else in the

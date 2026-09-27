@@ -31,8 +31,8 @@ class TestDefaults:
         assert settings.llm_family == "openai"
         assert settings.llm_region == "us-east-1"
         assert settings.llm_concurrency == 16
-        assert settings.llm_size_classify == "medium"
-        assert settings.llm_size_trajectory == "medium"
+        assert settings.llm_size_classify == "small"
+        assert not hasattr(settings, "llm_size_trajectory")
         assert settings.llm_size_conflicts == "large"
         assert settings.llm_size_friction == "small"
         assert settings.llm_size_perceived == "medium"

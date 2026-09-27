@@ -8,7 +8,7 @@ of work gets enqueued here. A later run drains the queue before starting
 fresh work, so a mid-run crash never costs the rows already paid for.
 
 One row per ``(pipeline, unit_id)``. ``unit_id`` is ``session_id`` for
-``classify`` / ``conflicts`` / ``trajectory`` and the message ``uuid`` for
+``classify`` / ``conflicts`` / ``perceived`` and the message ``uuid`` for
 ``user_friction``. Semantics are "upsert with attempt counter":
 
 - First failure  → insert with attempts=1, next_attempt_at = now + 2 min.

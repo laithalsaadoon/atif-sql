@@ -2,10 +2,16 @@
 
 """v2 analytics views + macros over the atif-analytics parquet outputs.
 
-atif-analytics writes its artifacts under ``<corpus_root>/analytics/``
-(sharded dirs for the five LLM pipelines, single files for the structural
-three); this module binds them as the 12 analytics views and 13 analytics
-macros the catalog declares.
+atif-analytics writes its artifacts under ``<corpus_root>/analytics/`` (one
+sharded dir per LLM pipeline); this module binds them as the analytics
+views and macros the catalog declares.
+
+The trajectory pipeline and the structural ones (cluster, terms,
+community) were removed on 2026-09-27, and with them ``message_trajectory``,
+``message_clusters``, ``cluster_terms``, ``session_communities``,
+``community_profile`` and the ``autonomy_trend``, ``success_rate_by_work``,
+``sentiment_arc``, ``cluster_top_terms`` and ``community_top_topics`` macros.
+Their parquets may still sit on disk in an older corpus; nothing binds them.
 
 atif-duck may not import atif-analytics (independence contract), so the
 artifact names are pinned here against the documented layout — the shape is
@@ -18,14 +24,14 @@ pipelines run, so skips log at DEBUG.
 
 Column semantics worth stating once (repeated per macro below):
 
-* ``sentiment_arc`` / ``conflicts_over_time`` join ``messages`` (the
-  edges-derived uuid-keyed view); the role column is ``m.type`` (the raw
-  record role) aliased to ``role``.
+* ``conflicts_over_time`` / ``perceived_*`` join ``messages`` (the
+  edges-derived uuid-keyed view) to recover conversation time.
 * ``conflicts_over_time``'s ``root_session_id`` equals ``session_id``: harbor
   INLINES subagent transcripts (fidelity gap 4), so one conversation is one
   session and there is no parent session to collapse onto.
-* ``friction_rate``'s user-message denominator counts user-role main-chain
-  text steps from ``steps``, so it is a STEP count, not a raw message count.
+* ``friction_rate`` / ``perceived_rate`` count their user-message
+  denominator from ``human_turns``: main-chain user steps a HUMAN wrote, so
+  Stop hook feedback, task notifications and harness text are not in it.
 """
 
 from __future__ import annotations
@@ -54,36 +60,25 @@ _ANALYTICS_READER_PREFIX: str = "v_raw_analytics_"
 #: are sharded caches (part-*.parquet); file entries are single parquets.
 _ANALYTICS_SOURCES: dict[str, str] = {
     "session_classifications": "session_classifications",
-    "message_trajectory": "message_trajectory",
     "session_conflicts": "session_conflicts",
     "user_friction": "user_friction",
     "perceived_errors": "perceived_errors",
-    "message_clusters": "clusters.parquet",
-    "cluster_terms": "cluster_terms.parquet",
-    "session_communities": "session_communities.parquet",
-    "community_profile": "community_profile.parquet",
 }
 
-#: Convenience alias projections. Every entry is ADDITIVE (``*`` first), so a
-#: query written against the parquet's own column names keeps working and the
-#: alias is a second name for the same column, never a replacement.
+#: Per-view projections; a view absent here selects ``*``.
+#:
+#: ``session_classifications`` names its columns because its shards span two
+#: schemas. Rows written before 2026-09-27 also carry the LLM ``autonomy_tier``
+#: and ``success`` labels, which were dropped as unreliable (the same outcome
+#: drew both labels hundreds of times each on one corpus). The two names
+#: survive as always-NULL compatibility columns so a downstream reader that
+#: selects them still binds; ``session_outcomes`` carries the deterministic
+#: replacement. ``category`` is an alias of ``work_category``.
 _VIEW_PROJECTIONS: dict[str, str] = {
     "session_classifications": (
-        "*, autonomy_tier AS autonomy, success AS success_outcome, work_category AS category"
-    ),
-    "message_trajectory": "*, curr_sentiment AS sentiment, is_transition AS transition",
-}
-
-#: Read-side dedup, belt-and-suspenders behind the writer's own idempotency:
-#: if duplicate ``(session_id, prev_uuid, curr_uuid)`` rows ever land across
-#: the trajectory shards, the latest ``classified_at`` wins at read time
-#: rather than the view double-counting the pair.
-_VIEW_QUALIFY: dict[str, str] = {
-    "message_trajectory": (
-        "row_number() OVER ("
-        "PARTITION BY session_id, prev_uuid, curr_uuid "
-        "ORDER BY classified_at DESC NULLS LAST"
-        ") = 1"
+        "session_id, work_category, goal, confidence, classified_at, "
+        "CAST(NULL AS VARCHAR) AS autonomy_tier, CAST(NULL AS VARCHAR) AS success, "
+        "work_category AS category"
     ),
 }
 
@@ -91,10 +86,7 @@ _VIEW_QUALIFY: dict[str, str] = {
 #: macro whose entry is unsatisfied is skipped: DuckDB binds a macro body at
 #: CREATE time, so registering it against an absent view fails outright.
 _ANALYTICS_MACRO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "autonomy_trend": ("session_classifications",),
     "work_mix": ("session_classifications",),
-    "success_rate_by_work": ("session_classifications",),
-    "sentiment_arc": ("message_trajectory",),
     "friction_counts": ("user_friction",),
     "friction_rate": ("user_friction",),
     "friction_examples": ("user_friction",),
@@ -102,8 +94,6 @@ _ANALYTICS_MACRO_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "perceived_counts": ("perceived_errors",),
     "perceived_rate": ("perceived_errors",),
     "perceived_examples": ("perceived_errors",),
-    "cluster_top_terms": ("cluster_terms",),
-    "community_top_topics": ("cluster_terms", "session_communities", "message_clusters"),
 }
 
 
@@ -146,8 +136,6 @@ def register_analytics(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> set
             )
             continue
         projection = _VIEW_PROJECTIONS.get(view_name, "*")
-        qualify = _VIEW_QUALIFY.get(view_name)
-        qualify_clause = f" QUALIFY {qualify}" if qualify else ""
         reader = f"{_ANALYTICS_READER_PREFIX}{view_name}"
         try:
             # The parquet paths never enter SQL text: the relation API takes
@@ -156,14 +144,18 @@ def register_analytics(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> set
             # inlines the reader into the view), so the file is still opened
             # per query. Not ``con.sql("... read_parquet(?)", params=...)``:
             # that shape measured about 3x the memory of a plain view.
-            con.read_parquet([str(p) for p in parts]).create_view(reader, replace=True)
-            # View name, projection and qualify clause are module constants
-            # (_ANALYTICS_SOURCES / _VIEW_PROJECTIONS / _VIEW_QUALIFY); the reader
-            # name is a constant prefix plus that view name.
+            # ``union_by_name``: shards written before and after a schema
+            # change (session_classifications, 2026-09-27) differ in columns,
+            # and a positional union would misread one as the other.
+            con.read_parquet([str(p) for p in parts], union_by_name=True).create_view(
+                reader, replace=True
+            )
+            # View name and projection are module constants (_ANALYTICS_SOURCES /
+            # _VIEW_PROJECTIONS); the reader name is a constant prefix plus that
+            # view name.
             con.execute(
                 f"CREATE OR REPLACE VIEW {view_name} AS "  # noqa: S608  # nosec B608 - constants only; paths are bound into the reader relation
-                f"SELECT {projection} FROM {reader}"
-                f"{qualify_clause};"
+                f"SELECT {projection} FROM {reader};"
             )
             logger.debug("Registered analytics view: {}", view_name)
             registered.add(view_name)
@@ -235,39 +227,17 @@ def register_analytics_macros(
     con: duckdb.DuckDBPyConnection,
     registered_views: set[str],
 ) -> None:
-    """Create the 13 analytics macros whose backing views are registered.
+    """Create the analytics macros whose backing views are registered.
 
     Every signature must match its ``ANALYTICS_MACRO_SIGNATURES`` entry in
     :mod:`atif_duck.domain.catalog`; the drift test parses this function's
     DDL text and fails on any divergence.
 
-    Must run after :func:`register_analytics` AND the base
-    ``register_views`` — several macros join the transcript-derived views
-    (``sessions``, ``steps``, ``messages``).
+    Must run after :func:`register_analytics`, the base ``register_views``
+    and ``register_authorship`` — several macros join the transcript-derived
+    views (``messages``, ``human_turns``).
     """
     analytics_macros: list[tuple[str, str]] = [
-        # Time series: autonomy tier mix over rolling windows. Buckets by
-        # ``sessions.started_at`` (conversation time), NOT ``classified_at``
-        # (classifier run time). The two clocks are unrelated: a one-shot
-        # backfill stamps every row with the same classified_at, which would
-        # collapse the whole corpus into a single bucket.
-        (
-            "autonomy_trend",
-            """
-            CREATE OR REPLACE MACRO autonomy_trend(window_days) AS TABLE (
-                SELECT
-                    date_trunc('week', s.started_at) AS week,
-                    sc.autonomy_tier,
-                    count(*) AS n
-                FROM session_classifications sc
-                JOIN sessions s
-                  ON s.session_id = sc.session_id
-                WHERE s.started_at >= current_timestamp - (window_days * INTERVAL 1 DAY)
-                GROUP BY 1, 2
-                ORDER BY 1, 2
-            );
-            """,
-        ),
         # Work-category mix in the last N days.
         (
             "work_mix",
@@ -278,60 +248,6 @@ def register_analytics_macros(
                 WHERE classified_at >= current_timestamp - (since_days * INTERVAL 1 DAY)
                 GROUP BY 1
                 ORDER BY n DESC
-            );
-            """,
-        ),
-        # Success/failure/partial rates broken down by work category.
-        # DENOMINATOR = KNOWN outcomes, not all sessions. ``unknown``
-        # correlates with work category, so folding it into the denominator
-        # would depress exactly the categories it concentrates in. The three
-        # rates divide by ``known_sessions`` and ``unknown_fraction`` is its
-        # own column, which a reader must check before trusting the rates.
-        (
-            "success_rate_by_work",
-            """
-            CREATE OR REPLACE MACRO success_rate_by_work(since_days) AS TABLE (
-                SELECT
-                    work_category,
-                    count(*) AS sessions,
-                    count(*) FILTER (WHERE success != 'unknown') AS known_sessions,
-                    count(*) FILTER (WHERE success = 'unknown')::DOUBLE
-                        / NULLIF(count(*), 0) AS unknown_fraction,
-                    count(*) FILTER (WHERE success = 'success')::DOUBLE
-                        / NULLIF(count(*) FILTER (WHERE success != 'unknown'), 0)
-                        AS success_rate,
-                    count(*) FILTER (WHERE success = 'failure')::DOUBLE
-                        / NULLIF(count(*) FILTER (WHERE success != 'unknown'), 0)
-                        AS failure_rate,
-                    count(*) FILTER (WHERE success = 'partial')::DOUBLE
-                        / NULLIF(count(*) FILTER (WHERE success != 'unknown'), 0)
-                        AS partial_rate
-                FROM session_classifications
-                WHERE classified_at >= current_timestamp - (since_days * INTERVAL 1 DAY)
-                GROUP BY 1
-                ORDER BY sessions DESC
-            );
-            """,
-        ),
-        # Sentiment arc for one session, chronological. Joins the anchor
-        # turn (curr_uuid) back to the edges-derived ``messages`` view for
-        # the conversation timestamp; ``m.type`` carries the raw role.
-        (
-            "sentiment_arc",
-            """
-            CREATE OR REPLACE MACRO sentiment_arc(sid) AS TABLE (
-                SELECT m.ts,
-                       m.type AS role,
-                       mt.curr_sentiment,
-                       mt.delta,
-                       mt.transition_kind,
-                       mt.is_transition,
-                       mt.confidence
-                  FROM messages m
-                  JOIN message_trajectory mt
-                    ON m.uuid = mt.curr_uuid
-                 WHERE m.session_id = sid
-                 ORDER BY m.ts
             );
             """,
         ),
@@ -357,9 +273,9 @@ def register_analytics_macros(
             );
             """,
         ),
-        # Per-session friction pressure vs the user message count. The
-        # denominator counts user-role main-chain text STEPS from ``steps``,
-        # so it is a step count and not a raw transcript message count.
+        # Per-session friction pressure vs the human turn count. The
+        # denominator counts ``human_turns`` (main-chain user steps a human
+        # wrote), so hook feedback and harness text never dilute the rate.
         (
             "friction_rate",
             """
@@ -379,15 +295,11 @@ def register_analytics_macros(
                      GROUP BY session_id
                 ),
                 user_msgs AS (
-                    SELECT s.session_id,
+                    SELECT ht.session_id,
                            count(*) AS n_user_msgs
-                      FROM steps s
-                     WHERE s.source = 'user'
-                       AND NOT s.is_sidechain
-                       AND s.message IS NOT NULL
-                       AND length(s.message) >= 1
-                       AND (since_days IS NULL
-                            OR s.ts >= current_timestamp - (since_days * INTERVAL 1 DAY))
+                      FROM human_turns ht
+                     WHERE since_days IS NULL
+                        OR ht.ts >= current_timestamp - (since_days * INTERVAL 1 DAY)
                      GROUP BY 1
                 )
                 SELECT h.session_id,
@@ -474,9 +386,8 @@ def register_analytics_macros(
             );
             """,
         ),
-        # Per-session perceived-error pressure vs the user message count
-        # (friction_rate precedent: the denominator counts user-role
-        # main-chain text steps). Sessions with zero perceived errors do
+        # Per-session perceived-error pressure vs the human turn count
+        # (friction_rate precedent: the denominator counts ``human_turns``). Sessions with zero perceived errors do
         # not appear — LEFT JOIN onto sessions and coalesce for the
         # full-population rate.
         (
@@ -497,15 +408,11 @@ def register_analytics_macros(
                      GROUP BY pe.session_id
                 ),
                 user_msgs AS (
-                    SELECT s.session_id,
+                    SELECT ht.session_id,
                            count(*) AS n_user_msgs
-                      FROM steps s
-                     WHERE s.source = 'user'
-                       AND NOT s.is_sidechain
-                       AND s.message IS NOT NULL
-                       AND length(s.message) >= 1
-                       AND (since_days IS NULL
-                            OR s.ts >= current_timestamp - (since_days * INTERVAL 1 DAY))
+                      FROM human_turns ht
+                     WHERE since_days IS NULL
+                        OR ht.ts >= current_timestamp - (since_days * INTERVAL 1 DAY)
                      GROUP BY 1
                 )
                 SELECT h.session_id,
@@ -531,50 +438,6 @@ def register_analytics_macros(
                  WHERE signal = signal_name
                  ORDER BY confidence DESC, detected_at DESC
                  LIMIT n
-            );
-            """,
-        ),
-        # Top-N TF-IDF terms for a single cluster.
-        (
-            "cluster_top_terms",
-            """
-            CREATE OR REPLACE MACRO cluster_top_terms(cid, n) AS TABLE (
-                SELECT term, weight, rank
-                FROM cluster_terms
-                WHERE cluster_id = cid
-                ORDER BY rank
-                LIMIT n
-            );
-            """,
-        ),
-        # Top cluster_ids within one community, ranked by contributed
-        # messages, each with its top 5 TF-IDF terms.
-        (
-            "community_top_topics",
-            """
-            CREATE OR REPLACE MACRO community_top_topics(cid, n) AS TABLE (
-                WITH community_msgs AS (
-                    SELECT m.uuid AS uuid
-                      FROM messages m
-                      JOIN session_communities sc
-                        ON m.session_id = sc.session_id
-                     WHERE sc.community_id = cid
-                ),
-                cluster_counts AS (
-                    SELECT mc.cluster_id, count(*) AS n_msgs
-                      FROM message_clusters mc
-                      JOIN community_msgs cm USING (uuid)
-                     WHERE mc.cluster_id >= 0
-                     GROUP BY mc.cluster_id
-                )
-                SELECT cc.cluster_id, cc.n_msgs,
-                       (SELECT string_agg(term, ', ' ORDER BY rank)
-                          FROM cluster_terms ct
-                         WHERE ct.cluster_id = cc.cluster_id
-                           AND ct.rank <= 5) AS top_terms
-                  FROM cluster_counts cc
-                  ORDER BY n_msgs DESC
-                  LIMIT n
             );
             """,
         ),

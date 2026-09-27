@@ -17,6 +17,7 @@ import pytest
 from atif_cli.app import app
 from atif_cli.cron import (
     LANES,
+    REMOVED_LANES,
     LaneRun,
     crontab_block,
     install,
@@ -42,19 +43,23 @@ class TestCrontabBlock:
     def test_one_line_per_lane_with_schedule_script_and_log(self) -> None:
         block = crontab_block(Path("/repo/scripts/atif-sql-refresh.sh"), Path("/repo/log"))
         lines = block.splitlines()
-        assert len(lines) == len(LANES) == 3
+        assert len(lines) == len(LANES) == 2
         for line, (lane, schedule) in zip(lines, LANES, strict=True):
             assert line.startswith(schedule)
             assert f"/repo/scripts/atif-sql-refresh.sh {lane} " in line
             assert line.endswith(">> /repo/log 2>&1")
 
     def test_schedules_match_contract(self) -> None:
-        # CONTRACT-V2 §Cron: materialize */10, structural :17, llm nightly 10:20Z.
+        # CONTRACT-V2 §Cron: materialize */10, llm nightly 10:20Z (the
+        # structural :17 lane was removed 2026-09-27).
         assert dict(LANES) == {
             "materialize": "*/10 * * * *",
-            "structural": "17 * * * *",
             "llm": "20 10 * * *",
         }
+
+    def test_removed_lanes_are_not_scheduled(self) -> None:
+        assert dict(REMOVED_LANES) == {"structural": "2026-09-27"}
+        assert not set(dict(REMOVED_LANES)) & set(dict(LANES))
 
     def test_block_never_contains_crontab_write(self) -> None:
         block = crontab_block(Path("/s.sh"), Path("/l"))
@@ -67,7 +72,7 @@ class TestParseLastRuns:
         "2026-08-23T10:00:01+00:00 interactive: materialize ok",
         "2026-08-23T10:00:02+00:00 refresh complete (mode=materialize, exit=0)",
         "2026-08-23T10:10:02+00:00 refresh complete (mode=materialize, exit=1)",
-        "2026-08-23T10:17:00+00:00 [structural] analytics not yet installed, skipping",
+        "2026-08-23T10:17:00+00:00 [structural] lane removed 2026-09-27; delete the :17 line",
         "2026-08-23T10:20:00+00:00 skip[llm]: a llm run is already going (pid 4242)",
         "2026-08-23T11:20:00+00:00 refresh complete (mode=llm, exit=0)",
     )
@@ -88,7 +93,7 @@ class TestParseLastRuns:
 
     def test_lane_with_no_events_is_absent(self) -> None:
         runs = parse_last_runs(self._LOG)
-        assert "structural" not in runs  # the guard line is not a completion
+        assert "structural" not in runs  # the removal line is not a completion
 
     def test_empty_log(self) -> None:
         assert parse_last_runs([]) == {}
@@ -133,6 +138,8 @@ class TestInstallCommand:
         assert "*/10 * * * *" in out
         assert "20 10 * * *" in out
         assert "crontab -l" in out  # points the human at the check-first step
+        assert "structural lane was removed 2026-09-27" in out
+        assert "atif-sql-refresh.sh structural" not in out
 
     def test_discovers_repo_script_by_default(self, capsys: pytest.CaptureFixture[str]) -> None:
         # The editable install resolves back into this worktree, whose
@@ -149,14 +156,14 @@ class TestStatusCommand:
         status(script=scripts_tree, fmt=OutputFormat.JSON)
         payload = json.loads(capsys.readouterr().out)
         lanes = {lane["lane"]: lane for lane in payload["lanes"]}
-        assert set(lanes) == {"materialize", "structural", "llm"}
+        assert set(lanes) == {"materialize", "llm"}
         # No lock files exist in the tmp tree -> every lane idle.
         assert all(not lane["lock_held"] for lane in lanes.values())
         assert lanes["materialize"]["last_complete"] == {
             "timestamp": "2026-08-23T10:10:02+00:00",
             "exit": 0,
         }
-        assert lanes["structural"]["last_complete"] is None
+        assert lanes["llm"]["last_complete"] is None
         assert lanes["llm"]["last_skip"] == "2026-08-23T10:20:00+00:00"
         assert payload["tail"], "tail should carry the trailing log lines"
 
@@ -167,7 +174,7 @@ class TestStatusCommand:
         out = capsys.readouterr().out
         assert "materialize" in out
         assert "idle" in out
-        assert "never" in out  # structural + llm have no completion yet
+        assert "never" in out  # llm has no completion yet
 
     def test_missing_log_reports_all_lanes_never_run(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

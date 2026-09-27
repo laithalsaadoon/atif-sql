@@ -20,6 +20,8 @@
 #       against a PATH-shim atif-sql whose --help lacks `analyze`, then again
 #       against one that has it, and assert both behaviors. A guard that was
 #       never seen firing is hope, not a guard;
+#   (e2) the removed `structural` lane exits 0 with its one "lane removed"
+#       line and touches nothing: no analyze call, no lock, no memory scope;
 #   (g) the Codex pass's own guards fire AND stand down: skipped against a CLI
 #       with no `--agent`, run against one that has it, and refused when
 #       ATIF_SQL_CORPUS_ROOT is pinned to the Claude corpus;
@@ -182,13 +184,15 @@ fi
 
 # ---------------------------------------------------------------------------
 # (e) THE GUARD MUST FIRE. Simulate an atif-sql WITHOUT `analyze` via a PATH
-#     shim and run the real refresh script against it: the structural lane
-#     must exit 0 and log the documented skip line. Then simulate one WITH
-#     `analyze` and assert the lane actually invokes it — proving the guard
-#     can both fire and stand down.
+#     shim and run the real refresh script against it: the llm lane must exit
+#     0 and log the documented skip line. Then simulate one WITH `analyze` and
+#     assert the lane actually invokes it — proving the guard can both fire
+#     and stand down. Every analyze below hits a shim, never Bedrock, and the
+#     token file points nowhere so no credential reaches a shim's environment.
 # ---------------------------------------------------------------------------
 shim_root="$(mktemp -d)"
 trap 'rm -rf "$shim_root"' EXIT
+export ATIF_SQL_BEDROCK_TOKEN_FILE="$shim_root/no-token"
 
 make_shim() {
   # $1 = shim dir, $2 = "with" | "without" (analyze in --help)
@@ -215,17 +219,17 @@ run_dir="$shim_root/without-run"
 PATH="$shim_root/without:$PATH" \
   ATIF_SQL_CLI="$shim_root/without/atif-sql" \
   ATIF_SQL_REFRESH_RUN_DIR="$run_dir" \
-  bash "$SCRIPT" structural
+  bash "$SCRIPT" llm
 rc=$?
 if [ "$rc" = 0 ] && grep -q 'analytics not yet installed, skipping' "$run_dir/atif-sql-refresh.log" 2>/dev/null; then
-  ok "absence guard fires: structural lane exits 0 and logs the skip when analyze is missing"
+  ok "absence guard fires: llm lane exits 0 and logs the skip when analyze is missing"
 else
   fail "absence guard did NOT fire cleanly (exit=$rc; expected 0 + logged skip line)"
 fi
 if [ -e "$shim_root/without/calls.log" ]; then
-  fail "structural lane invoked analyze despite the CLI not advertising it"
+  fail "llm lane invoked analyze despite the CLI not advertising it"
 else
-  ok "structural lane never invoked the missing analyze subcommand"
+  ok "llm lane never invoked the missing analyze subcommand"
 fi
 
 # With analyze: the guard must stand down and the lane must do real work.
@@ -234,13 +238,33 @@ run_dir="$shim_root/with-run"
 PATH="$shim_root/with:$PATH" \
   ATIF_SQL_CLI="$shim_root/with/atif-sql" \
   ATIF_SQL_REFRESH_RUN_DIR="$run_dir" \
-  bash "$SCRIPT" structural
+  bash "$SCRIPT" llm
 rc=$?
-if [ "$rc" = 0 ] && grep -q -- '--structural-only' "$shim_root/with/calls.log" 2>/dev/null; then
-  ok "guard stands down: structural lane invokes analyze --structural-only when present"
+if [ "$rc" = 0 ] && grep -q -- 'analyze --no-dry-run' "$shim_root/with/calls.log" 2>/dev/null; then
+  ok "guard stands down: llm lane invokes analyze --no-dry-run when present"
 else
-  fail "structural lane did not invoke analyze when the CLI advertises it (exit=$rc)"
+  fail "llm lane did not invoke analyze when the CLI advertises it (exit=$rc)"
 fi
+
+# (e2) The removed structural lane, both spellings, against the shim that HAS
+# analyze: exit 0, the one removal line, and nothing else — no analyze call,
+# no lock file, no "capped" scope line.
+for spelling in structural struct; do
+  rm -f "$shim_root/with/calls.log"
+  run_dir="$shim_root/removed-$spelling-run"
+  ATIF_SQL_CLI="$shim_root/with/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$run_dir" \
+    bash "$SCRIPT" "$spelling"
+  rc=$?
+  lines="$(wc -l < "$run_dir/atif-sql-refresh.log" 2>/dev/null || echo 0)"
+  if [ "$rc" = 0 ] && [ "$lines" = 1 ] \
+     && grep -q '\[structural\] lane removed 2026-09-27' "$run_dir/atif-sql-refresh.log" \
+     && [ ! -e "$shim_root/with/calls.log" ] \
+     && ! ls "$run_dir"/*.lock >/dev/null 2>&1; then
+    ok "removed lane: '$spelling' exits 0 with one 'lane removed' line and runs nothing"
+  else
+    fail "removed lane: '$spelling' exit=$rc log_lines=$lines (want 0, 1 removal line, no analyze call, no lock)"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # (f) TERMINAL EXIT SUPPRESSION MUST FIRE. Shim an atif-sql whose `embed`
@@ -400,7 +424,7 @@ PATH="$shim_root/codex-with:$PATH" \
   ATIF_SQL_CLI="$shim_root/codex-with/atif-sql" \
   ATIF_SQL_REFRESH_RUN_DIR="$shim_root/codex-status-run" \
   CODEX_HOME="$codex_home" \
-  bash "$SCRIPT" structural
+  bash "$SCRIPT" llm
 if grep -q 'corpus status: codex' "$shim_root/codex-status-run/atif-sql-refresh.log" 2>/dev/null \
    && grep -q -- 'status --agent codex' "$shim_root/codex-with/calls.log" 2>/dev/null; then
   ok "the freshness dump reports the Codex corpus"
@@ -421,7 +445,7 @@ fi
 # (h) THE MEMORY CAP MUST BE REAL. The shim's `analyze` records the cgroup it
 #     actually runs in and that cgroup's memory.max / memory.swap.max, read
 #     while the scope is alive. Default: a per-lane atif-sql-refresh-* scope
-#     capped at 24G with no swap. `off`: no such scope. Malformed: exit 64,
+#     capped at the llm lane's 8G with no swap. `off`: no such scope. Malformed: exit 64,
 #     FATAL in the lane log, analyze never called. Needs a user manager; the
 #     2026-09-25 outage is why the cap exists, so a host without one fails here.
 # ---------------------------------------------------------------------------
@@ -442,19 +466,19 @@ chmod +x "$cap_dir/atif-sql"
 run_cap_tick() {
   rm -f "$cap_dir/calls.log"
   ATIF_SQL_CLI="$cap_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$cap_dir/run" \
-    ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" structural
+    ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" llm
 }
 
 run_cap_tick; rc=$?
 read -r cap_cg cap_max cap_swap < <(head -n 1 "$cap_dir/calls.log" 2>/dev/null)
-if [ "$rc" = 0 ] && [[ "${cap_cg:-}" == */atif-sql-refresh-structural-*.scope ]] \
-   && [ "${cap_max:-}" = $((24 * 1024 * 1024 * 1024)) ] && [ "${cap_swap:-}" = 0 ]; then
-  ok "memory cap: structural lane ran in ${cap_cg##*/} with memory.max=24G, swap 0"
+if [ "$rc" = 0 ] && [[ "${cap_cg:-}" == */atif-sql-refresh-llm-*.scope ]] \
+   && [ "${cap_max:-}" = $((8 * 1024 * 1024 * 1024)) ] && [ "${cap_swap:-}" = 0 ]; then
+  ok "memory cap: llm lane ran in ${cap_cg##*/} with memory.max=8G, swap 0"
 else
-  fail "memory cap missing: exit=$rc cgroup='${cap_cg:-}' memory.max='${cap_max:-}' swap.max='${cap_swap:-}' (want atif-sql-refresh-structural-*.scope, $((24 * 1024 * 1024 * 1024)), 0)"
+  fail "memory cap missing: exit=$rc cgroup='${cap_cg:-}' memory.max='${cap_max:-}' swap.max='${cap_swap:-}' (want atif-sql-refresh-llm-*.scope, $((8 * 1024 * 1024 * 1024)), 0)"
 fi
 
-ATIF_SQL_REFRESH_MEMORY_MAX_STRUCTURAL=off run_cap_tick; rc=$?
+ATIF_SQL_REFRESH_MEMORY_MAX_LLM=off run_cap_tick; rc=$?
 read -r cap_cg _ < <(head -n 1 "$cap_dir/calls.log" 2>/dev/null)
 if [ "$rc" = 0 ] && [ -n "${cap_cg:-}" ] && [[ "$cap_cg" != *atif-sql-refresh-* ]]; then
   ok "memory cap: 'off' runs the lane uncapped"
@@ -462,9 +486,9 @@ else
   fail "memory cap: 'off' did not run the lane outside a refresh scope (exit=$rc cgroup='${cap_cg:-}')"
 fi
 
-ATIF_SQL_REFRESH_MEMORY_MAX_STRUCTURAL=12GiB run_cap_tick; rc=$?
+ATIF_SQL_REFRESH_MEMORY_MAX_LLM=12GiB run_cap_tick; rc=$?
 if [ "$rc" = 64 ] && [ ! -e "$cap_dir/calls.log" ] \
-   && grep -q "FATAL: ATIF_SQL_REFRESH_MEMORY_MAX_STRUCTURAL='12GiB'" "$cap_dir/run/atif-sql-refresh.log"; then
+   && grep -q "FATAL: ATIF_SQL_REFRESH_MEMORY_MAX_LLM='12GiB'" "$cap_dir/run/atif-sql-refresh.log"; then
   ok "memory cap: a malformed budget refuses the lane (exit 64, FATAL logged)"
 else
   fail "memory cap: malformed budget was not refused (exit=$rc; want 64, FATAL line, no analyze call)"

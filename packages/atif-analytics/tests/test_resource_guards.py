@@ -11,12 +11,9 @@ never converge, and a validity guard that disables itself.
 from __future__ import annotations
 
 import json
-import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, override
 
-import polars as pl
 import pytest
 from analytics_fixtures import SESSION_IDS, FakeProvider, build_fixture_corpus
 
@@ -25,11 +22,9 @@ from atif_analytics.application.use_cases.classify import classify_sessions
 from atif_analytics.application.use_cases.conflicts import detect_conflicts
 from atif_analytics.application.use_cases.friction import detect_user_friction
 from atif_analytics.application.use_cases.perceived import detect_perceived_errors
-from atif_analytics.application.use_cases.trajectory import trajectory_messages
-from atif_analytics.domain.trajectory import WindowRow
 from atif_analytics.domain.transcript import escape_uuid_headers, render_session_text
 from atif_analytics.infrastructure import corpus_reader as corpus_reader_module
-from atif_analytics.infrastructure.corpus_reader import TRAJECTORY_FILENAME, CorpusReader
+from atif_analytics.infrastructure.corpus_reader import CorpusReader
 from atif_analytics.infrastructure.parquet_cache import ParquetCache
 from atif_analytics.infrastructure.settings import AnalyticsSettings
 from atif_analytics.infrastructure.sqlite_state.checkpointer import (
@@ -239,98 +234,6 @@ def test_cost_ceiling_stops_dispatch_within_one_write_chunk(
     assert len(provider.calls) < sessions
 
 
-class _ConcurrencyProbe(FakeProvider):
-    """Records the peak number of ``classify_structured`` bodies in flight.
-
-    The await is what makes concurrency observable: without it every call
-    completes before the next task is scheduled and the peak is always one,
-    which would pass against any semaphore width.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.in_flight = 0
-        self.peak_in_flight = 0
-
-    @override
-    async def classify_structured(self, *, system: str, prompt: str, schema: type) -> Any:
-        import anyio
-
-        self.in_flight += 1
-        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
-        try:
-            await anyio.sleep(0.01)
-            return await super().classify_structured(system=system, prompt=prompt, schema=schema)
-        finally:
-            self.in_flight -= 1
-
-
-def test_trajectory_cost_ceiling_stops_dispatch(
-    settings: AnalyticsSettings, corpus_root: Path
-) -> None:
-    """Trajectory must stop dispatching once the budget reads exhausted.
-
-    Trajectory is the only stage that starts EVERY session concurrently
-    rather than in budget-checked batches, so it is the stage most able to
-    overshoot a dollar ceiling: without a per-dispatch budget check, all
-    ``sessions`` calls are bought before the ceiling is ever consulted.
-    """
-    sessions = 4 * BUDGET_CHECK_BATCH
-    root = _wide_corpus(corpus_root.parent / "traj_wide", sessions)
-    tuned = settings.model_copy(update={"corpus_root": root, "llm_max_sessions_per_run": sessions})
-    layout = tuned.layout()
-    provider = _SpendingProvider(trip_after=1)
-    trajectory_messages(
-        tuned,
-        dry_run=False,
-        reader=CorpusReader(root),
-        provider=provider,
-        spec=SPEC,
-        checkpoint=SqliteCheckpoint(layout.state_db_path),
-        retry=SqliteRetryQueue(layout.state_db_path),
-        budget=RunBudget(max_cost_usd=0.01),
-    )
-    assert len(provider.calls) < sessions, (
-        "every session dispatched: the cost ceiling never stopped trajectory"
-    )
-    assert len(provider.calls) <= BUDGET_CHECK_BATCH
-
-
-def test_trajectory_bounds_calls_in_flight_to_the_budget_batch(
-    settings: AnalyticsSettings, corpus_root: Path
-) -> None:
-    """The dispatch gate must bound in-flight calls to BUDGET_CHECK_BATCH.
-
-    The budget is read while holding the gate, so the gate's width IS the
-    overshoot bound: a wider gate lets more sessions read "not exhausted"
-    and dispatch before the crossing becomes observable. With one chunk per
-    session and a corpus far wider than the gate, an unbounded dispatch
-    peaks at the session count instead.
-    """
-    sessions = 4 * BUDGET_CHECK_BATCH
-    root = _wide_corpus(corpus_root.parent / "traj_concur", sessions)
-    tuned = settings.model_copy(update={"corpus_root": root, "llm_max_sessions_per_run": sessions})
-    layout = tuned.layout()
-    provider = _ConcurrencyProbe()
-    trajectory_messages(
-        tuned,
-        dry_run=False,
-        reader=CorpusReader(root),
-        provider=provider,
-        spec=SPEC,
-        checkpoint=SqliteCheckpoint(layout.state_db_path),
-        retry=SqliteRetryQueue(layout.state_db_path),
-        budget=None,
-    )
-    # Every session still runs — the gate throttles, it must not drop work.
-    assert len(provider.calls) == sessions
-    assert provider.peak_in_flight > 1, "the probe never observed real concurrency"
-    assert provider.peak_in_flight <= BUDGET_CHECK_BATCH, (
-        f"peak {provider.peak_in_flight} in flight exceeds the "
-        f"{BUDGET_CHECK_BATCH}-unit overshoot bound"
-    )
-
-
 class _CrossingWitness(FakeProvider):
     """Counts calls whose body starts AFTER the budget already reads exhausted.
 
@@ -358,7 +261,7 @@ class _CrossingWitness(FakeProvider):
         return result
 
 
-@pytest.mark.parametrize("run_stage", [trajectory_messages, classify_sessions])
+@pytest.mark.parametrize("run_stage", [classify_sessions, detect_conflicts])
 def test_overshoot_never_exceeds_the_documented_budget_batch(
     settings: AnalyticsSettings, corpus_root: Path, run_stage: Any
 ) -> None:
@@ -366,8 +269,8 @@ def test_overshoot_never_exceeds_the_documented_budget_batch(
 
     ``RunBudget`` documents the worst case as ``max_cost_usd`` plus at most
     BUDGET_CHECK_BATCH units already in flight when the crossing became
-    visible. Both dispatch shapes are covered: trajectory's semaphore gate
-    and classify's ``gather_under_budget`` batching.
+    visible. Every stage dispatches through ``gather_under_budget``; two
+    of them are driven here.
     """
     sessions = 8 * BUDGET_CHECK_BATCH
     root = _wide_corpus(corpus_root.parent / f"overshoot_{run_stage.__name__}", sessions)
@@ -507,28 +410,6 @@ def test_friction_zero_candidate_session_is_checkpointed(
     assert reader2.parsed == []
 
 
-def test_trajectory_windowless_session_is_checkpointed(
-    settings: AnalyticsSettings, corpus_root: Path
-) -> None:
-    """A session with no windowable text step must not re-parse every tick."""
-    root = _corpus_with_session(
-        corpus_root.parent / "no_windows",
-        steps=[_raw_step(1, "2026-08-22T09:00:00.000Z", "user", "", "w-01")],
-    )
-    tuned = settings.model_copy(update={"corpus_root": root})
-    layout = tuned.layout()
-    trajectory_messages(
-        tuned,
-        dry_run=False,
-        reader=CorpusReader(root),
-        provider=FakeProvider(),
-        spec=SPEC,
-        checkpoint=SqliteCheckpoint(layout.state_db_path),
-        retry=SqliteRetryQueue(layout.state_db_path),
-    )
-    assert set(load_as_map(layout.state_db_path, "trajectory")) == {"zzzz-0000"}
-
-
 def test_classify_empty_transcript_session_is_checkpointed(
     settings: AnalyticsSettings, corpus_root: Path
 ) -> None:
@@ -645,373 +526,6 @@ def test_perceived_drops_rows_when_no_user_header_uuids_rendered(
 
 
 # ---------------------------------------------------------------------------
-# FIX G — the completeness index is keyed only by REQUESTED window pairs
-# ---------------------------------------------------------------------------
-
-
-def test_trajectory_window_rejects_a_null_or_empty_curr_uuid() -> None:
-    """``curr_uuid`` is the completeness key, so the schema must reject a blank.
-
-    ``_classify_chunk`` builds its ``(prev_uuid, curr_uuid)`` index straight
-    from validated model output with no null filter. That is only sound while
-    the schema refuses a null or empty anchor, so the refusal is pinned here.
-    """
-    from pydantic import ValidationError
-
-    from atif_analytics.domain.models import TrajectoryArrayResult, TrajectoryWindow
-
-    base = {
-        "prev_uuid": None,
-        "prev_sentiment": None,
-        "curr_sentiment": "neutral",
-        "delta": None,
-        "is_transition": False,
-        "transition_kind": "none",
-        "confidence": 0.5,
-    }
-    for bad in (None, ""):
-        with pytest.raises(ValidationError):
-            TrajectoryWindow.model_validate({**base, "curr_uuid": bad})
-        # The provider validates the ARRAY wrapper, which is the real seam.
-        with pytest.raises(ValidationError):
-            TrajectoryArrayResult.model_validate({"windows": [{**base, "curr_uuid": bad}]})
-
-
-def test_trajectory_ignores_returned_windows_the_chunk_never_requested() -> None:
-    """A window pair outside the request must never reach the parquet.
-
-    The index is keyed by whatever the model echoes, so its keyspace is not
-    trusted; the row build reads the index at the REQUESTED pairs only. A
-    returned pair that was never asked for is therefore inert, and one that
-    was asked for but answered under a foreign key counts as missing and is
-    stamped as a placeholder rather than silently dropped.
-    """
-    import asyncio
-
-    from atif_analytics.application.use_cases.trajectory import _classify_chunk
-    from atif_analytics.domain.models import TrajectoryArrayResult, TrajectoryWindow
-
-    class _ForeignKeyProvider(FakeProvider):
-        @override
-        async def classify_structured(self, *, system: str, prompt: str, schema: type) -> Any:
-            del system, prompt, schema
-            return TrajectoryArrayResult(
-                windows=[
-                    TrajectoryWindow(
-                        prev_uuid="never-requested",
-                        curr_uuid="also-never-requested",
-                        prev_sentiment="neutral",
-                        curr_sentiment="positive",
-                        delta=1.0,
-                        is_transition=True,
-                        transition_kind="resolution",
-                        confidence=0.9,
-                    )
-                ]
-            )
-
-    chunk: list[WindowRow] = [("sid-1", None, "w-01", None, "user", None, "hello")]
-    indexed = asyncio.run(_classify_chunk(_ForeignKeyProvider(), chunk=chunk))
-    assert isinstance(indexed, dict)
-    assert ("never-requested", "also-never-requested") in indexed
-    # The requested pair is absent, so the chunk reads as wholly missing.
-    from atif_analytics.domain.trajectory import missing_keys
-
-    assert missing_keys(chunk, indexed) == chunk
-    assert indexed.get((None, "w-01")) is None
-
-
-def test_trajectory_stamps_placeholders_when_every_key_is_foreign(
-    settings: AnalyticsSettings, corpus_root: Path
-) -> None:
-    """End to end: foreign keys yield placeholder rows at the REQUESTED pairs.
-
-    No unrequested uuid may appear in the parquet, and no requested window
-    may go missing — a session-first window keeps its null ``prev_uuid``
-    while ``curr_uuid`` stays non-null for every row.
-    """
-    root = _corpus_with_session(
-        corpus_root.parent / "foreign_keys",
-        steps=[
-            _raw_step(1, "2026-08-22T09:00:00.000Z", "user", "hello", "w-01"),
-            _raw_step(2, "2026-08-22T09:00:10.000Z", "agent", "hi", "w-02"),
-        ],
-    )
-    tuned = settings.model_copy(update={"corpus_root": root})
-    layout = tuned.layout()
-
-    class _ForeignKeyProvider(FakeProvider):
-        @override
-        async def classify_structured(self, *, system: str, prompt: str, schema: type) -> Any:
-            from atif_analytics.domain.models import TrajectoryArrayResult, TrajectoryWindow
-
-            self.calls.append((schema.__name__, prompt))
-            return TrajectoryArrayResult(
-                windows=[
-                    TrajectoryWindow(
-                        prev_uuid=None,
-                        curr_uuid="fabricated-uuid",
-                        prev_sentiment=None,
-                        curr_sentiment="neutral",
-                        delta=None,
-                        is_transition=False,
-                        transition_kind="none",
-                        confidence=0.9,
-                    )
-                ]
-            )
-
-    written = trajectory_messages(
-        tuned,
-        dry_run=False,
-        reader=CorpusReader(root),
-        provider=_ForeignKeyProvider(),
-        spec=SPEC,
-        checkpoint=SqliteCheckpoint(layout.state_db_path),
-        retry=SqliteRetryQueue(layout.state_db_path),
-    )
-    assert written == 2
-    df = ParquetCache(layout.trajectory_dir).read_all()
-    assert df is not None
-    assert df["curr_uuid"].to_list() == ["w-01", "w-02"]
-    assert df["prev_uuid"].to_list() == [None, "w-01"]
-    assert df["curr_uuid"].is_null().sum() == 0
-    assert "fabricated-uuid" not in df["curr_uuid"].to_list()
-    # Placeholder confidence marks them as unanswered rather than classified.
-    assert df["confidence"].to_list() == [0.0, 0.0]
-
-
-# ---------------------------------------------------------------------------
-# FIX J — replace_sessions is called once per run and prunes by footer
-# ---------------------------------------------------------------------------
-
-
-def test_trajectory_calls_replace_sessions_once_per_run(
-    settings: AnalyticsSettings,
-    reader: CorpusReader,
-    ports: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One batched replace, not one per session.
-
-    replace_sessions scans every shard; per-session calls make the write
-    path O(sessions x shards) and shard count grows with every run.
-    """
-    calls: list[list[str]] = []
-    real = ParquetCache.replace_sessions
-
-    def _spy(self: ParquetCache, *, key_column: str, session_ids: Any, **kwargs: Any) -> int:
-        ids = list(session_ids)
-        calls.append(ids)
-        return real(self, key_column=key_column, session_ids=ids, **kwargs)
-
-    monkeypatch.setattr(ParquetCache, "replace_sessions", _spy)
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=FakeProvider(),
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    assert len(calls) == 1
-    assert set(calls[0]) == set(SESSION_IDS)
-
-
-def test_replace_sessions_prunes_shards_whose_footer_holds_no_wanted_id(tmp_path: Path) -> None:
-    """A shard the footer proves holds none of the ids must not be decoded.
-
-    The ids are unsorted uuids and each shard holds ONE of them — the shape
-    the pipelines write. This test pins only that an excluded shard is never
-    decoded; it does not claim a range test would fail on these three ids
-    (with this fixture's ids, the untouched key falls below the wanted
-    ``[min, max]`` window, so a range test would prune it too). What makes
-    the membership test the right choice is the full-corpus shape, not this
-    fixture: see the sibling test on truncated statistics for the property a
-    range test cannot deliver safely.
-    """
-    from atif_analytics.infrastructure import parquet_cache
-
-    target = tmp_path / "cache"
-    cache = ParquetCache(target)
-    ids = [
-        "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
-        "0e37df36-f698-11e6-8dd4-cb9ced3df976",
-        "9c858901-8a57-4791-81fe-4c455b099bc9",
-    ]
-    for sid in ids:
-        cache.write_part(pl.DataFrame({"session_id": [sid], "n": [1]}))
-
-    decoded: list[Path] = []
-    real_read = parquet_cache.pl.read_parquet
-
-    def _spy(source: Any, **kwargs: Any) -> Any:
-        if isinstance(source, Path):
-            decoded.append(source)
-        return real_read(source, **kwargs)
-
-    parquet_cache.pl.read_parquet = _spy  # type: ignore[assignment]
-    try:
-        removed = parquet_cache.replace_sessions(
-            target, key_column="session_id", session_ids=[ids[0], ids[2]]
-        )
-    finally:
-        parquet_cache.pl.read_parquet = real_read  # type: ignore[assignment]
-
-    assert removed == 2
-    assert len(decoded) == 2, f"decoded {len(decoded)} shards; the untouched one was not pruned"
-    survivors = cache.read_all()
-    assert survivors is not None
-    assert survivors["session_id"].to_list() == [ids[1]]
-
-
-def test_replace_sessions_never_prunes_a_shard_that_holds_a_wanted_id(tmp_path: Path) -> None:
-    """Pruning must never rule out a shard that really holds a wanted id.
-
-    Parquet truncates footer min/max statistics (64 bytes here), so two ids
-    sharing a long prefix report the SAME truncated range. Truncation widens
-    the range rather than narrowing it, which is what keeps the prune safe —
-    a narrowing implementation would skip the shard, leave the prior rows in
-    place, and duplicate every window pair on the next run with no error.
-    """
-    from atif_analytics.infrastructure import parquet_cache
-
-    prefix = "x" * 64
-    wanted = f"{prefix}aaa"
-    other = f"{prefix}zzz"
-    target = tmp_path / "cache"
-    cache = ParquetCache(target)
-    cache.write_part(pl.DataFrame({"session_id": [wanted], "n": [1]}))
-    cache.write_part(pl.DataFrame({"session_id": [other], "n": [2]}))
-
-    removed = parquet_cache.replace_sessions(target, key_column="session_id", session_ids=[wanted])
-    assert removed == 1, "a shard holding a wanted id was pruned away"
-    survivors = cache.read_all()
-    assert survivors is not None
-    assert survivors["session_id"].to_list() == [other]
-
-
-def test_replace_sessions_skips_the_parts_the_caller_just_wrote(tmp_path: Path) -> None:
-    """``skip_parts`` must exempt fresh shards so a write-then-replace keeps them."""
-    from atif_analytics.infrastructure import parquet_cache
-
-    target = tmp_path / "cache"
-    cache = ParquetCache(target)
-    stale = cache.write_part(pl.DataFrame({"session_id": ["s1"], "n": [1]}))
-    fresh = cache.write_part(pl.DataFrame({"session_id": ["s1"], "n": [2]}))
-
-    removed = parquet_cache.replace_sessions(
-        target, key_column="session_id", session_ids=["s1"], skip_parts=[fresh]
-    )
-    assert removed == 1
-    assert not stale.exists()
-    assert fresh.exists()
-    survivors = cache.read_all()
-    assert survivors is not None
-    assert survivors["n"].to_list() == [2]
-
-
-def _readmit(corpus_root: Path, session_ids: list[str]) -> None:
-    """Advance each session's trajectory mtime past any checkpoint.
-
-    The mtime is SET to a fixed absolute future stamp rather than touched to
-    "now": either bound advancing re-admits a session, and a rewrite-to-now
-    only advances the bound if the clock has ticked past the previous write
-    at the filesystem's mtime granularity.
-    """
-    stamp = datetime(2030, 1, 1, tzinfo=UTC).timestamp()
-    for sid in session_ids:
-        traj = corpus_root / "sessions" / sid / TRAJECTORY_FILENAME
-        os.utime(traj, (stamp, stamp))
-
-
-def test_trajectory_keeps_prior_rows_when_the_session_produces_nothing(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
-) -> None:
-    """A re-admitted session that writes nothing must keep its prior rows.
-
-    The replace is what makes a rerun idempotent, so it may only drop a
-    session's prior rows in exchange for fresh ones. A session re-admitted
-    by advancing bounds whose provider then fails every chunk has no fresh
-    rows to trade, and the retry queue holds it for a later run — deleting
-    its prior rows in the meantime serves an empty parquet where the
-    previous run's answers used to be.
-
-    The second run has the OTHER session succeed, so the replace does run:
-    a delete scoped to the whole admitted set is therefore visible here,
-    while one scoped to the sessions that flushed is not.
-    """
-    cache = ParquetCache(ports["layout"].trajectory_dir)
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=FakeProvider(),
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    per_session = {sid: len(reader.text_windows(sid)) for sid in SESSION_IDS}
-    assert all(n > 0 for n in per_session.values())
-    assert cache.count_rows() == sum(per_session.values())
-
-    _readmit(settings.corpus_root, SESSION_IDS)
-
-    # Session one fails every chunk; session two answers normally.
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=CorpusReader(settings.corpus_root),
-        provider=FakeProvider(fail_prompts_containing="flaky auth test"),
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    df = cache.read_all()
-    assert df is not None
-    surviving = df["session_id"].value_counts().to_dict(as_series=False)
-    counts = dict(zip(surviving["session_id"], surviving["count"], strict=True))
-    assert counts.get(SESSION_IDS[0]) == per_session[SESSION_IDS[0]], (
-        "prior rows deleted for the session that wrote nothing this run"
-    )
-    assert counts.get(SESSION_IDS[1]) == per_session[SESSION_IDS[1]]
-
-
-def test_trajectory_replaces_prior_rows_for_a_session_that_does_flush(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
-) -> None:
-    """A re-admitted session that DOES flush must not duplicate its pairs."""
-    cache = ParquetCache(ports["layout"].trajectory_dir)
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=reader,
-        provider=FakeProvider(),
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    before = cache.count_rows()
-
-    _readmit(settings.corpus_root, SESSION_IDS)
-
-    trajectory_messages(
-        settings,
-        dry_run=False,
-        reader=CorpusReader(settings.corpus_root),
-        provider=FakeProvider(),
-        spec=SPEC,
-        checkpoint=ports["checkpoint"],
-        retry=ports["retry"],
-    )
-    df = cache.read_all()
-    assert df is not None
-    assert df.height == before
-    assert df.select(["session_id", "prev_uuid", "curr_uuid"]).is_unique().all()
-
-
-# ---------------------------------------------------------------------------
 # Corpus builders
 # ---------------------------------------------------------------------------
 
@@ -1078,7 +592,12 @@ def _eligible_corpus(root: Path, n: int) -> Path:
 
 
 def _wide_corpus(root: Path, n: int) -> Path:
-    """``n`` tiny two-step sessions, ids ordered so bounds is deterministic."""
+    """``n`` tiny INTERACTIVE sessions (two human turns each), ids ordered for bounds.
+
+    Two human turns because classify and conflicts only spend on interactive
+    sessions: a one-turn session is checkpointed without a call, which would
+    make every budget test here pass without dispatching anything.
+    """
     for i in range(n):
         _write_session(
             root,
@@ -1086,6 +605,8 @@ def _wide_corpus(root: Path, n: int) -> Path:
             [
                 _raw_step(1, f"2026-08-22T09:{i:02d}:00.000Z", "user", "hello", f"u{i}-01"),
                 _raw_step(2, f"2026-08-22T09:{i:02d}:10.000Z", "agent", "hi", f"u{i}-02"),
+                _raw_step(3, f"2026-08-22T09:{i:02d}:20.000Z", "user", "and then?", f"u{i}-03"),
+                _raw_step(4, f"2026-08-22T09:{i:02d}:30.000Z", "agent", "done", f"u{i}-04"),
             ],
         )
     return root
