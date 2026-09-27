@@ -154,6 +154,25 @@ class TestArchivingCostsNoRead:
         assert counters.digests == 2 * len(files)
         assert len(writer.files) == len(files)
 
+    def test_a_parsed_sidecar_is_archived_by_the_verifying_read_alone(
+        self, synthetic_session: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The converter parses ``agent-*.meta.json`` sidecars, and the snapshot
+        re-check re-hashes them into the archive; the side-file sweep must not
+        open them a third time, or the archived bytes would come from a read
+        the digest never vouched for."""
+        sidecar = synthetic_session.parent / synthetic_session.stem / "subagents"
+        sidecar = sidecar / "agent-abc.meta.json"
+        sidecar.write_text('{"agentType":"general"}\n')
+        writer = SourceArchiveWriter(tmp_path / "archive", base=synthetic_session.parent)
+        counters = _count_reads(monkeypatch)
+
+        convert_and_audit(synthetic_session, archive=writer)
+
+        assert counters.opens[sidecar] == 2
+        relative = sidecar.relative_to(synthetic_session.parent).as_posix()
+        assert _archived(tmp_path / "archive")[relative] == sidecar.read_bytes()
+
 
 class TestArchiveUnderMutation:
     def test_an_append_during_conversion_still_fails(

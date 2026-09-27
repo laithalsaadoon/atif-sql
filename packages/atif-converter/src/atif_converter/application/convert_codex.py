@@ -126,7 +126,12 @@ def _refuse_if_mutated(
     mutated = mutated_files(snapshot, archive=archive)
     if not mutated:
         if archive is not None:
-            archive.archive_side_files(snapshot.session_jsonl, already=snapshot.files)
+            # The verifying read already archived the transcripts AND the
+            # parsed sidecars; the sweep takes only files nothing parsed.
+            archive.archive_side_files(
+                snapshot.session_jsonl,
+                already=(*snapshot.files, *snapshot.sidecar_fingerprints),
+            )
         return
     logger.warning(
         "convert_codex: {} source file(s) changed while converting {}; refusing",

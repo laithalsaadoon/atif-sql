@@ -18,10 +18,12 @@ snapshot check compares against the parse's digest, so an archived transcript is
 byte-for-byte the input the artifacts were built from. If anything moved, the
 conversion raises and the caller throws the half-written archive away.
 
-The other files under the session's side directory (``agent-*.meta.json``, the
-``tool-results/`` spill files, workflow state) are not parsed by any converter
-today, so :meth:`SourceArchiveWriter.archive_side_files` reads each of them once,
-here. They are archived anyway because a future converter may want them and the
+The ``agent-*.meta.json`` sidecars are parsed in the same pass as the
+transcripts and re-hashed by the same verifying read, so they ride it too. The
+other files under the session's side directory (the ``tool-results/`` spill
+files, workflow state) are not parsed by any converter today, so
+:meth:`SourceArchiveWriter.archive_side_files` reads each of them once, here.
+They are archived anyway because a future converter may want them and the
 originals expire with the transcript.
 
 Level 3 is deliberate: measured on a 76 MB transcript, level 3 compresses at
@@ -123,8 +125,8 @@ class SourceArchiveWriter:
     def archive_side_files(self, session_jsonl: Path, *, already: Collection[Path]) -> None:
         """Archive every other regular file under the session's side directory.
 
-        ``already`` holds the transcripts the verifying read archived; they are
-        skipped. Symlinks are skipped too: following one would copy bytes from
+        ``already`` holds the files the verifying read archived (the
+        transcripts and the parsed sidecars); they are skipped. Symlinks are skipped too: following one would copy bytes from
         outside the session into its archive.
         """
         side_dir = session_jsonl.parent / session_jsonl.stem
