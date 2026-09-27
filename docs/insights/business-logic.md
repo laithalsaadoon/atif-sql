@@ -4,7 +4,7 @@ This file indexes the domain rules `atif-sql` enforces: input validations, invar
 code holds across a boundary, derived-value calculations, and the policy gates that decide
 whether work runs at all.
 
-**Scope.** Application-layer and domain-layer rules across the seven workspace members,
+**Scope.** Application-layer and domain-layer rules across the workspace members,
 plus the SQL surface `atif-duck` registers into DuckDB. There is no database server, no
 migration directory, and no HTTP surface in this repo, so there are no DDL constraints or
 request-validation middlewares to survey — the DuckDB views and macros are the closest
@@ -77,7 +77,7 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 
 | Invariant | Where enforced | Citation |
 | --- | --- | --- |
-| The seven `FidelityGap` members are the complete, typed statement of what harbor 0.22.0's conversion loses; four are structural and observed on every session, three are session-conditional | Application code | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79`; `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:52-59` (structural set) and `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:70-76` (conditional set); test `packages/atif-converter/tests/test_convert_and_audit.py:163` |
+| The `FidelityGap` members are the complete, typed statement of what harbor 0.22.0's conversion loses; some are structural and observed on every session, the rest are session-conditional | Application code | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79`; `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:52-59` (structural set) and `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:70-76` (conditional set); test `packages/atif-converter/tests/test_convert_and_audit.py:163` |
 | Only `RecordType.USER` and `RecordType.ASSISTANT` are convertible; every other record type is dropped upstream | Application code | `packages/atif-converter/src/atif_converter/domain/fidelity.py:41`; test `packages/atif-converter/tests/test_convert_and_audit.py:121` |
 | `LossReport.records_total` equals the `edges.jsonl` line count for any session, because the census and the edges emitter read one snapshot | Application code | `packages/atif-converter/src/atif_converter/domain/fidelity.py:91-98`, `packages/atif-converter/src/atif_converter/infrastructure/census.py:57-67`, `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:137-139`; test `packages/atif-converter/tests/test_snapshot_and_drift.py:122` |
 | `records_converted` counts raw user/assistant RECORDS, not ATIF steps — harbor bundles several assistant events sharing one `message.id` into one agent step, so the two numbers differ by design | Application code | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:122-126`, `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:62-68` |
@@ -91,7 +91,7 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 
 | Invariant | Where enforced | Citation |
 | --- | --- | --- |
-| A reader never observes a torn artifact SET: all four artifacts are written into `<corpus_root>/.staging/` and the whole directory is swapped in by rename | Application code | `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:98-137`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:190-244`; tests `packages/atif-corpus/tests/test_atomic.py:85`, `packages/atif-corpus/tests/test_materialize.py:346` |
+| A reader never observes a torn artifact SET: all the artifacts are written into `<corpus_root>/.staging/` and the whole directory is swapped in by rename | Application code | `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:98-137`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:190-244`; tests `packages/atif-corpus/tests/test_atomic.py:85`, `packages/atif-corpus/tests/test_materialize.py:346` |
 | `meta.json` is written LAST inside the staging directory, and it is the marker `atif-duck` gates every reader on | Application code, both sides | `packages/atif-corpus/src/atif_corpus/application/materialize.py:207-212`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:188-192`; test `packages/atif-duck/tests/test_duck_views.py:630` |
 | Persistence order matches write order: each artifact is fsynced before the rename that publishes it, and the parent directory after | Application code | `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:64-95`, `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:140-158`; tests `packages/atif-corpus/tests/test_atomic.py:131`, `packages/atif-corpus/tests/test_atomic.py:149`, `packages/atif-corpus/tests/test_atomic.py:194` |
 | A kill inside the swap window leaves the session dir MISSING rather than torn, and the next pass force-replans it | Application code | `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:113-123`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:313-339`; tests `packages/atif-corpus/tests/test_materialize.py:791`, `packages/atif-corpus/tests/test_domain.py:216` |
@@ -102,7 +102,7 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 | A staging entry is removed only when EVERY pid its name carries is proven gone; only `ProcessLookupError` proves that | Application code | `packages/atif-corpus/src/atif_corpus/application/materialize.py:256-310`; tests `packages/atif-corpus/tests/test_materialize.py:429`, `packages/atif-corpus/tests/test_materialize.py:457`, `packages/atif-corpus/tests/test_materialize.py:481` |
 | One broken transcript never aborts a corpus sync — the port may raise anything, and the pass records the failure and continues | Application code | `packages/atif-corpus/src/atif_corpus/domain/ports.py:41-47`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:597-616`; test `packages/atif-corpus/tests/test_materialize.py:316` |
 | The domain reads no clock: `now_ns` is always passed in, so identical inputs always yield an identical plan | Application code | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:18-21`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:48-52`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:528`; test `packages/atif-corpus/tests/test_domain.py:145` |
-| All three plan partitions are sorted by session id, so the same scan yields the same work order, log output, and failure ordering | Application code | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:110-121`, `packages/atif-corpus/src/atif_corpus/domain/sessions.py:195`; test `packages/atif-corpus/tests/test_domain.py:145` |
+| Every plan partition is sorted by session id, so the same scan yields the same work order, log output, and failure ordering | Application code | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:110-121`, `packages/atif-corpus/src/atif_corpus/domain/sessions.py:195`; test `packages/atif-corpus/tests/test_domain.py:145` |
 | The corpus root `~/.claude` maps to the reserved slug `default`; every other root is `<sanitized-dirname>-<8 hex of sha256 of the resolved path>` | Application code | `packages/atif-corpus/src/atif_corpus/domain/slug.py:23`, `packages/atif-corpus/src/atif_corpus/domain/slug.py:45-50`; tests `packages/atif-corpus/tests/test_slug.py:19`, `packages/atif-corpus/tests/test_slug.py:24`, `packages/atif-corpus/tests/test_slug.py:32` |
 | The per-session artifact filenames and the watermark filename are fixed by the contract | Application code | `packages/atif-corpus/src/atif_corpus/domain/layout.py:17-22`; test `packages/atif-corpus/tests/test_domain.py:245` |
 
@@ -128,10 +128,10 @@ may have ignored (`packages/atif-models/src/atif_models/domain/schema.py:18-21`)
 
 | Invariant | Where enforced | Citation |
 | --- | --- | --- |
-| The registry is the ONLY place in the workspace where a model id is written down, and it is total over family times size (6 entries) | Application code | `packages/atif-models/src/atif_models/domain/registry.py:5-8`, `packages/atif-models/src/atif_models/domain/registry.py:60-106`; test `packages/atif-models/tests/test_registry.py:61` |
+| The registry is the ONLY place in the workspace where a model id is written down, and it is total over family times size | Application code | `packages/atif-models/src/atif_models/domain/registry.py:5-8`, `packages/atif-models/src/atif_models/domain/registry.py:60-106`; test `packages/atif-models/tests/test_registry.py:61` |
 | `estimate_cost` returns `None`, never `0.0`, when either rate is unknown — callers must render "pricing unavailable" | Application code | `packages/atif-models/src/atif_models/domain/registry.py:125-137`; tests `packages/atif-models/tests/test_registry.py:85` and `packages/atif-models/tests/test_registry.py:95` |
 | Usage is accumulated BEFORE any `finish_reason` gate, because a length-truncated call still billed tokens | Application code | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:269-277`; test `packages/atif-models/tests/test_openai_provider.py:249` |
-| `RETRY_CODES` (8 Bedrock codes) is a deliberate TWIN of atif-embed's set, pinned against the same literal in each package's own suite because the two may not import each other | Application code | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:59-74`; tests `packages/atif-models/tests/test_openai_provider.py:318` and `packages/atif-models/tests/test_openai_provider.py:322` |
+| `RETRY_CODES` (the retryable Bedrock codes) is a deliberate TWIN of atif-embed's set, pinned against the same literal in each package's own suite because the two may not import each other | Application code | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:59-74`; tests `packages/atif-models/tests/test_openai_provider.py:318` and `packages/atif-models/tests/test_openai_provider.py:322` |
 | Every embeddings row stamps `model`, `dim`, `text_hash`, and `truncated`, so a re-conversion that changes a step's text is detectable under the same uuid | Application code | `packages/atif-embed/src/atif_embed/domain/text_stamp.py:6-18`, `packages/atif-embed/src/atif_embed/application/embed.py:216-235`; test `packages/atif-embed/tests/test_embed_use_case.py:89` |
 | A uuid never fans out to two vectors: a stale row under the same uuid is DELETED before the new vector is appended | Application code | `packages/atif-embed/src/atif_embed/application/embed.py:203-210`, `packages/atif-embed/src/atif_embed/domain/text_stamp.py:50-63`; tests `packages/atif-embed/tests/test_embed_use_case.py:211`, `packages/atif-embed/tests/test_lance_store.py:129` |
 | `_PRE_STAMP_SENTINEL` (`<pre-stamp>`) can never equal a real blake2b hex digest, so every pre-stamp row mismatches its corpus hash and re-embeds through the ordinary staleness path | Application code | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:69-73`; test `packages/atif-embed/tests/test_lance_store.py:192` |
@@ -185,7 +185,7 @@ cache-read plus cache-creation); the charge is
 the session's steps and divided by `1e6`. Cache reads are uncharged, and the pricing join
 strips a dated model suffix (`claude-haiku-4-5-20251001` matches `claude-haiku-4-5`) via
 `regexp_replace(model_name, '-\d{8}$', '')`. The pricing table itself is
-`DEFAULT_PRICING`, 11 entries of `(in_rate, out_rate)` in **USD per 1,000,000 tokens**,
+`DEFAULT_PRICING`, entries of `(in_rate, out_rate)` in **USD per 1,000,000 tokens**,
 base rates only — the prompt-cache write and read multipliers (1.25x, 2x, 0.1x of base
 input) are deliberately not modeled, matching the macro
 (`packages/atif-duck/src/atif_duck/domain/catalog.py:395-417`, pinned by
@@ -318,8 +318,8 @@ perceived pipeline admits a session only at 2 or more pairs
 
 ## See also
 
-- [module map](../architecture/module-map.md) — 39 shared source citations
-- [processes](../behavior/processes.md) — 36 shared source citations
-- [impact analysis](impact-analysis.md) — 34 shared source citations
-- [contract map](contract-map.md) — 33 shared source citations
-- [debugging guide](debugging-guide.md) — 22 shared source citations
+- [module map](../architecture/module-map.md)
+- [processes](../behavior/processes.md)
+- [impact analysis](impact-analysis.md)
+- [contract map](contract-map.md)
+- [debugging guide](debugging-guide.md)

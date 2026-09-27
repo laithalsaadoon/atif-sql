@@ -6,12 +6,12 @@ the uv workspace members declared by `[tool.uv.workspace] members = ["packages/*
 `[project.dependencies]`, never from the installed transitive closure.
 
 The internal direction is enforced rather than conventional. `pyproject.toml:462` declares
-`[tool.importlinter]` over all seven root packages (`:366`), and `mise run lint:imports`
-(`mise.toml:159-162`) is one of the nine gates `mise run check` depends on (`mise.toml:197-211`). Two of
+`[tool.importlinter]` over every root package (`:366`), and `mise run lint:imports`
+(`mise.toml:159-162`) is one of the gates `mise run check` depends on (`mise.toml:197-211`). Some of
 those contracts fix the shape drawn here: the `independence` contract at `pyproject.toml:514-517`
 forbids any import edge among atif_converter, atif_corpus, atif_duck, atif_models, and atif_embed, and
 the `forbidden` contract at `:422-426` allows atif_analytics to import atif_models and nothing else
-among the seven.
+among the members.
 
 ```mermaid
 flowchart LR
@@ -71,26 +71,26 @@ grepping every `*.py` under `packages/*/src` for a `from X` or `import X` line a
 
 ## Internal edges
 
-Exactly six ordered pairs of members import each other. Counts are importing-file counts under the
-source member's `src/`.
+These ordered pairs of members import each other, and no other pair does. Each edge is an import
+from a file under the source member's `src/`.
 
-| edge | files | contract that permits it |
-| --- | --- | --- |
-| atif-cli to atif-analytics | 1 | atif-cli is the composition root; it is absent from both restrictive contracts (`pyproject.toml:517`, `:426`) |
-| atif-cli to atif-converter | 2 | as above; declared `packages/atif-cli/pyproject.toml:33` |
-| atif-cli to atif-corpus | 2 | as above; declared `packages/atif-cli/pyproject.toml:34` |
-| atif-cli to atif-duck | 2 | as above; declared `packages/atif-cli/pyproject.toml:35` |
-| atif-cli to atif-embed | 1 | as above; declared `packages/atif-cli/pyproject.toml:36` |
-| atif-analytics to atif-models | 7 | the `forbidden` contract's single permitted edge (`pyproject.toml:519-523`); declared `packages/atif-analytics/pyproject.toml:24` |
+| edge | contract that permits it |
+| --- | --- |
+| atif-cli to atif-analytics | atif-cli is the composition root; it is absent from both restrictive contracts (`pyproject.toml:517`, `:426`) |
+| atif-cli to atif-converter | as above; declared `packages/atif-cli/pyproject.toml:33` |
+| atif-cli to atif-corpus | as above; declared `packages/atif-cli/pyproject.toml:34` |
+| atif-cli to atif-duck | as above; declared `packages/atif-cli/pyproject.toml:35` |
+| atif-cli to atif-embed | as above; declared `packages/atif-cli/pyproject.toml:36` |
+| atif-analytics to atif-models | the `forbidden` contract's single permitted edge (`pyproject.toml:519-523`); declared `packages/atif-analytics/pyproject.toml:24` |
 
-Two absences carry meaning. atif-cli imports atif_models in zero source files even though it composes
+Absences carry meaning too. atif-cli imports atif_models in no source file even though it composes
 everything else — it reaches the model registry through atif-analytics, and its
 `[project.dependencies]` list omits atif-models accordingly (`packages/atif-cli/pyproject.toml:32-39`).
 And no edge exists in either direction between atif-converter, atif-corpus, atif-duck, atif-embed, or
 atif-models: they communicate only by writing and reading the corpus on disk. Adding any such edge
-fails gate 5 of `mise run check`.
+fails the `lint:imports` gate of `mise run check`.
 
-The five inter-member dependencies are `==0.1.0`-pinned rather than bare
+The inter-member dependencies are `==0.1.0`-pinned rather than bare
 (`packages/atif-cli/pyproject.toml:32-36`) because `[tool.uv.sources]` at `:59-64` is a local source an
 external installer never sees; a bare name would ship as a `Requires-Dist` resolved from the public
 PyPI namespace.
@@ -115,7 +115,7 @@ on import-site count, then on the member's own src line count, descending.
 | boto3 | atif-embed | `packages/atif-embed/pyproject.toml:20` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:136` |
 | harbor | atif-converter | `packages/atif-converter/pyproject.toml:23` | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161` |
 
-Three readings the drawn edge deliberately compresses:
+What the drawn edge deliberately compresses:
 
 - **loguru is universal.** Every member declares it — `packages/atif-analytics/pyproject.toml:24`,
   `packages/atif-cli/pyproject.toml:43`, `packages/atif-converter/pyproject.toml:31`,
@@ -124,13 +124,13 @@ Three readings the drawn edge deliberately compresses:
   drawn from atif-converter only because more of the importing files are its than any other
   member's. The edge label states
   the real fan-out.
-- **atif-corpus has no drawn external edge.** It declares three externals — loguru
+- **atif-corpus has no drawn external edge.** It declares its externals — loguru
   (`packages/atif-corpus/pyproject.toml:19`), pydantic (`:20`), pydantic-settings (`:21`) — and each is
-  imported more often, or in more sites, by another member, so the attribution rule sources all three
+  imported more often, or in more sites, by another member, so the attribution rule sources all of them
   elsewhere. Its own import sites are real: `packages/atif-corpus/src/atif_corpus/infrastructure/settings.py:19`
   and `packages/atif-corpus/src/atif_corpus/domain/sessions.py:29`.
 - **harbor is a public-API edge now.** `packages/atif-converter/pyproject.toml:26` pins
-  `harbor>=0.22.0,<1`, and production code imports two things from it: the ATIF data classes
+  `harbor>=0.22.0,<1`, and production code imports only its public surface: the ATIF data classes
   (`harbor.models.trajectories`, e.g. `packages/atif-converter/src/atif_converter/infrastructure/codex_converter.py:36`)
   and the validator (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68`).
   The conversion itself is ours, ported from 0.22.0
@@ -146,9 +146,9 @@ Three readings the drawn edge deliberately compresses:
 The diagram's external nodes are what a member asks for, and that is a strictly smaller set than what
 `uv sync` installs. The gap includes a web stack this system never runs: harbor's own dependency block
 at `uv.lock:1139-1164` lists `fastapi` (`:1082`), `supabase` (`:1097`), and `uvicorn` (`:1101`), so all
-three are in the installed closure. No member declares any of them, and
+of them are in the installed closure. No member declares any of them, and
 `grep -rnE "^[[:space:]]*(from|import) +(fastapi|uvicorn|starlette|supabase)(\.| |$)" --include='*.py' packages/`
-returns zero matches across every source and test file. atif-sql exposes no HTTP surface; it is one
+returns no matches across every source and test file. atif-sql exposes no HTTP surface; it is one
 console script, `atif-sql = "atif_cli.app:main"` (`packages/atif-cli/pyproject.toml:42`), over a set of
 libraries.
 
@@ -160,8 +160,8 @@ Bedrock, from `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.
 
 ## See also
 
-- [module map](../../architecture/module-map.md) — 13 shared source citations
-- [processes](../../behavior/processes.md) — 13 shared source citations
-- [contract map](../../insights/contract-map.md) — 12 shared source citations
-- [impact analysis](../../insights/impact-analysis.md) — 11 shared source citations
-- [tech debt](../../insights/tech-debt.md) — 11 shared source citations
+- [module map](../../architecture/module-map.md)
+- [processes](../../behavior/processes.md)
+- [contract map](../../insights/contract-map.md)
+- [impact analysis](../../insights/impact-analysis.md)
+- [tech debt](../../insights/tech-debt.md)

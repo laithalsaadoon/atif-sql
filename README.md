@@ -40,7 +40,7 @@ tool needs a credential.
 
 ## How the source is organized
 
-These seven directories under `packages/` are internal structure, not seven installs. They
+The directories under `packages/` are internal structure, not separate installs. They
 exist so `import-linter` can enforce the layer and independence contracts at the source level;
 the only thing documented as installable is the `atif-sql` CLI above.
 
@@ -50,7 +50,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM client; no other package hardcodes a model id |
-| `atif-analytics` | eight v2 pipelines — five LLM (classify, trajectory, conflicts, friction, perceived) and three structural (cluster, terms, community) |
+| `atif-analytics` | the v2 pipelines — LLM (classify, trajectory, conflicts, friction, perceived) and structural (cluster, terms, community) |
 | `atif-embed` | Cohere Embed v4 on Bedrock + LanceDB vector store + embedding backfill |
 | `atif-cli` | the composition root, and the source of the `atif-sql` command: `convert`, `materialize`, `status`, `query`, `analyze`, `embed`, `search`, `examples`, `schema`, `cron` |
 
@@ -64,7 +64,7 @@ atif-sql status                        # corpus freshness, read-only
 atif-sql query 'SELECT * FROM sessions LIMIT 5'
 ```
 
-`materialize` also writes typed columnar artifacts (four parquet files per session) beside the
+`materialize` also writes typed columnar artifacts (parquet files per session) beside the
 JSON ones, so `query` parses no JSON for those sessions; `--no-columnar` skips them, older corpora
 keep working from `trajectory.json`, and `status` prints which path a corpus takes as `query path`.
 
@@ -112,7 +112,7 @@ Piped output is JSON; filter with `--requires core|analytics|vss` and
 
 ## Contributing
 
-Setup, the five gates `mise run check` runs, the import-linter contracts you will trip, and the
+Setup, the gates `mise run check` runs, the import-linter contracts you will trip, and the
 Conventional Commit rule the `commit-msg` hook enforces: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 Releases are cut by commitizen and published to PyPI over OIDC Trusted Publishing —
@@ -138,5 +138,5 @@ and the one accepted disclosure (`duckdb_settings()` lists the granted paths) ar
 
 ## License
 
-[Apache License 2.0](LICENSE). Each of the seven module directories carries the same license
+[Apache License 2.0](LICENSE). Each module directory carries the same license
 file, so a published distribution ships it too.

@@ -2,8 +2,8 @@
 
 atif-sql is a uv workspace whose root is also the one published distribution:
 `pyproject.toml` carries both a `[project]` table (the single `atif-sql` wheel,
-which bundles all seven module trees) and `[tool.uv.workspace] members =
-["packages/*"]`. The seven packages under `packages/` are development members,
+which bundles every module tree) and `[tool.uv.workspace] members =
+["packages/*"]`. The packages under `packages/` are development members,
 not install targets. Everything below is read off the
 checked-in config — `mise.toml`, `pyproject.toml`, `lefthook.yml`, and
 `AGENTS.md` — so if a claim here and a config file disagree, the config file
@@ -32,7 +32,7 @@ that.
 
 ## Definition of done: `mise run check`
 
-`[tasks.check]` in `mise.toml` depends on five gates, and all five must pass:
+`[tasks.check]` in `mise.toml` depends on the gates below, and all of them must pass:
 
 | Task | Command | What fails you |
 | --- | --- | --- |
@@ -76,8 +76,8 @@ Work on a branch, and open a pull request against `main`.
 
 ## The import contracts you will trip
 
-`[tool.importlinter]` in `pyproject.toml` declares seven contracts over the
-seven root packages. Two of them shape the whole workspace:
+`[tool.importlinter]` in `pyproject.toml` declares contracts over the
+root packages. These shape the whole workspace:
 
 1. **Independence.** `atif_converter`, `atif_corpus`, `atif_duck`,
    `atif_models`, and `atif_embed` may never import each other. If you need
@@ -89,13 +89,13 @@ seven root packages. Two of them shape the whole workspace:
    That is why `atif_embed` reads the corpus through its own DuckDB adapter
    over the documented corpus layout rather than through `atif_duck`.
 
-The other five are `layers` contracts:
+The rest are `layers` contracts:
 `application > infrastructure > domain` for `atif_converter`, `atif_corpus`,
 `atif_embed`, and `atif_analytics`, and `infrastructure > domain` for
 `atif_models`. Dependencies point inward — a `domain` module importing from
 `infrastructure` fails `lint:imports`.
 
-Two more rules live in ruff rather than import-linter:
+Other rules live in ruff rather than import-linter:
 
 - **stdlib `logging` is banned workspace-wide.** `[tool.ruff.lint.flake8-tidy-imports.banned-api]`
   maps it to "Use loguru via `from loguru import logger`".
@@ -114,7 +114,7 @@ failure.
 `[project.dependencies]` *and* add `[tool.uv.sources] <pkg> = { workspace = true }`
 — both, per `AGENTS.md`. The independence contract above still applies.
 
-**A new package.** `packages/*` is globbed as a workspace member, but four
+**A new package.** `packages/*` is globbed as a workspace member, but these
 places in the root `pyproject.toml` list packages explicitly and will not pick
 it up on their own: `[tool.ruff] src`, `[tool.ruff.lint.isort]
 known-first-party`, `[tool.ty.environment] root` plus `[tool.ty.src] include`,
@@ -138,17 +138,17 @@ in `packages/atif-duck/tests/` fail until that is true.
 ## harbor is a public-API dependency, and the parity oracle is how we know
 
 `packages/atif-converter/pyproject.toml` pins `harbor>=0.22.0,<1`. Production code
-imports exactly two things from it: the ATIF data classes in
+imports only its public surface: the ATIF data classes in
 `harbor.models.trajectories` (RFC 0001) and `harbor.utils.trajectory_validator`.
 The conversion from a Claude Code session or a Codex rollout to a `Trajectory`
 is ours, in `atif_converter.domain.claude_code_conversion` and
 `atif_converter.domain.codex_conversion`, ported from harbor 0.22.0 under
-Apache-2.0 so that the two upstream files that used to be private dependencies
-(26 and 18 commits between June and September 2026) can change without moving us.
+Apache-2.0 so that the upstream files that used to be private dependencies
+(each busy upstream between June and September 2026) can change without moving us.
 
 harbor's private converters still exist in one place: the tests.
 `packages/atif-converter/tests/harbor_oracle.py` reaches them as the PARITY
-ORACLE, and three things hang off it:
+ORACLE, and these hang off it:
 
 - `tests/goldens/*.trajectory.json` — the oracle's output for each synthetic
   fixture, frozen. `test_harbor_oracle.py` asserts the live oracle still equals
@@ -170,8 +170,8 @@ packages/atif-converter/tests/test_harbor_oracle.py -k freeze`.
 
 ## Never spend money in a test
 
-Two paths call Amazon Bedrock and bill the caller: `atif-sql analyze` (the LLM
-pipelines) and `atif-sql embed` (Cohere Embed v4). Both are guarded, and the
+These paths call Amazon Bedrock and bill the caller: `atif-sql analyze` (the LLM
+pipelines) and `atif-sql embed` (Cohere Embed v4). Each is guarded, and the
 guards are part of the contract:
 
 - `analyze` is dry-run by default; `--no-dry-run` is what makes it spend.

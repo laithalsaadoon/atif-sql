@@ -16,7 +16,7 @@ which sessions were read from their parquet artifacts and which from
 
 `ColumnarArtifactProducer` implements atif-corpus's `ArtifactProducer` port
 (atif-cli plugs it into `materialize`). Given a session's trajectory it writes
-the four parquet files with the views' own projection expressions
+the parquet files with the views' own projection expressions
 (`atif_duck.infrastructure.projections`), so a query over them is exactly the
 query over the JSON, with no JSON parsed at query time. The file names and the
 `columnar_schema` version they're claimed under live in
@@ -26,9 +26,9 @@ query over the JSON, with no JSON parsed at query time. The file names and the
 ## SQL text and the session id boundary
 
 The registry builds its statements from f-strings, and every placeholder in
-them is one of three things: a module or catalog constant, a projection
+them is one of these: a module or catalog constant, a projection
 expression from `atif_duck.infrastructure.projections`, or `sql_literal(...)`.
-Those three producers return `SqlFragment` (a `NewType` over `str` in
+Those producers return `SqlFragment` (a `NewType` over `str` in
 `atif_duck.domain.sql_literal`), which is the type every SQL-building helper
 takes and returns. Anything that came from outside the process is a plain
 `str` and reaches DuckDB another way:
@@ -38,7 +38,7 @@ takes and returns. Anything that came from outside the process is a plain
   is registered as a view (`CREATE VIEW` can't take a parameter), so the view
   the union reads from holds no path text;
 - the Lance store's `ATTACH` and the producer's one-row session projection
-  are the two statements DuckDB won't prepare, so they still pass through
+  are the statements DuckDB won't prepare, so they still pass through
   `sql_literal`, and a test each fails when that wrapping is removed.
 
 `packages/atif-duck/tests/test_sql_text_boundaries.py` pins all of this: a

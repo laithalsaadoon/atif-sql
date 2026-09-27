@@ -1,7 +1,7 @@
 # atif-sql · State machines
 
-No entity in this workspace carries a `status` enum with declared transitions. The workspace declares
-exactly three enums. `RecordType` (`packages/atif-converter/src/atif_converter/domain/fidelity.py:18`)
+No entity in this workspace carries a `status` enum with declared transitions. The enums the workspace
+declares aren't lifecycles either. `RecordType` (`packages/atif-converter/src/atif_converter/domain/fidelity.py:18`)
 and `FidelityGap` (`:44`) are closed classification vocabularies whose members never move into one
 another. `OutputFormat` (`packages/atif-cli/src/atif_cli/output.py:58`) has one resolution —
 `resolve_format` maps `AUTO` to `TABLE` on a TTY and `JSON` otherwise (`:79-81`) — but that is an
@@ -9,7 +9,7 @@ idempotent pure function evaluated per emit, a no-op for every explicit format (
 is never stored and never advances again. One irreversible resolution with no persisted state is not a
 lifecycle.
 
-The three machines below are durable-state lifecycles instead: the state lives in a row, a sidecar
+The machines below are durable-state lifecycles instead: the state lives in a row, a sidecar
 file, or the presence of a directory, and named functions move an entity between named states. State
 names and transition labels are verbatim source text from each machine's `Defined at:` file.
 
@@ -147,7 +147,7 @@ stateDiagram-v2
 
 Every pipeline named by `PIPELINE_NAMES`
 (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:37-42`) fire
-the identical four-call sequence — `drain`, then `blocked_units`, then `enqueue` on failure and
+the identical call sequence — `drain`, then `blocked_units`, then `enqueue` on failure and
 `mark_done` on success:
 
 | pipeline | `drain` | `blocked_units` | `enqueue` | `mark_done` |
@@ -161,8 +161,8 @@ Defined at: `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_st
 
 ## See also
 
-- [processes](processes.md) — 12 shared source citations
-- [module map](../architecture/module-map.md) — 10 shared source citations
-- [business logic](../insights/business-logic.md) — 10 shared source citations
-- [contract map](../insights/contract-map.md) — 8 shared source citations
-- [debugging guide](../insights/debugging-guide.md) — 8 shared source citations
+- [processes](processes.md)
+- [module map](../architecture/module-map.md)
+- [business logic](../insights/business-logic.md)
+- [contract map](../insights/contract-map.md)
+- [debugging guide](../insights/debugging-guide.md)

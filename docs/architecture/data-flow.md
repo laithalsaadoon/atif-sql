@@ -6,10 +6,10 @@ installs a WARNING-and-up loguru sink and hands control to cyclopts — `package
 Every process below therefore begins as a CLI invocation; there is no HTTP, RPC, or queue surface
 to enter through.
 
-Two of the three flows below produce the corpus and one consumes it: `materialize` fills
+The flows below either produce the corpus or consume it: `materialize` fills
 `<corpus_root>/sessions/` (`:339`), `analyze` fills `<corpus_root>/analytics/` (`:627`), and
 `query` binds both and runs caller SQL over them (`:497`). The other commands are subsets of
-these three — `convert` (`:225`) is one iteration of flow 1's inner loop, `search` (`:828`)
+these flows — `convert` (`:225`) is one iteration of flow 1's inner loop, `search` (`:828`)
 re-enters flow 2's registration at `:886` and adds one kNN statement, `embed` (`:734`) writes the
 vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), and `status`
 (`:412`) answer from static data or `stat` calls with no downstream participant.
@@ -17,7 +17,7 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
 ## Flow 1: corpus materialization (`atif-sql materialize`)
 
 1. The `materialize` command resolves `CorpusSettings` (pydantic-settings, env prefix
-   `ATIF_SQL_`), then injects the three things the pure use case will not own: the
+   `ATIF_SQL_`), then injects what the pure use case will not own: the
    `ConverterPort` adapter, the wall-clock instant, and the harbor / converter version pins
    stamped into every `meta.json` — `packages/atif-cli/src/atif_cli/app.py:352`.
 2. One pass through the corpus use case runs scan, plan, convert, and write in that order and
@@ -44,8 +44,8 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
    (`convert_loaded_session`, validated by harbor's public `TrajectoryValidator`), then builds
    the loss report and edges from the same records, enriches the trajectory, and refuses the result
    if any source moved since the read (`packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`).
-9. The three JSON artifacts are written under `.staging/`, then the `ArtifactProducer` (atif-duck's
-   `ColumnarArtifactProducer`, plugged in by the CLI unless `--no-columnar`) writes the four typed
+9. The JSON artifacts are written under `.staging/`, then the `ArtifactProducer` (atif-duck's
+   `ColumnarArtifactProducer`, plugged in by the CLI unless `--no-columnar`) writes the typed
    parquet files beside them and hands back the `columnar_schema` key for `meta.json`; `meta.json`
    is written last and the whole directory swaps into `sessions/<id>/`, so a reader sees one
    complete generation or the other
@@ -72,7 +72,7 @@ sequenceDiagram
         Conv-->>Corpus: ConversionOutput
         Corpus->>Disk: stage trajectory, loss report, edges
         Corpus->>Producer: ArtifactProducer.produce(staged dir, trajectory)
-        Producer->>Disk: 4 typed parquet files (0444)
+        Producer->>Disk: typed parquet files (0444)
         Corpus->>Disk: meta.json last (with columnar_schema), swap dir
     end
     Corpus->>Disk: write watermark.json
@@ -91,7 +91,7 @@ sequenceDiagram
    because each later stage binds against the earlier one at `CREATE` time — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1679`.
 4. The raw readers materialize `meta.json`, `edges.jsonl`, and `loss_report.json` as TEMP TABLEs
    over globs into `<corpus_root>/sessions/`. The trajectory is split per session: a session whose
-   `meta.columnar_schema` is current and whose four parquet files are present is read lazily with
+   `meta.columnar_schema` is current and whose parquet files are present is read lazily with
    `read_parquet` (typed columns, no JSON parsed at query time), and every other session is parsed
    from `trajectory.json` into a TEMP TABLE over an explicit path list; the two sets are unioned
    into one raw view per surface. The parse cost of a `query` invocation is therefore O(sessions
@@ -194,8 +194,8 @@ sequenceDiagram
 
 ## See also
 
-- [processes](../behavior/processes.md) — 16 shared source citations
-- [sequences](../diagrams/behavioral/sequences.md) — 16 shared source citations
-- [module map](module-map.md) — 13 shared source citations
-- [debugging guide](../insights/debugging-guide.md) — 13 shared source citations
-- [components](../diagrams/architecture/components.md) — 12 shared source citations
+- [processes](../behavior/processes.md)
+- [sequences](../diagrams/behavioral/sequences.md)
+- [module map](module-map.md)
+- [debugging guide](../insights/debugging-guide.md)
+- [components](../diagrams/architecture/components.md)

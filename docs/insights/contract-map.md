@@ -1,14 +1,14 @@
 # atif-sql · Contract map
 
 **What counts as a contract here.** This workspace has almost no shared-type imports to trace,
-because `pyproject.toml:514-523` forbids most of them: five of the seven members may never import
+because `pyproject.toml:514-523` forbids most of them: the independent members may never import
 each other, and atif-analytics may import only atif-models. What crosses a module boundary instead
 is a **shape agreed by two packages that cannot reference one another's symbols** — a file layout, a
 JSON key order, a column projection, a `typing.Protocol` typed to a document rather than to an
 implementation. So a contract in this file is any of:
 
 1. a `typing.Protocol` declared in one package's `domain/ports.py` and satisfied by an adapter
-   elsewhere (there are exactly five, listed below);
+   elsewhere (each is listed below);
 2. a shape declared **twice or more** in packages that cannot import each other, where the two
    declarations must agree or a query silently returns wrong rows;
 3. a build-enforced dependency rule (import-linter), which is a stronger fact than a convention;
@@ -20,7 +20,7 @@ single most important structural fact for reading this file. `RealConverter`
 (`packages/atif-cli/src/atif_cli/converter_adapter.py:44`) implements `ConverterPort`
 (`packages/atif-corpus/src/atif_corpus/domain/ports.py:41`) by shape alone; it never names the
 Protocol, and it cannot, because atif-corpus may never import atif-converter. The Protocol name
-appears at exactly two import sites in the whole workspace —
+appears at only these import sites in the whole workspace —
 `packages/atif-corpus/src/atif_corpus/application/materialize.py:92` (the module that CALLS it) and
 `packages/atif-cli/tests/test_converter_adapter.py:17` (the test that binds the two together in an
 annotation). So each Protocol row below has a producer of the shape and an implementer the type
@@ -32,8 +32,8 @@ Every contract below names its producer, its consumers, the verbatim shape, the 
 consumers make beyond the shape, and the drift risk. **Consumer counts are grep-derived and
 confirmed at each import, annotation, or call site** — this repo has no code index
 (`.gitignore:24` lists `.codegraph/`, and no index exists on disk), so no count here comes from a
-symbol graph. Two grep hazards shape every count: names collide across packages (`DomainError` in
-three, `EmbeddingProviderMismatch` in two, `cached_tokens` in two coordinate spaces), so every
+symbol graph. These grep hazards shape every count: names collide (`DomainError` and
+`EmbeddingProviderMismatch` across packages, `cached_tokens` across coordinate spaces), so every
 attribution here is by module path and never by bare name; and every cross-package import is
 indented inside a function body or a `TYPE_CHECKING` block, so a line-anchored grep finds nothing.
 
@@ -45,15 +45,15 @@ Contracts are ordered by confirmed consumer count, descending.
 
 **Consumer(s):**
 
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:210-213` — inlines the four
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:210-213` — inlines the
   filenames as SQL glob literals for its `read_json` readers.
 - `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:120-121` — opens
   `trajectory.json` and gates on `meta.json` with its own DuckDB connection.
 - `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:53-55` — declares
-  `TRAJECTORY_FILENAME` / `EDGES_FILENAME` / `META_FILENAME` a third time as its own constants.
+  `TRAJECTORY_FILENAME` / `EDGES_FILENAME` / `META_FILENAME` again as its own constants.
 - `packages/atif-corpus/src/atif_corpus/application/materialize.py:222-238` — the writer side, the
   only place the artifacts are produced.
-- `docs/CONTRACT.md:21-39` — the hand-written specification all four agree to.
+- `docs/CONTRACT.md:21-39` — the hand-written specification all of them agree to.
 
 **Shape:**
 
@@ -76,7 +76,7 @@ Contracts are ordered by confirmed consumer count, descending.
 ```
 
 The parquet files are a cache of what the views compute from `trajectory.json`, never a source of
-truth: atif-duck reads them only when `meta.columnar_schema` matches its own version and all four
+truth: atif-duck reads them only when `meta.columnar_schema` matches its own version and all of them
 are present and non-empty (`packages/atif-duck/src/atif_duck/infrastructure/columnar.py`), and
 falls back to `trajectory.json` per session otherwise. The names and the schema version live in
 `packages/atif-duck/src/atif_duck/domain/columnar.py`; atif-corpus never learns them, it runs the
@@ -84,13 +84,13 @@ producer through the `ArtifactProducer` port and merges the returned keys into `
 
 **Assumptions consumers make:**
 
-- **`meta.json` present means the session dir is complete.** All three readers implement the same
+- **`meta.json` present means the session dir is complete.** Every reader implements the same
   torn-set gate independently: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:188-192` restricts the trajectory/edges/loss readers to
   dirs where `v_raw_meta` has a row; `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:121-124` skips a dir with no `meta.json`;
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:171-180` does the same and logs a warning. Nothing in the file layout expresses
   this — it is a write-ORDER promise made at
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:209-212`.
-- **No reader ever sees a partially-written directory**, because the writer stages all four
+- **No reader ever sees a partially-written directory**, because the writer stages all the
   artifacts under `<corpus_root>/.staging/` and swaps the whole dir with `os.replace`
   (`packages/atif-corpus/src/atif_corpus/application/materialize.py:201-212`), and `.staging` is deliberately outside `sessions/` so a DuckDB glob
   cannot reach it (`packages/atif-corpus/src/atif_corpus/domain/layout.py:50-54`).
@@ -108,21 +108,21 @@ producer through the `ArtifactProducer` port and merges the returned keys into `
 - **`materialized_at` is an ISO-8601 UTC string, not a timestamp.** atif-duck projects it as
   `VARCHAR` (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:140`); the CLI supplies it (`packages/atif-cli/src/atif_cli/app.py:400`).
 
-**Where the hand-written contract disagrees with the code, the code wins — and it does disagree in
-two places.** `docs/CONTRACT.md:61` heads its CLI section "atif-cli composes; only package importing
-the other three", while the manifest declares five sibling dependencies
-(`packages/atif-cli/pyproject.toml:32-36`) and the CLI imports all five. `docs/CONTRACT.md:16-17`
+**Where the hand-written contract disagrees with the code, the code wins.** Its CLI heading names
+atif-cli the only package importing the others, and the manifest agrees: it declares the sibling
+dependencies
+(`packages/atif-cli/pyproject.toml:32-36`) and the CLI imports every one of them. `docs/CONTRACT.md:16-17`
 lists VSS/`semantic_search` and the v2 LLM-analytics pipelines as out of scope and then reverses
 itself at `docs/CONTRACT.md:17-19`; both are shipped commands
 (`packages/atif-cli/pyproject.toml:42` plus the `embed` / `search` / `analyze` commands). Read
-`docs/CONTRACT.md:21-39` as authoritative for the layout — that is the part four packages actually
+`docs/CONTRACT.md:21-39` as authoritative for the layout — that is the part the packages actually
 implement — and the manifest as authoritative for who imports whom.
 
-**Drift risk:** a fifth artifact, a renamed file, or a new `meta.json` key must be applied in four
-places that no test links, and three of the four are reader-side, so an addition silently reaches
+**Drift risk:** a new artifact, a renamed file, or a new `meta.json` key must be applied in every
+place above, which no test links, and most of them are reader-side, so an addition silently reaches
 nobody. Mitigation: the writer-side constants at
 `packages/atif-corpus/src/atif_corpus/domain/layout.py:18-22` are the single source of truth on the
-write side — any layout change starts there and then greps the three reader modules named above.
+write side — any layout change starts there and then greps the reader modules named above.
 
 ## The static SQL catalog
 
@@ -136,8 +136,8 @@ write side — any layout change starts there and then greps the three reader mo
 - `packages/atif-cli/src/atif_cli/app.py:1745-1778` — the `schema` command reads `VIEW_SCHEMA`,
   `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES`, tags each object
   with its `requires` value, and answers with no DuckDB connection.
-- `packages/atif-duck/src/atif_duck/domain/examples.py:36-42` — the examples generator imports all
-  seven catalogs and derives one runnable query per object.
+- `packages/atif-duck/src/atif_duck/domain/examples.py:36-42` — the examples generator imports every
+  catalog and derives one runnable query per object.
 - `packages/atif-cli/src/atif_cli/app.py:1025-1046` — the `examples` command calls
   `build_examples()`.
 - `packages/atif-duck/tests/test_duck_views.py:31-33` — the `DESCRIBE`-vs-`VIEW_SCHEMA` and
@@ -181,7 +181,7 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
   list fails CI even though every column still exists.
 - **`DESCRIPTIONS` covers every object in every catalog, exactly.** `packages/atif-duck/tests/test_examples.py:181-185`
   fails on a missing entry AND on a stale entry keyed to an object that no longer exists, so the
-  dict is a bijection with the union of the four name catalogs.
+  dict is a bijection with the union of the name catalogs.
 - **Every macro parameter name has an `ARG_EXEMPLARS` literal**, or example generation raises
   rather than emitting a broken query — `packages/atif-duck/src/atif_duck/domain/examples.py:151-157` fails loud, and
   `packages/atif-duck/tests/test_examples.py:189-194` pre-empts it.
@@ -191,7 +191,7 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
   `packages/atif-duck/tests/test_examples.py:198-210`.
 - **The catalog is answerable without a corpus.** `packages/atif-cli/src/atif_cli/app.py:1094-1098` states the sub-50 ms,
   no-DuckDB-bind guarantee the `schema` command rests on; a runtime `DESCRIBE` would violate it.
-- **The four raw readers are deliberately NOT in `VIEW_NAMES`** (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:65-68`), so a
+- **The raw readers are deliberately NOT in `VIEW_NAMES`** (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:65-68`), so a
   consumer enumerating `VIEW_NAMES` does not see `v_raw_trajectories` and friends.
 
 **Drift risk:** adding a view or macro without a `DESCRIPTIONS` entry, an `ARG_EXEMPLARS` entry for
@@ -200,13 +200,13 @@ here, and the real exposure is a *type* that only the fixture corpus produces. M
 `VIEW_SCHEMA["message_embeddings"]` at `packages/atif-duck/src/atif_duck/domain/catalog.py:218-224` hardcodes `FLOAT[1024]`, so run the
 drift test against a store built at a non-default `output_dimension` before changing that setting.
 
-## The seven import-linter architecture contracts
+## The import-linter architecture contracts
 
 **Producer:** `pyproject.toml:462-523`
 
 **Consumer(s):**
 
-- `mise.toml:197` — `lint:imports` is gate 5 of the nine `mise run check` gates, so the build is
+- `mise.toml:197` — `lint:imports` is one of the `mise run check` gates, so the build is
   the consumer.
 - `packages/atif-corpus/src/atif_corpus/domain/ports.py:5-8` — the `ConverterPort` docstring cites
   the independence contract as the reason the Protocol exists at all.
@@ -246,31 +246,31 @@ forbidden_modules = ["atif_converter", "atif_corpus", "atif_duck", "atif_embed",
   two independent packages is `packages/atif-cli/src/atif_cli/converter_adapter.py:36-38`, and its
   docstring names that privilege explicitly at `packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`.
 - **atif-analytics is absent from the independence list on purpose** so it can compose atif-models,
-  with the `forbidden` contract pinning its other six edges shut — the reasoning is inline at
+  with the `forbidden` contract pinning its other edges shut — the reasoning is inline at
   `pyproject.toml:509-513`. Verified: `grep -rn 'atif_duck' packages/atif-analytics/` returns
   nothing, so the CONTRACT-V2-era design of reading atif-duck's views is not what the code does.
-- **atif-duck declares no `layers` contract.** Five members do (`pyproject.toml:465-508`); atif-duck
+- **atif-duck declares no `layers` contract.** Most members do (`pyproject.toml:465-508`); atif-duck
   has `domain/` and `infrastructure/` but no `application/`, so there is no third layer to order.
-- **Every layered member's `domain/` is the innermost layer**, which is why all five Protocols live
+- **Every layered member's `domain/` is the innermost layer**, which is why all the Protocols live
   in `domain/ports.py` and none in an `application/ports.py` — no such file exists in this
   workspace.
 - **The comment at `pyproject.toml:509-510` grants a permission that is not exercised.** It reads
   "ONLY atif-cli and atif-analytics may import atif-models", but atif-cli neither declares
   atif-models in `packages/atif-cli/pyproject.toml:32-36` nor imports it anywhere:
   `grep -rn 'atif_models' packages/atif-cli/` returns nothing. The live atif-models edge is
-  atif-analytics' alone, 22 import sites led by
+  atif-analytics' alone, its import sites led by
   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:28-29`.
 - **Every cross-package import in this workspace is INDENTED** — inside a function body or a
   `TYPE_CHECKING` block — because `PLC0415` is ignored workspace-wide to satisfy the lean-import
-  test (`pyproject.toml:164`). The four exceptions are module-scope imports in the two atif-cli
+  test (`pyproject.toml:164`). The exceptions are module-scope imports in atif-cli
   modules that are themselves only ever imported inside a command body:
   `packages/atif-cli/src/atif_cli/converter_adapter.py:36-38` and
   `packages/atif-cli/src/atif_cli/duck_errors.py:26`. A line-anchored grep for `^from atif_` finds
-  zero cross-package consumers, which is why every count in this file comes from an unanchored grep
+  no cross-package consumers, which is why every count in this file comes from an unanchored grep
   confirmed at the site.
 
 **Drift risk:** a new workspace member that is not added to `root_packages` (`pyproject.toml:463`) is silently
-unchecked — import-linter reports "7 contracts, 7 kept" while the new package imports whatever it
+unchecked — import-linter reports every contract kept while the new package imports whatever it
 likes. Mitigation: adding a `packages/*` member means adding it to `root_packages` and giving it
 either a `layers` contract or a place in the `independence` list in the same commit.
 
@@ -320,10 +320,10 @@ class LlmStructuredProvider(Protocol):
   provider.** `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:70` and `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:129` both reach for `getattr(provider, "usage", None)` because
   `usage` is not on the port; a conforming adapter without that attribute silently reports zero
   spend and the `RunBudget` ceiling never trips.
-- **`CallUsage` counts are PER CALL, and two of the four are subsets of the other two.**
+- **`CallUsage` counts are PER CALL, and some of them are subsets of others.**
   `reasoning_tokens` is a subset of `output_tokens` and `cached_tokens` a subset of `input_tokens`
   (`packages/atif-models/src/atif_models/domain/ports.py:64-70`), so `estimate_cost` at `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:73-77` prices only `input_tokens` and
-  `output_tokens` — adding the other two would double-charge.
+  `output_tokens` — adding the subsets would double-charge.
 - **`UsageAccumulator` must be thread-safe, not task-safe.** The lock is a `threading.Lock`
   (`packages/atif-models/src/atif_models/domain/ports.py:87`) because adapters dispatch blocking `invoke_model` through `anyio.to_thread`,
   reasoning stated at `packages/atif-models/src/atif_models/domain/ports.py:16-22`.
@@ -356,7 +356,7 @@ mismatched adapter fails the typecheck gate.
 **Consumer(s):**
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py:107-117` — `_EDGE_COLUMNS`, the
-  same nine keys in the same order with DuckDB types.
+  same keys in the same order with DuckDB types.
 - `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:300-301` — reads the
   `uuid` field for the conflicts pipeline's returned-uuid validity guard.
 - `packages/atif-corpus/src/atif_corpus/application/materialize.py:224-227` — writes the lines and
@@ -399,8 +399,8 @@ EDGE_FIELDS: tuple[str, ...] = (
   `packages/atif-converter/src/atif_converter/domain/fidelity.py:91-95` — both derive from the same
   raw census, so a consumer may cross-check one against the other.
 
-**Drift risk:** the nine keys are declared twice in packages that cannot import each other, and a
-tenth key added on the producer side is simply invisible to `_EDGE_COLUMNS` — a projection reader
+**Drift risk:** the keys are declared twice in packages that cannot import each other, and a
+new key added on the producer side is simply invisible to `_EDGE_COLUMNS` — a projection reader
 drops unknown keys without erroring. Mitigation: `EDGE_FIELDS` is a single tuple; changing it means
 editing `packages/atif-duck/src/atif_duck/infrastructure/registry.py:107-117` in the same commit.
 
@@ -410,7 +410,7 @@ editing `packages/atif-duck/src/atif_duck/infrastructure/registry.py:107-117` in
 
 **Consumer(s):**
 
-- `packages/atif-embed/src/atif_embed/application/embed.py:35` — imports all three; annotated at
+- `packages/atif-embed/src/atif_embed/application/embed.py:35` — imports every one of them; annotated at
   `packages/atif-embed/src/atif_embed/application/embed.py:46-47` and `packages/atif-embed/src/atif_embed/application/embed.py:65-67`.
 - `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:285` — the
   `EmbeddingProvider` adapter.
@@ -462,7 +462,7 @@ class TextRowsPort(Protocol):
   leaves those uuids for the next pass.
 - **The store's `(model, dim)` stamp is checked BEFORE any append**, `packages/atif-embed/src/atif_embed/application/embed.py:166-175`, using the
   identity `table_identity()` returns — `None` there means empty and any provider may claim it.
-- **`add_chunk` accepts a 7-column polars frame with a fixed-size `pl.Array`, not a `pl.List`.**
+- **`add_chunk` accepts a polars frame with a fixed-size `pl.Array`, not a `pl.List`.**
   The schema is built at `packages/atif-embed/src/atif_embed/application/embed.py:216-238` and the reason is stated at `packages/atif-embed/src/atif_embed/application/embed.py:212-215`: a variable-size
   list is rejected by Lance for indexing.
 - **`iter_unembedded`'s laziness bounds only the CALLER's residency.** The port says so explicitly
@@ -477,13 +477,13 @@ class TextRowsPort(Protocol):
   constructs each default adapter itself under a deferred import (`packages/atif-embed/src/atif_embed/application/embed.py:103-110`, `packages/atif-embed/src/atif_embed/application/embed.py:157-159`)
   so a dry run never loads boto3.
 
-- **No test binds any of the three adapters to its Protocol.** Unlike `ConverterPort`, these three
+- **No test binds any of these adapters to its Protocol.** Unlike `ConverterPort`, they
   have no conformance assertion anywhere in `packages/atif-embed/tests/`; the only static link is
   the defaulting assignment inside `run_backfill`, where each concrete class is assigned to a
   parameter already annotated with the port
   (`packages/atif-embed/src/atif_embed/application/embed.py:103-110` and `packages/atif-embed/src/atif_embed/application/embed.py:157-159` against the
   annotations at `packages/atif-embed/src/atif_embed/application/embed.py:65-67`). ty and pyright
-  check those three assignments; if the defaulting branch were ever refactored to construct the
+  check those assignments; if the defaulting branch were ever refactored to construct the
   adapters elsewhere, nothing would check conformance at all.
 
 **Drift risk:** `dimension` is read once per run and stamped on every row (`packages/atif-embed/src/atif_embed/application/embed.py:161-162`), so
@@ -542,7 +542,7 @@ class ConverterPort(Protocol):
   (`packages/atif-cli/tests/test_converter_adapter.py:89-90`) states that the assignment is what ty
   verifies. Delete that test and a signature change on either side becomes a runtime
   `AttributeError` at materialize time.
-- **The port is typed to `docs/CONTRACT.md`'s artifact shapes, not to converter internals** — three
+- **The port is typed to `docs/CONTRACT.md`'s artifact shapes, not to converter internals** —
   loosely-typed `dict[str, Any]` / `list[str]` fields instead of the converter's own
   `ConversionResult`. The docstring at `packages/atif-corpus/src/atif_corpus/domain/ports.py:3-10` names the independence contract as the
   reason, so the weak typing is the contract, not an omission.
@@ -560,7 +560,7 @@ class ConverterPort(Protocol):
   `atif_cli.app` module scope, and `packages/atif-cli/src/atif_cli/app.py:387` obeys by importing inside the command body —
   enforced by the fresh-interpreter lean-import test named at `pyproject.toml:164`.
 
-**Drift risk:** the three `dict[str, Any]` fields mean a converter that renames a trajectory key
+**Drift risk:** the `dict[str, Any]` fields mean a converter that renames a trajectory key
 type-checks perfectly and produces artifacts atif-duck's explicit projections silently null out;
 and because the implementer never names the port, a `convert` signature change on either side is
 caught by exactly one assertion. Mitigation:
@@ -611,7 +611,7 @@ DEFAULT_PRICING: dict[str, tuple[float, float]] = {
 - **`in_rate` / `out_rate` are USD per 1,000,000 tokens.** The unit appears in neither name — only
   the comment at `packages/atif-duck/src/atif_duck/domain/catalog.py:395` and the `/ 1e6` at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1071` carry it.
 - **`est_cost_usd` is USD and covers the PRICED steps only.** It is meaningful only when
-  `unpriced_steps = 0`, stated three times: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1053-1058`, `packages/atif-duck/src/atif_duck/domain/catalog.py:347-350`, and the
+  `unpriced_steps = 0`, stated in each of these places: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1053-1058`, `packages/atif-duck/src/atif_duck/domain/catalog.py:347-350`, and the
   `LEFT JOIN` shape itself at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1079`.
 - **`unpriced_steps` counts only steps with a non-NULL `model_name`**, because user steps carry no
   model and cost nothing — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1060-1063`. Counting them would put every conversation
@@ -709,7 +709,7 @@ which is what both docstrings instruct.
   0.22.0's, building `Trajectory` / `Step` / `ToolCall` / `Metrics` from the public models.
 - `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781` — `convert_codex_records`, the Codex counterpart.
 - `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68` — `validate_trajectory`, the only call into harbor's validator.
-- `packages/atif-converter/tests/test_harbor_public_surface_guard.py:29` — the `ast` guard that pins the allowlist to those two modules.
+- `packages/atif-converter/tests/test_harbor_public_surface_guard.py:29` — the `ast` guard that pins the allowlist to those modules.
 - `packages/atif-converter/tests/harbor_oracle.py:94` and `:111` — the parity ORACLE: harbor's private converters, reached from the tests
   only, with frozen goldens and a live-corpus diff.
 
@@ -786,10 +786,10 @@ version_files = [
   owned by whoever owns it — the reasoning is inline at `packages/atif-cli/pyproject.toml:24-31`.
 - **One version covers the whole repository.** commitizen reads its own `version` key rather than
   the PEP 621 field (`pyproject.toml:401-403`), and `version_files` propagates it to the published
-  `[project] version` and to all seven member manifests; seven numbers for one artifact is the
+  `[project] version` and to every member manifest; a separate number per member for one artifact is the
   shape being refused.
 - **The `version_files` entries are per-file rather than globbed on purpose**, because
-  `--check-consistency` requires a hit in every matched file and five of the seven members carry no
+  `--check-consistency` requires a hit in every matched file and most members carry no
   dev pin between members (`pyproject.toml:436-439`).
 - **The lockfile must land in the same commit as the versions it resolves.** `pre_bump_hooks` run
   `uv lock` and `git add uv.lock` after the rewrite and before the commit
@@ -817,9 +817,9 @@ rather than skipping a file that no longer contains the current version — the 
   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:134-141`. `harbor_version` and
   `converter_version` are supplied by the CLI (`packages/atif-cli/src/atif_cli/app.py:401-402`), so
   the corpus records which converter built it without atif-corpus importing either.
-- **The embeddings-store row shape** — 7 Arrow fields written at
+- **The embeddings-store row shape** — the Arrow fields written at
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:115-121`, of which the
-  `message_embeddings` view exposes 5
+  `message_embeddings` view exposes only some
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:218-224`). `text_hash` and `truncated` are
   unreachable from SQL, so a query cannot distinguish a head-only-embedded row from a complete one.
 - **The Lance schema version sidecar** — `SCHEMA_VERSION = 2` and `schema_version.json` at
@@ -840,7 +840,7 @@ rather than skipping a file that no longer contains the current version — the 
   `REFUSALS_DIRNAME` (`packages/atif-analytics/src/atif_analytics/domain/layout.py:39`) has no view, so the refusal audit its docstring calls
   queryable is not reachable from SQL.
 - **The CLI exit-code taxonomy** — `EXIT_CODES` at
-  `packages/atif-cli/src/atif_cli/errors.py:25-39`, consumed at 12 sites in
+  `packages/atif-cli/src/atif_cli/errors.py:25-39`, consumed at many sites in
   `packages/atif-cli/src/atif_cli/app.py` and mapped from DuckDB exceptions at
   `packages/atif-cli/src/atif_cli/duck_errors.py:34-63`. Code 78 is the load-bearing one: it means
   an operator must act, and unattended lanes suppress retries on it
@@ -850,24 +850,24 @@ rather than skipping a file that no longer contains the current version — the 
   both the row's `truncated` flag and the adapter's wire-level clip so the two can never disagree
   (`packages/atif-embed/src/atif_embed/domain/text_stamp.py:31-34`).
 - **The `steps`-view rendering semantics, mirrored without a shared symbol** —
-  `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:23-33` reproduces four
-  of atif-duck's `steps` rules by hand (message-union flattening, `extra.source_uuids[0]` as the
+  `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:23-33` reproduces
+  atif-duck's `steps` rules by hand (message-union flattening, `extra.source_uuids[0]` as the
   step key, `agent` → `assistant`, error recovery from
   `observation.results[].extra.tool_result_metadata.is_error`), and
-  `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:12-25` reproduces two of
+  `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:12-25` reproduces some of
   them again.
-- **The `ATIF_SQL_` settings prefix** — the one env namespace across all seven members;
+- **The `ATIF_SQL_` settings prefix** — the one env namespace across every member;
   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:31` pins
   `output_dimension: Literal[256, 512, 1024, 1536] = 1024`, which is the value the static catalog
   hardcodes as `FLOAT[1024]`.
 - **The lean-import contract** — `pyproject.toml:164` and `pyproject.toml:181` record that `atif_cli.app` must not
   import duckdb, harbor, lancedb, boto3, or polars at module scope, asserted in a fresh interpreter
-  by `packages/atif-cli/tests/test_lean_import.py`; 182 deferred-import sites exist because of it.
+  by `packages/atif-cli/tests/test_lean_import.py`; the deferred-import sites exist because of it.
 
 ## See also
 
-- [impact analysis](impact-analysis.md) — 49 shared source citations
-- [module map](../architecture/module-map.md) — 37 shared source citations
-- [processes](../behavior/processes.md) — 35 shared source citations
-- [business logic](business-logic.md) — 33 shared source citations
-- [components](../diagrams/architecture/components.md) — 20 shared source citations
+- [impact analysis](impact-analysis.md)
+- [module map](../architecture/module-map.md)
+- [processes](../behavior/processes.md)
+- [business logic](business-logic.md)
+- [components](../diagrams/architecture/components.md)

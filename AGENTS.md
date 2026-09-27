@@ -1,6 +1,6 @@
 # atif-sql — operating manual
 
-ATIF-native analytics over agent trajectories, from two agents: Claude Code
+ATIF-native analytics over agent trajectories from Claude Code
 (`~/.claude/projects/**/*.jsonl`) and Codex CLI
 (`~/.codex/sessions/**/rollout-*.jsonl`).
 Instead of SQL views over raw JSONL, this stack converts sessions to ATIF
@@ -13,8 +13,8 @@ documents, and layers DuckDB views on top. One corpus holds one agent, and
 uv WORKSPACE (virtual root, members under `packages/*`):
 
 - `packages/atif-converter` — wraps harbor's `ClaudeCode` and `Codex`
-  adapters; owns the fidelity policy per agent (the seven known Claude Code
-  gaps in `atif_converter.domain.fidelity`, the seven Codex ones in
+  adapters; owns the fidelity policy per agent (the known Claude Code
+  gaps in `atif_converter.domain.fidelity`, the Codex ones in
   `atif_converter.domain.codex_fidelity`, whose values are namespaced
   `codex_*` so one `gaps_observed` array carries both). `domain.agents`
   holds the `AgentSource` enum, whose VALUES are the wire contract for the
@@ -60,7 +60,7 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `infrastructure` > `domain`.
 - `packages/atif-embed` — Cohere Embed v4 on Bedrock + LanceDB store + the
   backfill use case. Layered: `application` > `infrastructure` > `domain`.
-- `packages/atif-cli` — cyclopts CLI composing the rest: 10 commands
+- `packages/atif-cli` — cyclopts CLI composing the rest into commands
   (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`,
   `search`, `examples`, `schema`, `cron`).
 
@@ -106,7 +106,7 @@ Rules of the road:
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - SQL text is constants only. No corpus path may be spliced into a statement:
   `read_json(?)` takes globs and file lists as bound parameters, parquet file
-  lists go through `con.read_parquet(files).create_view(...)`, and the two
+  lists go through `con.read_parquet(files).create_view(...)`, and the
   statements DuckDB won't prepare (`ATTACH`, the producer's session row) go
   through `sql_literal`. Helpers that build SQL take and return `SqlFragment`
   (`atif_duck.domain.sql_literal`). Every site that still interpolates
@@ -175,7 +175,7 @@ Rules of the road:
 
 ## Agent query workflow
 
-For an LLM agent driving `atif-sql`, the discovery loop is three commands:
+For an LLM agent driving `atif-sql`, the discovery loop is this:
 
 1. `atif-sql schema` — every view (with columns) and macro signature, core
    and analytics, each with what it `requires`, from the static catalog in

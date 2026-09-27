@@ -127,7 +127,7 @@ proofs are out of scope for the workspace.
   .staging/ dir and atomic rename, so a session is still the crash-safety
   unit, and the watermark still advances only for sessions that succeeded.
   --workers 1 is the single-process reference path.
-- Columnar artifacts: the five parquet files are a query-time cache of what the
+- Columnar artifacts: the parquet files are a query-time cache of what the
   views compute from trajectory.json and session_events.jsonl, never a source
   of truth. materialize
   writes them by default through the ArtifactProducer port (atif-corpus
@@ -136,7 +136,7 @@ proofs are out of scope for the workspace.
   them or none. meta.columnar_schema names the schema version they were
   written against (currently 2; 2 added session_events.parquet). A reader takes
   the columnar path for a session only when meta.columnar_schema equals its own
-  version AND all five files are
+  version AND all of those files are
   present and non-empty; otherwise it reads trajectory.json for that session.
   A corpus written before this key existed, or with --no-columnar, stays valid
   and answers every query from JSON. Whatever the path, every view and macro
@@ -152,10 +152,10 @@ proofs are out of scope for the workspace.
   costs space only. The hash and extension are validated before either
   becomes a path.
 
-## Two agents (atif-converter converts, atif-corpus discovers)
+## Agents (atif-converter converts, atif-corpus discovers)
 - AgentSource is a StrEnum in atif-converter with an AST-pinned twin in
   atif-corpus (the packages may not import each other). Its VALUES are the wire
-  contract three ways: the `--agent` spellings, harbor's Trajectory.agent.name,
+  contract for the `--agent` spellings, harbor's Trajectory.agent.name,
   and meta.agent above.
 - Claude Code layout: <source_root>/<project>/<session>.jsonl, transcript depth
   1, side files present (subagents/, *.meta.json).
@@ -225,16 +225,16 @@ proofs are out of scope for the workspace.
   built through the connection's own API and registered as views (CREATE
   VIEW can't be prepared). Every remaining f-string placeholder in a SQL
   statement is a module constant, a catalog constant, a projection
-  expression, or `sql_literal(...)`, and an AST test over the four SQL
-  modules fails on anything else. The two statements DuckDB won't prepare
+  expression, or `sql_literal(...)`, and an AST test over the SQL
+  modules fails on anything else. The statements DuckDB won't prepare
   (ATTACH for the Lance store, the producer's one-row session projection)
   are the only places `sql_literal` still escapes a value.
 - ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
   ArtifactProducer implementation: a pure function of the trajectory (and of
-  the staged session_events.jsonl beside it) that writes the five parquet files with the views' own projection expressions,
+  the staged session_events.jsonl beside it) that writes the parquet files with the views' own projection expressions,
   so the JSON columns are normalized exactly as read_json would.
 - sessions view carries `agent` and `agent_version` from trajectory.agent, and
-  coalesces the two shapes harbor emits for working directory and git branch
+  coalesces the shapes harbor emits for working directory and git branch
   (cwds[0]/cwd, git_branches[0]/git.branch). The steps view coalesces
   cache_creation_input_tokens with the Codex spelling cache_write_input_tokens.
 - messages-parity view name: `steps` (one row per ATIF step) PLUS a `messages`
@@ -243,7 +243,7 @@ proofs are out of scope for the workspace.
 - Static VIEW_SCHEMA dict + drift test, so a view rename fails a gate.
 - Macro signatures are pinned against the DDL by a drift test.
 
-## CLI (atif-cli composes; the only package importing the other five)
+## CLI (atif-cli composes; the only package importing the others)
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
 atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N]  # sync corpus
@@ -271,8 +271,8 @@ SUPERSET of the prior implementation (workflow-nested files are visible);
 (f) enrichment covers >= 99% of assistant uuids; (g) sidechain step token
 sums equal an independent raw subagent-file sum.
 
-All gates passed — 6/6 on a 20-session sample, then 7/7 on 128 sessions
-across 41 project dirs. Neither the runners nor the recorded verdicts are
+All gates passed — first on a small sample, then on a larger set of sessions
+across many project dirs. Neither the runners nor the recorded verdicts are
 tracked here. Parity is not a standing gate: the comparison target is not a
 dependency of this repo, so re-running the oracle would need an install this
 repo neither declares nor provides.

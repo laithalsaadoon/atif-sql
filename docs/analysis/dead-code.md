@@ -9,27 +9,27 @@ measurement, and with them these rows below: `TRAJECTORY_DIRNAME`,
 `packages/atif-analytics/src/atif_analytics/domain/layout.py`. The counts and line
 numbers here haven't been re-measured.
 
-**Nothing in this workspace is deletable code.** Of 314 public top-level
-definitions across the 100 files under `packages/*/src`, 34 have no reference
-outside their own file, and **zero** have no reference anywhere. Every one of the
-34 resolves to a call, construction, or annotation site inside its own module.
+**Nothing in this workspace is deletable code.** Some public top-level
+definitions under `packages/*/src` have no reference
+outside their own file, and **none** has no reference anywhere. Every one of
+those resolves to a call, construction, or annotation site inside its own module.
 What the two tables below record is a narrower defect: an **export declaration
 with no consumer** — a name in an `__all__` that nothing imports.
 
 **Technique, and what it cannot see.** No code index covers this repo (there is no `.codegraph/`, no LSP index, no AST
 symbol graph), and no dead-code analyzer is wired into the project: `grep -n
 "vulture|dead|unused|deptry|knip"` over `pyproject.toml` and `mise.toml` returns
-one unrelated hit, ty's `unused-ignore-comment` at `pyproject.toml:383`. The
-finding set is therefore derived, in three passes:
+only an unrelated hit, ty's `unused-ignore-comment` at `pyproject.toml:383`. The
+finding set is therefore derived, in these passes:
 
 1. **AST enumeration.** `ast.parse` every file under `packages/*/src/**/*.py`,
    collecting every top-level `FunctionDef` / `AsyncFunctionDef` / `ClassDef` /
    module-level assignment whose name does not begin with `_`, together with its
-   `__all__` membership. 314 definitions across 100 files; 56 of the 100 modules
-   declare an `__all__`.
+   `__all__` membership, and whether its module declares an `__all__` at
+   all.
 2. **Unanchored reference index.** For each name, the whole-word pattern
    `(?<![\w.])NAME(?![\w])` against every line of every git-tracked text file —
-   `git ls-files -z` yields 224 paths, all 224 readable as text — excluding the
+   every path `git ls-files -z` yields, all readable as text — excluding the
    defining file. Driving the search from `git ls-files` is what guarantees that
    no citation here lands in a gitignored path and that `.md`, `.toml`, and
    `.yml` surfaces are searched, not only Python.
@@ -38,19 +38,19 @@ finding set is therefore derived, in three passes:
    import form a consumer would have to write.
 
 `vulture` 2.16 was run as a cross-check (`uvx vulture packages
---min-confidence 80`, exit 3, 19 findings) and contributes **no rows**: 17 are
-pytest fixture parameters requested for their side effect, one is a boto3
-keyword-only parameter on a signature-matching stub, and one is the
+--min-confidence 80`, exit 3) and contributes **no rows**: most findings are
+pytest fixture parameters requested for their side effect, and the rest are a boto3
+keyword-only parameter on a signature-matching stub and the
 `@classmethod` receiver of a pydantic `@field_validator`. Its unit of analysis is
 one file, so it cannot answer the cross-module question.
 
-Four limits of this derivation, stated because no index backs it:
+The limits of this derivation, stated because no index backs it:
 
 - **Name resolution is not namespace-qualified.** A bare name match
   cross-attributes symbols that share a name across packages, and this repo has
   such collisions on purpose: `DomainError` is declared independently in
   atif-models, atif-converter, and atif-embed, and `EmbeddingProviderMismatch`
-  in two. The direction of that error is conservative — it inflates reference
+  in more than one. The direction of that error is conservative — it inflates reference
   counts, so it can hide a dead symbol but cannot invent one.
 - **A textual match is not a semantic reference.** Every reference that keeps a
   symbol off these tables was read at its site rather than counted.
@@ -68,18 +68,18 @@ Four limits of this derivation, stated because no index backs it:
   string: the only `importlib` uses are
   `packages/atif-cli/src/atif_cli/app.py:83` and
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:128`.
-  No `getattr` targets a module object — all six sites take an instance or an
+  No `getattr` targets a module object — every site takes an instance or an
   upstream class, including
   `packages/atif-models/src/atif_models/infrastructure/settings.py:73` and
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`.
 
-Two enforced gates are why the list is short rather than thin. ruff runs
+Enforced gates are why the list is short rather than thin. ruff runs
 `select = ["ALL"]` (`pyproject.toml:146`) at zero, so `F401`, `F811`, `F841` and
 `ERA001` leave no unused import, no redefinition, no unused local, and no
 commented-out code — with exactly one carve-out, `pyproject.toml:224`
 (`"**/__init__.py" = ["F401", "E402"]`). pyright runs
-`typeCheckingMode = "strict"` (`pyproject.toml:596`) over all seven `src/` and
-`tests/` trees (`pyproject.toml:597-613`) at zero errors, which enforces
+`typeCheckingMode = "strict"` (`pyproject.toml:596`) over every `src/` and
+`tests/` tree (`pyproject.toml:597-613`) at zero errors, which enforces
 `reportUnusedFunction` / `reportUnusedClass` / `reportUnusedVariable` for every
 `_`-prefixed definition unused inside its own file. Neither gate can see a
 *public* symbol that no other module imports, and that gap is exactly what the
@@ -87,7 +87,7 @@ tables below fill.
 
 ## Unreferenced exports
 
-26 names appear in their own module's `__all__` and in no other tracked file.
+The names below appear in their own module's `__all__` and in no other tracked file.
 The symbol is live inside its module — the unreferenced thing is the export
 declaration, so the fix is to narrow `__all__`, not to delete code. Each row's
 intra-module use site is named after the table.
@@ -127,7 +127,7 @@ numbers follow it as plain numbers.
 
 - `CHARS_PER_TOKEN` is the divisor at
   `packages/atif-analytics/src/atif_analytics/domain/costs.py:30`.
-- The eleven `*_DIRNAME` / `*_FILENAME` constants are each joined onto
+- The `*_DIRNAME` / `*_FILENAME` constants are each joined onto
   `analytics_dir` by one property in
   `packages/atif-analytics/src/atif_analytics/domain/layout.py:58-108`, in
   declaration order.
@@ -141,7 +141,7 @@ numbers follow it as plain numbers.
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:86`
   and `is_sharded_dir` is called at
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:97`.
-- `MAX_ATTEMPTS_DEFAULT` is a default argument four times, first at
+- `MAX_ATTEMPTS_DEFAULT` is a default argument at several sites, first at
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:150`
   and again on lines 164, 252, and 258 of that file.
 - `LaneStatus` annotates `packages/atif-cli/src/atif_cli/cron.py:226` and is
@@ -164,8 +164,8 @@ numbers follow it as plain numbers.
   `packages/atif-models/src/atif_models/domain/registry.py:34` and a model field
   at `packages/atif-models/src/atif_models/domain/registry.py:56`.
 
-Eight further public-by-naming symbols have no outside reference and are **not**
-listed, because their modules make no export claim about them. Seven live in
+Further public-by-naming symbols have no outside reference and are **not**
+listed, because their modules make no export claim about them. Most live in
 modules that declare no `__all__` at all —
 `packages/atif-converter/src/atif_converter/domain/edges.py:60`,
 `packages/atif-converter/src/atif_converter/domain/edges.py:93`,
@@ -174,7 +174,7 @@ modules that declare no `__all__` at all —
 `packages/atif-corpus/src/atif_corpus/domain/layout.py:22`,
 `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:35`, and
 `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:43` — so
-they are module-internal helpers. The eighth,
+they are module-internal helpers. The last,
 `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:77`
 (`DistanceMetric`), sits in a module that does declare an `__all__` and is
 deliberately absent from it, which is the module saying it is not exported.
@@ -183,17 +183,17 @@ deliberately absent from it, which is the module saying it is not exported.
 
 `_none_`
 
-The import graph reports 18 of 100 source modules with no inbound first-party
-import. All 18 are framework-dispatched and none is removable, so the bucket is
+The import graph reports some source modules with no inbound first-party
+import. All of them are framework-dispatched and none is removable, so the bucket is
 empty:
 
-- **Seventeen package `__init__.py` files.** The interpreter executes a package's
+- **Package `__init__.py` files.** The interpreter executes a package's
   `__init__.py` on *any* submodule import, so
   `import atif_analytics.domain.costs` runs
   `packages/atif-analytics/src/atif_analytics/__init__.py`. That inbound edge is
   structural and invisible to an import-statement graph; deleting the file breaks
   every import of the package.
-- **One module entry point**, dispatched by the interpreter's `-m` switch.
+- **The module entry point**, dispatched by the interpreter's `-m` switch.
   `packages/atif-cli/src/atif_cli/__main__.py:3` names itself the
   `python -m atif_cli` entry and
   `packages/atif-cli/src/atif_cli/__main__.py:5-8` calls `atif_cli.app.main`. It
@@ -204,10 +204,10 @@ empty:
 
 `__init__.py` is the only tree where `F401` is off (`pyproject.toml:224`), so it
 is the only place an import with no consumer survives lint. atif-duck is the only
-member whose `__init__.py` files re-export anything, and **all 22 re-exports are
+member whose `__init__.py` files re-export anything, and **every re-export is
 consumed by nothing** — in-repo or out. Each name is listed in its file's
 `__all__`, which is what keeps the statement alive to the linter; no tracked file
-imports any of them from the package root, and the six members are not
+imports any of them from the package root, and the members are not
 independently installable, so no external consumer exists either.
 
 | Path | Symbol | Imported from |
@@ -236,12 +236,12 @@ independently installable, so no external consumer exists either.
 | `packages/atif-duck/src/atif_duck/infrastructure/__init__.py:9` | `register_views` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py` |
 
 The absence is checked against the exact import form a consumer would have to
-write, over all 224 tracked files:
+write, over every tracked file:
 
 - `from atif_duck import ...` — no site.
 - `from atif_duck.domain import ...` — no site.
-- `from atif_duck.infrastructure import ...` — two sites, and both import the
-  **submodule** `analytics`, never one of the four re-exported `register*` names:
+- `from atif_duck.infrastructure import ...` — only sites that import the
+  **submodule** `analytics`, never one of the re-exported `register*` names:
   `packages/atif-duck/tests/test_analytics_views.py:23` and
   `packages/atif-duck/tests/test_examples.py:42`.
 - No `import atif_duck` followed by attribute access, and no test anywhere
@@ -271,15 +271,15 @@ consumer.
 Each `__init__.py` presents the facade as intentional:
 `packages/atif-duck/src/atif_duck/__init__.py:6` documents
 `register(con, corpus_root)` as the package entry point. Read against
-`pyproject.toml:17` — one distribution named `atif-sql`, bundling all seven module
-trees in a single wheel rather than shipping any of them as an install target —
+`pyproject.toml:17` — one distribution named `atif-sql`, bundling every module
+tree in a single wheel rather than shipping any of them as an install target —
 the facade has no addressable consumer, and the CLI is the public contract
 instead.
 
 ## See also
 
-- [module map](../architecture/module-map.md) — 21 shared source citations
-- [processes](../behavior/processes.md) — 17 shared source citations
-- [impact analysis](../insights/impact-analysis.md) — 17 shared source citations
-- [business logic](../insights/business-logic.md) — 16 shared source citations
-- [contract map](../insights/contract-map.md) — 16 shared source citations
+- [module map](../architecture/module-map.md)
+- [processes](../behavior/processes.md)
+- [impact analysis](../insights/impact-analysis.md)
+- [business logic](../insights/business-logic.md)
+- [contract map](../insights/contract-map.md)

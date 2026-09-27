@@ -2,8 +2,8 @@
 
 Every process in this system starts as a CLI invocation. There is one console
 script, `atif-sql = "atif_cli.app:main"`
-(`packages/atif-cli/pyproject.toml:42`), and its ten commands are the complete
-initiator set — nine `@app.command` sites plus the `cron` sub-App registered at
+(`packages/atif-cli/pyproject.toml:42`), and its commands are the complete
+initiator set — the `@app.command` sites plus the `cron` sub-App registered at
 `packages/atif-cli/src/atif_cli/app.py:66`. No HTTP route, RPC tool, message
 handler, or job queue exists to initiate anything else; the only scheduled
 initiator is a crontab line into `scripts/atif-sql-refresh.sh`. Long-running
@@ -88,7 +88,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:226`
    (`convert_loaded_session`),
    `packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py`
    (`convert_loaded_claude_code_session`).
-4. Build the loss report from the same records: four `FidelityGap` members
+4. Build the loss report from the same records: some `FidelityGap` members
    are structural for every harbor 0.22.0 conversion, and the rest are added
    from what the census found:
    `packages/atif-converter/src/atif_converter/infrastructure/census.py:57`,
@@ -401,8 +401,8 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
 
 ## See also
 
-- [module map](../architecture/module-map.md) — 42 shared source citations
-- [business logic](../insights/business-logic.md) — 36 shared source citations
-- [contract map](../insights/contract-map.md) — 35 shared source citations
-- [impact analysis](../insights/impact-analysis.md) — 35 shared source citations
-- [debugging guide](../insights/debugging-guide.md) — 29 shared source citations
+- [module map](../architecture/module-map.md)
+- [business logic](../insights/business-logic.md)
+- [contract map](../insights/contract-map.md)
+- [impact analysis](../insights/impact-analysis.md)
+- [debugging guide](../insights/debugging-guide.md)
