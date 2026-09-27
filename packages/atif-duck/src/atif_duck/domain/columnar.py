@@ -42,6 +42,12 @@ if TYPE_CHECKING:
 
 #: Bump when any column, type, or filename below changes. A session whose
 #: ``meta.json`` names another version is read from ``trajectory.json``.
+#:
+#: 2: ``session_events.parquet`` added; ``steps`` gained ``agent_id`` /
+#: ``images``; ``tool_results`` gained ``is_error`` / ``exit_code`` /
+#: ``interrupted`` / ``images``. One bump for both changes: they ship together,
+#: and no corpus was ever stamped with only one of them, so a single version
+#: separates every schema-1 session from every schema-2 one.
 COLUMNAR_SCHEMA_VERSION: int = 2
 
 #: The ``meta.json`` key that records which columnar schema a session's

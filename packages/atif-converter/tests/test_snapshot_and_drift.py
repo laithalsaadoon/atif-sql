@@ -75,7 +75,11 @@ class TestSnapshotIsReadOnce:
         must not pin a whole transcript's parsed records in memory."""
         snapshot = take_session_snapshot(synthetic_session)
         assert not hasattr(snapshot, "records")
-        assert set(SessionSnapshot.__slots__) == {"session_jsonl", "fingerprints"}
+        assert set(SessionSnapshot.__slots__) == {
+            "session_jsonl",
+            "fingerprints",
+            "sidecar_fingerprints",
+        }
 
     def test_reading_the_snapshot_ignores_files_added_afterwards(
         self, synthetic_session: Path

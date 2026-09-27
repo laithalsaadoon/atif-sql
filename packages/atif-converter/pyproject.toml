@@ -30,6 +30,11 @@ dependencies = [
     "litellm>=1.92.0",
     "loguru>=0.7.3",
     "zstandard>=0.25.0",
+    # Width and height of an inline image, read from its header in memory when
+    # the attachment is lifted into the blob store (domain/blobs.py). Pure
+    # Python, no dependencies, and it covers PNG, JPEG, GIF and WebP, the four
+    # formats the transcripts carry.
+    "imagesize>=2.0",
 ]
 
 [project.urls]

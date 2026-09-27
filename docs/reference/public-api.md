@@ -446,7 +446,7 @@ validator's error list so a caller can report the exact schema violations.
 VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
 ```
 
-The hand-maintained column schema for all 17 core views, where column order is load-bearing: a drift
+The hand-maintained column schema for all 19 core views, where column order is load-bearing: a drift
 test asserts tuple equality against DuckDB `DESCRIBE` output, so editing view DDL without updating
 this dict fails CI instead of surfacing as a runtime mystery.
 

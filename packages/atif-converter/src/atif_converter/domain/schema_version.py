@@ -26,6 +26,14 @@ History:
   didn't repair them; an unpriced model yields ``total_cost_usd`` NULL instead
   of $0; ``final_metrics.extra.reported_cost_usd`` from Claude Code's
   ``cost-state``; local price overrides for claude-opus-5-5 / claude-fable-5-1.
+  In the same version: inline base64 attachments replaced by blob placeholders
+  (and the bytes handed out for the corpus blob store); typed ``is_error`` /
+  ``exit_code`` / ``interrupted`` / ``images`` on observation results;
+  ``agent_id`` read from ``agentId`` and filled on every sidechain step;
+  ``trajectory.extra.subagents`` from the ``agent-*.meta.json`` sidecars.
+  Both change sets ship together and no corpus was ever stamped with only one
+  of them, so one bump separates every version-1 session from every version-2
+  one.
 """
 
 from __future__ import annotations
