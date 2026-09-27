@@ -658,12 +658,19 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
     """Emit a MaterializationReport: human lines on TTY, JSON otherwise.
 
     An unreadable session lands in no other counter — not materialized, not
-    up-to-date, not skipped-live, not failed, and never ghosted — so a pass
+    up-to-date, not skipped-live, not failed, and never marked — so a pass
     that could only stat nothing prints all zeroes and reads as an idle,
     complete corpus unless ``unreadable`` is shown alongside them. A rejected
     session (a transcript whose name fails the session id boundary) is the
     same kind of silence and gets the same treatment; its name is printed
     ``repr``-quoted because the whole point is that it carries odd characters.
+
+    ``removed`` counts sessions whose source vanished THIS pass. Nothing is
+    deleted any more: their artifacts are kept and marked
+    ``source_present: false``, and ``retained`` counts every session kept
+    without a source. ``empty`` counts transcripts with nothing to convert,
+    which are recorded rather than failed; ``from_archive`` counts
+    source-removed sessions re-converted from their raw source archive.
     """
     payload = {
         "materialized": report.materialized_count,
@@ -671,8 +678,13 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         "skipped_live": report.skipped_live_count,
         "failed": report.failed_count,
         "failures": [{"session_id": f.session_id, "error": f.error} for f in report.failures],
+        "empty": report.empty_count,
+        "empty_session_ids": list(report.empty_session_ids),
         "removed": report.sessions_removed,
         "removed_session_ids": list(report.removed_session_ids),
+        "retained": report.retained_count,
+        "from_archive": report.archive_count,
+        "from_archive_session_ids": list(report.archive_session_ids),
         "unreadable": report.unreadable_count,
         "unreadable_session_ids": list(report.unreadable_session_ids),
         "rejected": report.rejected_count,
@@ -688,14 +700,16 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
             f"up-to-date: {report.up_to_date_count}  "
             f"skipped-live: {report.skipped_live_count}  "
             f"failed: {report.failed_count}  "
+            f"empty: {report.empty_count}  "
             f"removed: {report.sessions_removed}  "
+            f"retained: {report.retained_count}  "
+            f"from-archive: {report.archive_count}  "
             f"unreadable: {report.unreadable_count}  "
             f"rejected: {report.rejected_count}"
         )
         print(
             f"total: {report.total_seconds:.2f}s  "
-            f"(convert: {report.convert_seconds:.2f}s summed over {report.workers} worker(s))"
-            f"total: {report.total_seconds:.2f}s  (convert: {report.convert_seconds:.2f}s, "
+            f"(convert: {report.convert_seconds:.2f}s summed over {report.workers} worker(s), "
             f"columnar: {report.artifact_seconds:.2f}s)"
         )
         for failure in report.failures:
@@ -781,18 +795,21 @@ def materialize(
         ``steps.parquet``, ``tool_calls.parquet``, ``tool_results.parquet``)
         beside the four JSON artifacts, so ``query`` reads typed columns
         instead of parsing ``trajectory.json``. Default on;
-        ``--no-columnar`` writes exactly the four contract artifacts, and
-        ``query`` then takes the JSON path for those sessions.
+        ``--no-columnar`` writes only the four contract artifacts and the
+        raw source archive (``source/``), and ``query`` then takes the JSON
+        path for those sessions.
     fmt
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
     from atif_cli.converter_adapter import RealConverter
+    from atif_converter.domain.schema_version import CONVERTER_SCHEMA_VERSION
     from atif_corpus.application.materialize import (
         CorpusAgentMismatchError,
         SuspiciousEmptyScanError,
         materialize as materialize_use_case,
     )
     from atif_corpus.domain.source_layout import layout_for
+    from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION, META_COLUMNAR_KEY
     from atif_duck.infrastructure.columnar import ColumnarArtifactProducer
 
     settings = _corpus_settings(source_root, corpus_root, agent)
@@ -822,7 +839,17 @@ def materialize(
             source_layout=source_layout,
             materialized_at=_now_iso(),
             harbor_version=_version_of("harbor"),
-            converter_version=_version_of("atif-converter"),
+            # The release that did the converting, looked up under the ONE
+            # published distribution. `atif-converter` isn't a distribution in the
+            # bundled wheel, so looking it up answered "unknown" for every
+            # installed run. Provenance only: staleness keys on the schema below.
+            converter_version=_version_of("atif-sql"),
+            # The converter's own output version. A session recording another
+            # one re-converts, from its source archive if the source is gone.
+            converter_schema=CONVERTER_SCHEMA_VERSION,
+            # A columnar pass also expects the schema its producer stamps, so a
+            # schema bump (or a session written --no-columnar) re-converts.
+            expected_meta=({META_COLUMNAR_KEY: COLUMNAR_SCHEMA_VERSION} if columnar else None),
             quiesce_seconds=(
                 quiesce_seconds if quiesce_seconds is not None else settings.quiesce_seconds
             ),
@@ -925,10 +952,18 @@ def status(
 ) -> None:
     """Report corpus freshness: watermark age, counts, bytes, staleness.
 
-    Read-only and fast: scans source mtimes and replays the same pure
-    planning decision ``materialize`` would make (quiescence + watermark),
-    without converting anything. The staleness summary is therefore exactly
-    "what would a materialize pass do right now".
+    Read-only and fast: scans source mtimes and replays the same planning
+    decision ``materialize`` would make (quiescence, watermark, and the
+    recorded converter schema and columnar schema), without converting
+    anything. The staleness summary is therefore exactly "what would a
+    materialize pass do right now", and ``stale`` includes sessions a
+    converter upgrade made stale (``generation_stale`` counts those alone).
+
+    ``retained`` counts sessions the corpus keeps whose source transcript is
+    gone (``meta.source_present`` false, or about to be marked so), and
+    ``from_archive`` how many of them the next pass would re-convert from
+    their raw source archive. ``empty`` counts transcripts recorded as having
+    nothing to convert.
 
     ``--agent`` selects which corpus is reported, resolving the same way
     ``materialize`` resolves it, so the two commands always describe the same
@@ -953,30 +988,36 @@ def status(
     """
     import time
 
-    from atif_corpus.application.materialize import read_watermark
+    from atif_converter.domain.schema_version import CONVERTER_SCHEMA_VERSION
+    from atif_corpus.application.materialize import preview_pass, read_watermark
     from atif_corpus.domain.layout import CorpusLayout
-    from atif_corpus.domain.sessions import QuiescencePolicy, build_plan
     from atif_corpus.domain.source_layout import layout_for
-    from atif_corpus.infrastructure.scanner import scan_source_root
+    from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION, META_COLUMNAR_KEY
     from atif_duck.infrastructure.columnar import columnar_coverage
 
     settings = _corpus_settings(source_root, corpus_root, agent)
     layout = CorpusLayout(corpus_root=settings.corpus_root)
     quiesce = quiesce_seconds if quiesce_seconds is not None else settings.quiesce_seconds
 
-    now_ns = time.time_ns()
     watermark = read_watermark(layout.watermark_path)
+    # Planned as a default `materialize` would plan it: the columnar producer
+    # on, so its schema version is part of what "current" means.
+    preview = preview_pass(
+        source_root=settings.source_root,
+        corpus_root=settings.corpus_root,
+        converter_version=_version_of("atif-sql"),
+        converter_schema=CONVERTER_SCHEMA_VERSION,
+        expected_meta={META_COLUMNAR_KEY: COLUMNAR_SCHEMA_VERSION},
+        quiesce_seconds=quiesce,
+        source_layout=layout_for(settings.agent),
+    )
+    plan = preview.plan
+    source_sessions = (*plan.to_materialize, *plan.up_to_date, *plan.skipped_live)
+    # Read after the scan, like the pass's own "now".
+    now_ns = time.time_ns()
     watermark_age_seconds: float | None = None
     if layout.watermark_path.exists():
         watermark_age_seconds = round((now_ns - layout.watermark_path.stat().st_mtime_ns) / 1e9, 1)
-
-    source_sessions = scan_source_root(settings.source_root, layout_for(settings.agent))
-    plan = build_plan(
-        source_sessions,
-        watermark=watermark,
-        policy=QuiescencePolicy(quiesce_seconds=quiesce),
-        now_ns=now_ns,
-    )
     materialized_dirs = (
         sorted(p.name for p in layout.sessions_dir.iterdir() if p.is_dir())
         if layout.sessions_dir.is_dir()
@@ -988,6 +1029,8 @@ def status(
         "stale": len(plan.to_materialize),
         "up_to_date": len(plan.up_to_date),
         "live": len(plan.skipped_live),
+        "generation_stale": len(preview.generation_stale_session_ids),
+        "from_archive": len(preview.archive_session_ids),
     }
     coverage = columnar_coverage(settings.corpus_root)
     vector = _vector_surface(settings.corpus_root)
@@ -1002,8 +1045,14 @@ def status(
         )
         print(f"corpus bytes: {corpus_bytes:,}")
         print(
-            f"staleness:    {staleness['stale']} stale, "
+            f"staleness:    {staleness['stale']} stale "
+            f"({staleness['generation_stale']} from a converter or schema change), "
             f"{staleness['up_to_date']} up-to-date, {staleness['live']} live"
+        )
+        print(
+            f"retained:     {len(preview.retained_session_ids)} kept without a source "
+            f"({staleness['from_archive']} to re-convert from archive), "
+            f"{len(preview.empty_session_ids)} empty"
         )
         print(
             f"query path:   {coverage.query_path}  "
@@ -1023,6 +1072,10 @@ def status(
                 "materialized_sessions": len(materialized_dirs),
                 "corpus_bytes": corpus_bytes,
                 "staleness": staleness,
+                "retained_sessions": len(preview.retained_session_ids),
+                "empty_sessions": len(preview.empty_session_ids),
+                "converter_schema": CONVERTER_SCHEMA_VERSION,
+                "columnar_schema": COLUMNAR_SCHEMA_VERSION,
                 "columnar_sessions": coverage.columnar_sessions,
                 "json_sessions": coverage.json_sessions,
                 "query_path": coverage.query_path,

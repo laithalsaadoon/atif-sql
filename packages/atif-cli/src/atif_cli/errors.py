@@ -48,7 +48,7 @@ EXIT_CODES: dict[str, int] = {
     # retrying without intervention cannot succeed — unattended lanes suppress
     # retries on this code instead of burning identical ticks
     "suspicious_scan": 78,  # materialize: the source scan found 0 sessions over a
-    # non-empty corpus, so ghost removal was refused. Same EX_CONFIG contract as
+    # non-empty corpus, so marking them source-removed was refused. Same EX_CONFIG contract as
     # terminal_state — a wrong source_root needs an operator, and a retry over the
     # same wrong root cannot succeed — but a distinct `kind` string, because the
     # remedy is a path, not a store. A separate code matters most for what it is

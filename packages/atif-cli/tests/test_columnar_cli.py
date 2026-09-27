@@ -114,7 +114,7 @@ class TestMaterializeWritesColumnar:
         assert st["columnar_sessions"] == 2
         assert st["json_sessions"] == 0
 
-    def test_no_columnar_writes_only_the_contract_artifacts(
+    def test_no_columnar_writes_only_the_contract_artifacts_and_the_archive(
         self, source_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         corpus = tmp_path / "plain"
@@ -122,7 +122,15 @@ class TestMaterializeWritesColumnar:
         assert report["materialized"] == 2
         assert report["artifact_seconds"] == 0.0
         names = sorted(p.name for p in (corpus / "sessions" / SESSION_A).iterdir())
-        assert names == ["edges.jsonl", "loss_report.json", "meta.json", "trajectory.json"]
+        # `source/` is the raw source archive, which every live conversion
+        # writes; --no-columnar only drops the typed parquet cache.
+        assert names == [
+            "edges.jsonl",
+            "loss_report.json",
+            "meta.json",
+            "source",
+            "trajectory.json",
+        ]
         st = _status(source_root, corpus, capsys)
         assert st["query_path"] == "json"
         assert st["columnar_sessions"] == 0
