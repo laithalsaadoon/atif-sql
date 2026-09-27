@@ -39,7 +39,10 @@ if TYPE_CHECKING:
 
 #: Bump when any column, type, or filename below changes. A session whose
 #: ``meta.json`` names another version is read from ``trajectory.json``.
-COLUMNAR_SCHEMA_VERSION: int = 1
+#:
+#: 2: ``steps`` gained ``agent_id`` / ``images``; ``tool_results`` gained
+#: ``is_error`` / ``exit_code`` / ``interrupted`` / ``images``.
+COLUMNAR_SCHEMA_VERSION: int = 2
 
 #: The ``meta.json`` key that records which columnar schema a session's
 #: parquet files were written against. Absent on sessions materialized

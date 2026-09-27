@@ -1172,6 +1172,98 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         )
         logger.debug("Registered view: subagent_steps")
 
+        # One row per subagent, declared by the converter in
+        # ``trajectory.extra.subagents`` (from each ``agent-*.meta.json``
+        # sidecar, else from the spawning call's own result). The converter
+        # lists every agent id a sidechain step carries, so joining the step
+        # activity onto the declared list loses no agent. ``description``
+        # falls back to the spawning call's own input when the sidecar has
+        # none.
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW subagents AS
+            WITH declared AS (
+                SELECT
+                    t.session_id_path                                   AS session_id,
+                    json_extract_string(a, '$.agent_id')                AS agent_id,
+                    json_extract_string(a, '$.agent_type')              AS agent_type,
+                    json_extract_string(a, '$.description')             AS description,
+                    json_extract_string(a, '$.parent_tool_call_id')     AS parent_tool_call_id,
+                    json_extract_string(a, '$.link_source')             AS link_source,
+                    json_extract(a, '$.spawn_depth')::BIGINT            AS spawn_depth,
+                    json_extract_string(a, '$.parent_agent_id')         AS parent_agent_id
+                FROM v_raw_trajectories t,
+                     UNNEST(json_extract(t.extra, '$.subagents[*]')) AS s(a)
+                WHERE json_extract(t.extra, '$.subagents') IS NOT NULL
+            ),
+            activity AS (
+                SELECT session_id, agent_id,
+                       min(ts)   AS first_ts,
+                       max(ts)   AS last_ts,
+                       count(*)  AS step_count
+                FROM steps
+                WHERE agent_id IS NOT NULL
+                GROUP BY session_id, agent_id
+            )
+            SELECT
+                d.session_id,
+                d.agent_id,
+                coalesce(d.agent_type, sp.subagent_type)   AS agent_type,
+                coalesce(d.description, sp.description)    AS description,
+                d.parent_tool_call_id,
+                sp.step_id                                 AS parent_step_id,
+                d.link_source,
+                d.spawn_depth,
+                d.parent_agent_id,
+                a.first_ts,
+                a.last_ts,
+                coalesce(a.step_count, 0)                  AS step_count
+            FROM declared d
+            LEFT JOIN activity a
+              ON a.session_id = d.session_id AND a.agent_id = d.agent_id
+            LEFT JOIN subagent_spawns sp
+              ON sp.session_id = d.session_id AND sp.tool_use_id = d.parent_tool_call_id;
+            """
+        )
+        logger.debug("Registered view: subagents")
+
+        # One row per attachment the converter moved to the blob store:
+        # tool-result images from ``tool_results.images``, pasted user images
+        # from ``steps.images``. ``blob_path`` is relative to the corpus root
+        # (``blobs/sha256/<ab>/<sha256>.<ext>``), the layout atif-corpus writes.
+        con.execute(
+            """
+            CREATE OR REPLACE VIEW images AS
+            WITH listed AS (
+                SELECT session_id, step_id, ts, 'tool_result' AS origin, tool_use_id,
+                       img
+                FROM tool_results, UNNEST(json_extract(images, '$[*]')) AS i(img)
+                WHERE images IS NOT NULL
+                UNION ALL
+                SELECT session_id, step_id, ts, 'user_message' AS origin,
+                       CAST(NULL AS VARCHAR) AS tool_use_id, img
+                FROM steps, UNNEST(json_extract(images, '$[*]')) AS i(img)
+                WHERE images IS NOT NULL
+            )
+            SELECT
+                session_id,
+                step_id,
+                ts,
+                origin,
+                tool_use_id,
+                json_extract_string(img, '$.sha256')        AS sha256,
+                json_extract_string(img, '$.media_type')    AS media_type,
+                json_extract(img, '$.bytes')::BIGINT        AS size_bytes,
+                json_extract(img, '$.width')::BIGINT        AS width,
+                json_extract(img, '$.height')::BIGINT       AS height,
+                'blobs/sha256/' || substr(json_extract_string(img, '$.sha256'), 1, 2) || '/'
+                    || json_extract_string(img, '$.sha256') || '.'
+                    || json_extract_string(img, '$.extension') AS blob_path
+            FROM listed;
+            """
+        )
+        logger.debug("Registered view: images")
+
         # Per-session conversion loss accounting from atif-converter's
         # LossReport: record counts by raw type plus the fidelity gaps this
         # session actually exhibits. Any count taken from the other views is

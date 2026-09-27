@@ -89,6 +89,24 @@ def _metrics(
     }
 
 
+#: Content hashes of the two fixture attachments (the bytes are never needed:
+#: a view reads the typed list, not the blob store).
+READ_SHA = "ab" + "0" * 62
+PASTED_SHA = "cd" + "1" * 62
+
+
+def _image_json(sha256: str, size: int, width: int, height: int) -> dict[str, Any]:
+    """One ``extra.images[]`` entry, as the converter writes it."""
+    return {
+        "sha256": sha256,
+        "media_type": "image/png",
+        "bytes": size,
+        "width": width,
+        "height": height,
+        "extension": "png",
+    }
+
+
 def _session_one() -> dict[str, Any]:
     """The rich trajectory: 7 steps covering every viewed surface."""
     sid = SESSION_IDS[0]
@@ -154,7 +172,11 @@ def _session_one() -> dict[str, Any]:
                             "source_call_id": "toolu_01",
                             "content": "Todos have been modified successfully",
                         },
-                        {"source_call_id": "toolu_02", "content": "Agent started"},
+                        {
+                            "source_call_id": "toolu_02",
+                            "content": "Agent started",
+                            "extra": {"is_error": False},
+                        },
                     ]
                 },
                 "metrics": _metrics(60120, 325, 0, 60118),
@@ -167,7 +189,7 @@ def _session_one() -> dict[str, Any]:
                 "timestamp": "2026-08-20T10:00:20.000Z",
                 "source": "user",
                 "message": "Find every caller of frobnicate().",
-                "extra": {"is_sidechain": True, "source_uuids": ["su-1"]},
+                "extra": {"is_sidechain": True, "source_uuids": ["su-1"], "agent_id": "agent-r1"},
             },
             {
                 "step_id": 4,
@@ -177,7 +199,7 @@ def _session_one() -> dict[str, Any]:
                 "message": "Two callers: main.py and cli.py.",
                 "metrics": _metrics(33878, 403, 0, 33876),
                 "llm_call_count": 1,
-                "extra": {"is_sidechain": True, "source_uuids": ["sa-1"]},
+                "extra": {"is_sidechain": True, "source_uuids": ["sa-1"], "agent_id": "agent-r1"},
             },
             {
                 "step_id": 5,
@@ -309,7 +331,20 @@ def _session_one() -> dict[str, Any]:
             "total_steps": 7,
             "extra": {"total_cache_creation_input_tokens": 97847},
         },
-        "extra": {"cache_creation_total": 97847},
+        "extra": {
+            "cache_creation_total": 97847,
+            # What the converter's result-signals pass declares from the
+            # agent-*.meta.json sidecar of the one subagent step 2 spawned.
+            "subagents": [
+                {
+                    "agent_id": "agent-r1",
+                    "agent_type": "general-purpose",
+                    "parent_tool_call_id": "toolu_02",
+                    "spawn_depth": 1,
+                    "link_source": "meta",
+                }
+            ],
+        },
     }
 
 
@@ -330,8 +365,12 @@ def _session_two() -> dict[str, Any]:
                 "step_id": 1,
                 "timestamp": "2026-08-21T09:00:00.000Z",
                 "source": "user",
-                "message": "Tidy the docs.",
-                "extra": {"is_sidechain": False, "source_uuids": ["u2-1"]},
+                "message": f"Tidy the docs.\n\n[image sha256:{PASTED_SHA} image/png 90 bytes]",
+                "extra": {
+                    "is_sidechain": False,
+                    "source_uuids": ["u2-1"],
+                    "images": [_image_json(PASTED_SHA, 90, 5, 4)],
+                },
             },
             {
                 "step_id": 2,
@@ -358,7 +397,16 @@ def _session_two() -> dict[str, Any]:
                     "results": [
                         {
                             "source_call_id": "toolu_21",
-                            "content": "Todos have been modified successfully",
+                            "content": (
+                                "Todos have been modified successfully\n"
+                                f"[image sha256:{READ_SHA} image/png 70 bytes]"
+                            ),
+                            "extra": {
+                                "is_error": True,
+                                "exit_code": 2,
+                                "interrupted": False,
+                                "images": [_image_json(READ_SHA, 70, 3, 2)],
+                            },
                         }
                     ]
                 },

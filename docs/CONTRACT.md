@@ -10,7 +10,8 @@ lanes — is bound by `docs/CONTRACT-V2.md`.
 ## Scope: the transcript-derived surface
 The views
 sessions, messages(→steps), tool_calls, tool_results, todo_events,
-todo_state_current, subagent views, task_creations/task_updates/tasks_state_current,
+todo_state_current, subagent views (subagent_spawns, subagent_steps, subagents), images,
+task_creations/task_updates/tasks_state_current,
 skill_invocations + macros ago, model_used, cost_estimate, tool_rank,
 todo_velocity, subagent_fanout, skill_rank, skill_source_mix; CLI query/schema/status.
 VSS/semantic_search and the analytics pipelines are shipped commands, bound
@@ -33,6 +34,8 @@ proofs are out of scope for the workspace.
     steps.parquet                  #  the trajectory header and the steps, tool_calls,
     tool_calls.parquet             #  tool_results views' rows for this one session,
     tool_results.parquet           #  written 0444, claimed by meta.columnar_schema
+  blobs/sha256/<ab>/<sha256>.<ext> # inline attachments (images, PDFs), content-addressed,
+                                   #  shared by every session, written 0444
   watermark.json                   # {path: mtime_ns} across source corpus
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
@@ -61,6 +64,9 @@ proofs are out of scope for the workspace.
 - Source discovery MUST include subagents/agent-*.jsonl AND
   subagents/workflows/wf_*/agent-*.jsonl (and any deeper future nesting: use
   rglob over the session dir filtered to *.jsonl, excluding *.meta.json).
+  The converter reads the agent-*.meta.json sidecars itself, in the same
+  single pass as the transcripts (fingerprinted and re-checked the same way),
+  for subagent linkage; they carry no records and stay out of the census.
 - Quiescence: a session is (re)materialized when newest source mtime is older
   than quiesce_seconds (default 300) AND newer than its meta.source_mtime_ns.
   --force overrides.
@@ -76,12 +82,22 @@ proofs are out of scope for the workspace.
   declares the port, atif-duck implements it, atif-cli plugs them together);
   they're staged and swapped with the JSON artifacts, so a session has all of
   them or none. meta.columnar_schema names the schema version they were
-  written against (currently 1). A reader takes the columnar path for a session
+  written against (currently 2). A reader takes the columnar path for a session
   only when meta.columnar_schema equals its own version AND all four files are
   present and non-empty; otherwise it reads trajectory.json for that session.
   A corpus written before this key existed, or with --no-columnar, stays valid
   and answers every query from JSON. Whatever the path, every view and macro
   returns the same rows. `atif-sql status` reports which path a corpus takes.
+- Blob store: the converter replaces every inline base64 attachment with the
+  placeholder `[image sha256:<hash> <media_type> <n> bytes]` (`[file ...]` for
+  a non-image) and hands the bytes to the writer, which stores each under
+  blobs/sha256/<first two hex>/<hash>.<ext> BEFORE it swaps in the session
+  that references it, so a published placeholder always resolves. The store
+  is shared rather than per-session because a hash-named write is idempotent:
+  a blob two sessions share is stored once, and re-converting a session
+  rewrites nothing. Ghost removal does not collect blobs; an unreferenced blob
+  costs space only. The hash and extension are validated before either
+  becomes a path.
 
 ## Two agents (atif-converter converts, atif-corpus discovers)
 - AgentSource is a StrEnum in atif-converter with an AST-pinned twin in
@@ -120,6 +136,17 @@ proofs are out of scope for the workspace.
      assistant message can never be placed by matching. Tool records join on
      call_id; user and system steps are positional with a text cross-check that
      stops at the first mismatch and records enrichment_truncated_at_step.
+   - Attachments and typed signals (atif_converter.domain.blobs /
+     domain.result_signals), both agents: inline base64 is replaced by a blob
+     placeholder BEFORE conversion; after enrichment every
+     observation.results[].extra may carry is_error, exit_code, interrupted
+     and images, a user step's extra may carry images, every sidechain step's
+     extra carries agent_id, and trajectory.extra.subagents lists each
+     subagent with its parent_tool_call_id and link_source ("meta" from the
+     sidecar, "tool_result" from toolUseResult.agentId). A key absent means
+     the transcript did not say; nothing is guessed.
+   - atif_converter.domain.schema.CONVERTER_SCHEMA_VERSION (currently 2) is
+     bumped with any change to the converter's output for the same input.
 3. Census + edges are derived from RAW jsonl (never from the trajectory).
 4. Validation: TrajectoryValidator MUST pass post-enrichment (extra is free-form).
 
