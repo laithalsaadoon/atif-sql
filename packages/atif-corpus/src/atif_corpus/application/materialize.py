@@ -1367,10 +1367,10 @@ def materialize(
         :class:`~atif_corpus.infrastructure.fake_converter.FakeConverter`.
     artifact_producer
         Optional :class:`~atif_corpus.domain.ports.ArtifactProducer` run per
-        session inside the staged dir, between the three JSON artifacts and
+        session inside the staged dir, between the contract JSON artifacts and
         ``meta.json``; its extra files publish in the same directory swap and
         its returned keys land in ``meta.json``. ``None`` (the default) writes
-        exactly the four contract artifacts plus the source archive.
+        exactly the contract artifacts plus the source archive.
     materialized_at
         ISO-8601 UTC instant to stamp into every ``meta.json`` this pass, and
         the ``source_removed_at`` of every session marked this pass.

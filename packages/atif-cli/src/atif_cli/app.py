@@ -792,10 +792,10 @@ def materialize(
         Below ``1`` exits 64.
     columnar
         Write the typed columnar artifacts (``session.parquet``,
-        ``steps.parquet``, ``tool_calls.parquet``, ``tool_results.parquet``)
-        beside the four JSON artifacts, so ``query`` reads typed columns
-        instead of parsing ``trajectory.json``. Default on;
-        ``--no-columnar`` writes only the four contract artifacts and the
+        ``steps.parquet``, ``tool_calls.parquet``, ``tool_results.parquet``,
+        ``session_events.parquet``) beside the JSON artifacts, so ``query``
+        reads typed columns instead of parsing ``trajectory.json``. Default on;
+        ``--no-columnar`` writes only the contract artifacts and the
         raw source archive (``source/``), and ``query`` then takes the JSON
         path for those sessions.
     fmt
