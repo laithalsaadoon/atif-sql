@@ -347,7 +347,7 @@ def get_embedded_hashes(lance_uri: Path) -> dict[str, str]:
     blake2b digest can equal), so the discovery anti-join marks every row
     stale and the store migrates itself incrementally through the ordinary
     delete-before-append path — no rebuild, no empty-store window. The
-    2026-08-24 incident (both fleet corpora rebuilt, ~3.4M vectors of Cohere
+    2026-08-24 incident (both production corpora rebuilt, ~3.4M vectors of Cohere
     spend) came from raising a destroy-and-rebuild error here instead.
     """
     n = count_rows(lance_uri)

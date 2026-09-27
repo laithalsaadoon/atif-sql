@@ -175,7 +175,7 @@ class TestPreTextHashStore:
     never equal a real blake2b digest, so the discovery anti-join re-picks
     every row as stale and the store heals itself incrementally — the
     2026-08-24 destroy-and-rebuild (~3.4M vectors of Cohere spend and a
-    search outage across both fleet corpora) is the behavior this class
+    search outage across both production corpora) is the behavior this class
     forbids.
     """
 
