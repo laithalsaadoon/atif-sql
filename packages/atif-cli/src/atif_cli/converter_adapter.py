@@ -34,6 +34,8 @@ Mapping decisions (ConversionResult -> ConversionOutput):
 * ``edges_lines``      <- ``ConversionResult.edges_lines`` (already-serialized
   JSON lines derived from the RAW records, per the contract; the writer owns
   line termination).
+* ``blobs``            <- ``ConversionResult.blobs`` (the inline attachments the
+  converter replaced with placeholders), one ``BlobOutput`` per content hash.
 
 Validation posture: a trajectory that fails post-enrichment validation
 raises rather than materializing — the materialize use case records the
@@ -54,7 +56,7 @@ from atif_converter.application.convert_and_audit import convert_and_audit
 from atif_converter.application.convert_codex import convert_codex_and_audit
 from atif_converter.domain.agents import DEFAULT_AGENT, AgentSource
 from atif_converter.domain.errors import TrajectoryValidationError
-from atif_corpus.domain.ports import ConversionOutput
+from atif_corpus.domain.ports import BlobOutput, ConversionOutput
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -101,6 +103,10 @@ class RealConverter:
             trajectory_dict=result.trajectory,
             loss_report_dict=report.to_json(),
             edges_lines=list(result.edges_lines),
+            blobs=tuple(
+                BlobOutput(sha256=blob.ref.sha256, extension=blob.ref.extension, data=blob.data)
+                for blob in result.blobs
+            ),
         )
 
 

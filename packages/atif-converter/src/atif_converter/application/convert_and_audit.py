@@ -22,14 +22,24 @@ the read, or anywhere before the check, fails the session: a stat pair alone
 would miss a same-length rewrite inside one mtime tick, so the re-check hashes
 the bytes again. That second hash pass is the one read the audit still pays
 beyond the parse.
+
+ATTACHMENTS AND TYPED SIGNALS. Before conversion, every inline base64
+attachment in the loaded records is replaced by a placeholder and its bytes
+collected (:mod:`atif_converter.domain.blobs`), so neither the trajectory nor
+the loss report nor the edges ever carry base64. After enrichment,
+:mod:`atif_converter.domain.result_signals` writes the typed tool-outcome,
+attachment and subagent fields, the subagent links read from the same pass's
+``agent-*.meta.json`` sidecars.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
+from atif_converter.domain.blobs import BlobCollector, extract_claude_code_blobs
 from atif_converter.domain.edges import edges_jsonl_lines
 from atif_converter.domain.enrichment import enrich_trajectory
 from atif_converter.domain.errors import SourceMutatedDuringConversion
@@ -39,6 +49,7 @@ from atif_converter.domain.fidelity import (
     FidelityGap,
     LossReport,
 )
+from atif_converter.domain.result_signals import annotate_claude_code_trajectory
 from atif_converter.infrastructure.census import SessionCensus, census_from_snapshot
 from atif_converter.infrastructure.harbor_adapter import (
     ConversionResult,
@@ -46,7 +57,15 @@ from atif_converter.infrastructure.harbor_adapter import (
     read_session,
     validate_trajectory,
 )
-from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
+from atif_converter.infrastructure.raw_records import (
+    LoadedSession,
+    SessionSnapshot,
+    mutated_files,
+)
+
+#: ``agent-<id>.meta.json``: the sidecar's name carries the subagent id.
+_SIDECAR_PREFIX = "agent-"
+_SIDECAR_SUFFIX = ".meta.json"
 
 #: Gaps every harbor 0.22.0 conversion exhibits regardless of session content.
 _STRUCTURAL_GAPS: frozenset[FidelityGap] = frozenset(
@@ -88,6 +107,18 @@ def _loss_report(census: SessionCensus) -> LossReport:
         subagent_files_convertible=len(census.subagent_files) + len(census.workflow_subagent_files),
         workflow_subagent_files_found=len(census.workflow_subagent_files),
     )
+
+
+def _sidecars_by_agent_id(loaded: LoadedSession) -> dict[str, Any]:
+    """Parsed ``agent-<id>.meta.json`` sidecars keyed by ``<id>``; first path wins."""
+    by_agent: dict[str, Any] = {}
+    for path, value in loaded.sidecars.items():
+        name = path.name
+        if name.startswith(_SIDECAR_PREFIX) and name.endswith(_SIDECAR_SUFFIX):
+            agent_id = name[len(_SIDECAR_PREFIX) : -len(_SIDECAR_SUFFIX)]
+            if agent_id:
+                by_agent.setdefault(agent_id, value)
+    return by_agent
 
 
 def _refuse_if_mutated(snapshot: SessionSnapshot) -> None:
@@ -133,6 +164,11 @@ def convert_and_audit(
     """
     loaded = read_session(session_jsonl)
     snapshot = loaded.snapshot
+    collector = BlobCollector()
+    blob_index = extract_claude_code_blobs(
+        (record for records in loaded.records_by_file.values() for record in records),
+        collector,
+    )
     result = convert_loaded_session(loaded, include_subagents=include_subagents)
 
     pairs = loaded.record_pairs()
@@ -140,17 +176,18 @@ def convert_and_audit(
     edges_lines = tuple(edges_jsonl_lines(pairs))
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole large transcript's worth of steps.
-    enriched = enrich_trajectory(
-        result.trajectory,
-        [record for record, _src in pairs],
-        copy_input=False,
+    raw_records = [record for record, _src in pairs]
+    enriched = enrich_trajectory(result.trajectory, raw_records, copy_input=False)
+    annotate_claude_code_trajectory(
+        enriched, raw_records, blob_index, sidecars=_sidecars_by_agent_id(loaded)
     )
-    del pairs, loaded
+    del pairs, raw_records, loaded
     _refuse_if_mutated(snapshot)
 
     enriched_result = ConversionResult(
         trajectory=enriched,
         validation_errors=validate_trajectory(enriched),
         edges_lines=edges_lines,
+        blobs=collector.blobs,
     )
     return enriched_result, report

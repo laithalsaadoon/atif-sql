@@ -103,6 +103,7 @@ from atif_corpus.domain.sessions import (
 from atif_corpus.domain.source_layout import CLAUDE_CODE_LAYOUT, SourceLayout
 from atif_corpus.infrastructure.atomic import (
     replace_dir_atomic,
+    write_blob_atomic,
     write_json_atomic,
     write_text_atomic,
 )
@@ -111,7 +112,7 @@ from atif_corpus.infrastructure.scanner import scan_sources
 if TYPE_CHECKING:
     from typing import Any
 
-    from atif_corpus.domain.ports import ArtifactProducer, ConverterPort
+    from atif_corpus.domain.ports import ArtifactProducer, BlobOutput, ConverterPort
     from atif_corpus.domain.sessions import SessionSource
     from atif_corpus.infrastructure.scanner import SourceScan
 
@@ -289,6 +290,30 @@ def _produce_extra_artifacts(
     return extras, elapsed
 
 
+def _store_blobs(layout: CorpusLayout, blobs: Sequence[BlobOutput]) -> int:
+    """Write a session's attachments into the shared blob store; return how many were new.
+
+    WHY A SHARED STORE, NOT THE SESSION DIR. A blob is named by its content
+    hash, so writing one is idempotent and order-free: two sessions (or two
+    pool workers) holding the same screenshot store it once, and nothing
+    about a blob ever needs the per-session swap's all-or-nothing guarantee.
+    Putting blobs in the session dir would store every shared image once per
+    session and copy it again on every re-conversion.
+
+    WHY BEFORE THE SWAP. Every blob a session references is on disk before
+    the session that references it publishes, so a reader can never hold a
+    placeholder whose bytes are missing. A pass that dies between the two
+    leaves only unreferenced blobs, which cost space and nothing else.
+    """
+    written = 0
+    for blob in blobs:
+        if write_blob_atomic(layout.blob_path(blob.sha256, blob.extension), blob.data):
+            written += 1
+    if blobs:
+        logger.debug("materialize: {} blob(s) referenced, {} newly stored", len(blobs), written)
+    return written
+
+
 def _write_session(
     layout: CorpusLayout,
     session: SessionSource,
@@ -320,6 +345,7 @@ def _write_session(
     convert_started = time.perf_counter()
     output = converter.convert(Path(session.session_jsonl))
     convert_elapsed = time.perf_counter() - convert_started
+    _store_blobs(layout, output.blobs)
 
     staging = layout.staging_dir / f"{session.session_id}.tmp-{os.getpid()}"
     shutil.rmtree(staging, ignore_errors=True)

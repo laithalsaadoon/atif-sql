@@ -23,7 +23,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from atif_converter.domain.codex_edges import codex_edges_jsonl_lines
+from atif_converter.domain.blobs import BlobCollector, extract_codex_blobs
+from atif_converter.domain.codex_edges import build_codex_edges, codex_edges_jsonl_lines
 from atif_converter.domain.codex_enrichment import enrich_codex_trajectory
 from atif_converter.domain.codex_fidelity import (
     CODEX_STRUCTURAL_GAPS,
@@ -32,6 +33,7 @@ from atif_converter.domain.codex_fidelity import (
 )
 from atif_converter.domain.errors import SourceMutatedDuringConversion
 from atif_converter.domain.fidelity import AnyRecordType, LossReport
+from atif_converter.domain.result_signals import annotate_codex_trajectory
 from atif_converter.infrastructure.codex_adapter import convert_loaded_codex_session
 from atif_converter.infrastructure.codex_census import (
     CodexSessionCensus,
@@ -140,15 +142,24 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
     """
     loaded = read_session(rollout_jsonl)
     snapshot = loaded.snapshot
+    # Attachments out BEFORE conversion, named by the same record ids the
+    # enrichment pass writes into ``source_uuids`` (an edge's uuid depends on
+    # the record's ids and position, never on the content being rewritten).
+    records = loaded.record_pairs()
+    record_keys = [str(edge["uuid"]) for edge in build_codex_edges(records)]
+    collector = BlobCollector()
+    blob_index = extract_codex_blobs(
+        [record for record, _src in records], collector, record_keys=record_keys
+    )
     result = convert_loaded_codex_session(loaded)
 
-    records = loaded.record_pairs()
     census = codex_census_from_records(rollout_jsonl, records)
     report = _loss_report(census, developer_messages=_developer_message_count(records))
     edges_lines = tuple(codex_edges_jsonl_lines(records))
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole rollout's worth of steps.
     enriched = enrich_codex_trajectory(result.trajectory, records, copy_input=False)
+    annotate_codex_trajectory(enriched, [record for record, _src in records], blob_index)
     del records, loaded
     _refuse_if_mutated(snapshot)
 
@@ -157,6 +168,7 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
             trajectory=enriched,
             validation_errors=validate_trajectory(enriched),
             edges_lines=edges_lines,
+            blobs=collector.blobs,
         ),
         report,
     )

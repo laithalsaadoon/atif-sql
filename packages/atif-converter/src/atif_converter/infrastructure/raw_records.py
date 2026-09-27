@@ -18,6 +18,16 @@ bytes: they come from one list. Before this pass existed the converter and the
 audit each parsed the files and the snapshot hashed them separately, three
 hash passes and two parses of a 135 MB session.
 
+SIDECARS. Claude Code writes one ``agent-<id>.meta.json`` beside each subagent
+transcript, recording the subagent's type, its description and the
+``toolUseId`` of the Task/Agent call that spawned it. They are not JSONL and
+carry no records, so they stay out of :attr:`LoadedSession.records_by_file`
+(the census and edges count records, and a sidecar is not one). The same pass
+reads each one once, fingerprints it, and parses it into
+:attr:`LoadedSession.sidecars`, and the snapshot re-check covers them too, so a
+sidecar rewritten mid-conversion refuses the session exactly as a transcript
+would.
+
 A :class:`SessionSnapshot` names a fixed set of source files and carries the
 change evidence for each, an mtime/size/content-digest fingerprint, and
 NOTHING else. Claude Code appends to a live session at any moment, so the
@@ -33,7 +43,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, override
 
@@ -53,6 +63,18 @@ def discover_session_files(session_jsonl: Path) -> list[Path]:
     if side_dir.is_dir():
         files.extend(sorted(side_dir.rglob("*.jsonl")))
     return files
+
+
+def discover_sidecar_files(session_jsonl: Path) -> list[Path]:
+    """Every subagent ``agent-*.meta.json`` under the session's sibling dir, sorted.
+
+    Workflow-nested sidecars (``subagents/workflows/wf_*/agent-*.meta.json``)
+    included, as the transcripts they describe are.
+    """
+    side_dir = session_jsonl.parent / session_jsonl.stem
+    if not side_dir.is_dir():
+        return []
+    return sorted(side_dir.rglob("agent-*.meta.json"))
 
 
 class FileFingerprint(NamedTuple):
@@ -201,6 +223,30 @@ def _read_and_fingerprint(path: Path) -> tuple[FileFingerprint, list[Any]]:
     return fingerprint, records
 
 
+def _read_sidecar(path: Path) -> tuple[FileFingerprint, Any]:
+    """One pass over a small JSON sidecar: stat, then hash and parse the same bytes.
+
+    A sidecar that is not valid UTF-8 JSON parses to ``None`` (logged at debug)
+    rather than failing the session: it only ever adds linkage, and the
+    subagent's transcript converts without it.
+    """
+    stat = path.stat()
+    data = path.read_bytes()
+    digest = _new_digest()
+    digest.update(data)
+    try:
+        value: Any = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.debug("Skipping unreadable sidecar {}: {}", path, exc)
+        value = None
+    fingerprint = FileFingerprint(
+        mtime_ns=stat.st_mtime_ns,
+        size=stat.st_size,
+        content_hash=digest.digest(),
+    )
+    return fingerprint, value
+
+
 @dataclass(frozen=True, slots=True)
 class SessionSnapshot:
     """The fixed file list of one session plus each file's change evidence.
@@ -215,6 +261,11 @@ class SessionSnapshot:
     #: Fingerprint per discovered file, sampled by the read that parsed it (or
     #: by :func:`take_session_snapshot`, which reads for the digest alone).
     fingerprints: dict[Path, FileFingerprint]
+
+    #: Fingerprint per discovered ``agent-*.meta.json`` sidecar. Kept apart
+    #: from :attr:`fingerprints` because :attr:`files` is the RECORD-bearing
+    #: file list every JSONL reader walks, and a sidecar holds no records.
+    sidecar_fingerprints: dict[Path, FileFingerprint] = field(default_factory=dict)
 
     @property
     def files(self) -> tuple[Path, ...]:
@@ -236,6 +287,10 @@ class LoadedSession:
 
     snapshot: SessionSnapshot
     records_by_file: dict[Path, list[Any]]
+
+    #: Each ``agent-*.meta.json`` sidecar's parsed JSON (``None`` when it did
+    #: not parse), keyed by path, sorted. Read in the same pass as the records.
+    sidecars: dict[Path, Any] = field(default_factory=dict)
 
     @property
     def main_records(self) -> list[Any]:
@@ -269,9 +324,18 @@ def load_session(session_jsonl: Path) -> LoadedSession:
     records_by_file: dict[Path, list[Any]] = {}
     for path in discover_session_files(session_jsonl):
         fingerprints[path], records_by_file[path] = _read_and_fingerprint(path)
+    sidecar_fingerprints: dict[Path, FileFingerprint] = {}
+    sidecars: dict[Path, Any] = {}
+    for path in discover_sidecar_files(session_jsonl):
+        sidecar_fingerprints[path], sidecars[path] = _read_sidecar(path)
     return LoadedSession(
-        snapshot=SessionSnapshot(session_jsonl=session_jsonl, fingerprints=fingerprints),
+        snapshot=SessionSnapshot(
+            session_jsonl=session_jsonl,
+            fingerprints=fingerprints,
+            sidecar_fingerprints=sidecar_fingerprints,
+        ),
         records_by_file=records_by_file,
+        sidecars=sidecars,
     )
 
 
@@ -285,6 +349,9 @@ def take_session_snapshot(session_jsonl: Path) -> SessionSnapshot:
     return SessionSnapshot(
         session_jsonl=session_jsonl,
         fingerprints={path: _fingerprint(path) for path in discover_session_files(session_jsonl)},
+        sidecar_fingerprints={
+            path: _fingerprint(path) for path in discover_sidecar_files(session_jsonl)
+        },
     )
 
 
@@ -316,7 +383,10 @@ def mutated_files(snapshot: SessionSnapshot) -> tuple[Path, ...]:
     derived from the snapshot are already incomplete.
     """
     moved: list[Path] = []
-    for path, fingerprint in snapshot.fingerprints.items():
+    for path, fingerprint in (
+        *snapshot.fingerprints.items(),
+        *snapshot.sidecar_fingerprints.items(),
+    ):
         try:
             if _fingerprint(path) != fingerprint:
                 moved.append(path)
@@ -326,5 +396,10 @@ def mutated_files(snapshot: SessionSnapshot) -> tuple[Path, ...]:
         path
         for path in discover_session_files(snapshot.session_jsonl)
         if path not in snapshot.fingerprints
+    )
+    moved.extend(
+        path
+        for path in discover_sidecar_files(snapshot.session_jsonl)
+        if path not in snapshot.sidecar_fingerprints
     )
     return tuple(moved)

@@ -47,6 +47,7 @@ dependencies = [
     "harbor>=0.22.0,<1",
     "litellm>=1.92.0",
     "hdbscan>=0.8.44",
+    "imagesize>=2.0",
     "lancedb>=0.30,<0.38",
     "loguru>=0.7.3",
     "numpy>=2.4.4,<2.6",

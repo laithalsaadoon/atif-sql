@@ -21,6 +21,20 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, slots=True)
+class BlobOutput:
+    """One attachment's bytes, content-addressed, for the corpus blob store.
+
+    ``sha256`` is the lowercase hex digest of ``data`` and ``extension`` the
+    file extension its media type maps to (``png``, ``jpg``, ``pdf``, ``bin``);
+    the writer validates both before either becomes part of a path.
+    """
+
+    sha256: str
+    extension: str
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
 class ConversionOutput:
     """Everything one conversion yields that the corpus writes to disk.
 
@@ -33,11 +47,16 @@ class ConversionOutput:
       (uuid, parent_uuid, message_id, type, ts, is_sidechain,
       is_compact_summary, source_file, tool_use_ids), WITHOUT trailing
       newlines; the writer owns line termination.
+    * ``blobs`` — the inline attachments the converter replaced with a
+      ``[image sha256:<hash> ...]`` placeholder, one per distinct hash. The
+      writer stores each under ``<corpus_root>/blobs/`` BEFORE it publishes
+      the session that references it.
     """
 
     trajectory_dict: dict[str, Any]
     loss_report_dict: dict[str, Any]
     edges_lines: list[str]
+    blobs: tuple[BlobOutput, ...] = ()
 
 
 class ConverterPort(Protocol):

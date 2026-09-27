@@ -29,6 +29,11 @@ dependencies = [
     # harbor. Floor matches harbor 0.22.0's own requirement.
     "litellm>=1.92.0",
     "loguru>=0.7.3",
+    # Width and height of an inline image, read from its header in memory when
+    # the attachment is lifted into the blob store (domain/blobs.py). Pure
+    # Python, no dependencies, and it covers PNG, JPEG, GIF and WebP, the four
+    # formats the transcripts carry.
+    "imagesize>=2.0",
 ]
 
 [project.urls]

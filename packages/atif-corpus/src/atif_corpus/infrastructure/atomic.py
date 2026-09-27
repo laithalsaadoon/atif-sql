@@ -137,6 +137,47 @@ def replace_dir_atomic(tmp_dir: Path, dst_dir: Path) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
+#: Stored blobs are read-only, like the columnar artifacts: nothing rewrites
+#: a content-addressed file in place.
+_BLOB_MODE: int = 0o444
+
+
+def write_blob_atomic(path: Path, data: bytes) -> bool:
+    """Store a content-addressed blob at ``path`` unless it is already there.
+
+    Returns ``True`` when this call wrote the file, ``False`` when a file of
+    the same size already held the name (the name IS the content hash, so a
+    same-size file under it is the same bytes, written by an earlier session
+    or a concurrent worker). A file of another size under the name is a torn
+    or foreign file and is replaced.
+
+    Same discipline as :func:`write_json_atomic`: a pid-suffixed tmp sibling,
+    fsynced before the rename that publishes it, the directory fsynced after.
+    Two workers storing the same blob at once each rename a complete file of
+    identical bytes into place, so neither can expose a partial one.
+    """
+    try:
+        if path.stat().st_size == len(data):
+            return False
+    except FileNotFoundError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _tmp_sibling(path)
+    try:
+        with tmp.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.chmod(_BLOB_MODE)
+        tmp.replace(path)
+    except BaseException:
+        logger.debug("blob write failed; removing tmp {}", tmp)
+        tmp.unlink(missing_ok=True)
+        raise
+    fsync_dir(path.parent)
+    return True
+
+
 def write_text_atomic(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` atomically and durably.
 

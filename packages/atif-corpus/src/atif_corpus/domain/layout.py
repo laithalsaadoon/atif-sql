@@ -11,6 +11,7 @@ is that place — every writer path in the application layer goes through
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,15 @@ LOSS_REPORT_FILENAME = "loss_report.json"
 EDGES_FILENAME = "edges.jsonl"
 META_FILENAME = "meta.json"
 WATERMARK_FILENAME = "watermark.json"
+
+#: A blob's name: the lowercase hex SHA-256 of its bytes.
+_BLOB_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+#: A blob's extension: short, lowercase alphanumeric (``png``, ``jpg``, ``bin``).
+_BLOB_EXTENSION_RE = re.compile(r"^[a-z0-9]{1,8}$")
+
+
+class InvalidBlobNameError(ValueError):
+    """A blob hash or extension that must not become part of a corpus path."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +63,29 @@ class CorpusLayout:
         ``sessions/`` so ``os.replace`` of the staged dir stays atomic.
         """
         return self.corpus_root / ".staging"
+
+    @property
+    def blobs_dir(self) -> Path:
+        """The content-addressed attachment store shared by every session.
+
+        Outside ``sessions/`` on purpose: no reader glob and no ghost-removal
+        walk touches it, and a blob two sessions share is stored once.
+        """
+        return self.corpus_root / "blobs"
+
+    def blob_path(self, sha256: str, extension: str) -> Path:
+        """``<corpus_root>/blobs/sha256/<first two hex>/<sha256>.<extension>``.
+
+        Raises
+        ------
+        InvalidBlobNameError
+            ``sha256`` is not 64 lowercase hex digits or ``extension`` is not
+            one to eight lowercase letters and digits.
+        """
+        if not _BLOB_HASH_RE.match(sha256) or not _BLOB_EXTENSION_RE.match(extension):
+            msg = f"invalid blob name {sha256!r}.{extension!r}"
+            raise InvalidBlobNameError(msg)
+        return self.blobs_dir / "sha256" / sha256[:2] / f"{sha256}.{extension}"
 
     def session_dir(self, session_id: str) -> Path:
         """``<corpus_root>/sessions/<session_id>/``."""
