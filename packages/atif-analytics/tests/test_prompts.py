@@ -8,13 +8,13 @@ from atif_analytics.application.prompts import (
     CLASSIFY_SYSTEM_PROMPT,
     CONFLICTS_SYSTEM_PROMPT,
     PERCEIVED_SYSTEM_PROMPT,
-    TRAJECTORY_SYSTEM_PROMPT,
     USER_FRICTION_SYSTEM_PROMPT,
 )
+from atif_analytics.domain.authorship import AUTHOR_VALUES
+from atif_analytics.domain.models import SessionClassification
 
 ALL_PROMPTS = (
     CLASSIFY_SYSTEM_PROMPT,
-    TRAJECTORY_SYSTEM_PROMPT,
     CONFLICTS_SYSTEM_PROMPT,
     USER_FRICTION_SYSTEM_PROMPT,
     PERCEIVED_SYSTEM_PROMPT,
@@ -30,29 +30,36 @@ def test_no_bedrock_output_config_phrasing_survives() -> None:
 
 def test_adapted_strict_mode_phrases_present() -> None:
     assert "The response_format json_schema strict mode" in CLASSIFY_SYSTEM_PROMPT
-    assert (
-        "The strict structured-output\n  validator rejects additional fields"
-        in TRAJECTORY_SYSTEM_PROMPT
-    )
 
 
-def test_appendix_on_four_prompts_not_trajectory() -> None:
-    """The classifier appendix attaches to classify/conflicts/friction/perceived.
-
-    The windowed trajectory prompt carries its own <operating_context>, so
-    adding the generic appendix would give it two contradicting descriptions
-    of the request shape.
-    """
-    for prompt in (
-        CLASSIFY_SYSTEM_PROMPT,
-        CONFLICTS_SYSTEM_PROMPT,
-        USER_FRICTION_SYSTEM_PROMPT,
-        PERCEIVED_SYSTEM_PROMPT,
-    ):
+def test_appendix_on_all_four_prompts() -> None:
+    """The classifier appendix attaches to classify/conflicts/friction/perceived."""
+    for prompt in ALL_PROMPTS:
         assert "<quality_bar>" in prompt
         assert "<output_rules>" in prompt
-    assert "<quality_bar>" not in TRAJECTORY_SYSTEM_PROMPT
-    assert "<operating_context>" in TRAJECTORY_SYSTEM_PROMPT
+
+
+def test_transcript_prompts_name_every_machine_author() -> None:
+    """The three transcript readers are told which labels are not the user.
+
+    The renderer puts a machine-written user-role step under its author
+    label; a prompt that did not name a label would leave the model to guess
+    whether ``[stop_hook ...]`` is the user speaking.
+    """
+    machine = [a for a in AUTHOR_VALUES if a != "human"]
+    for prompt in (CLASSIFY_SYSTEM_PROMPT, CONFLICTS_SYSTEM_PROMPT, PERCEIVED_SYSTEM_PROMPT):
+        assert "<transcript_roles>" in prompt
+        for author in machine:
+            assert f"[{author} ...]" in prompt
+    # Friction reads one human message at a time and never sees the labels.
+    assert "<transcript_roles>" not in USER_FRICTION_SYSTEM_PROMPT
+
+
+def test_classify_prompt_asks_only_for_schema_fields() -> None:
+    """The dropped labels are gone from the prompt as well as the schema."""
+    assert set(SessionClassification.model_fields) == {"work_category", "goal", "confidence"}
+    for dropped in ("autonomy_tier", "success=", "Success semantics", "Pacing patterns"):
+        assert dropped not in CLASSIFY_SYSTEM_PROMPT
 
 
 def test_claude_code_data_descriptions_kept() -> None:
@@ -63,9 +70,7 @@ def test_claude_code_data_descriptions_kept() -> None:
 
 def test_prompt_substance_anchors() -> None:
     """Spot-check the prompt lines that steer each classifier's output."""
-    assert "Don't grade on agent skill." in CLASSIFY_SYSTEM_PROMPT
-    assert "neutral 70%, positive 25%, negative 5%" not in TRAJECTORY_SYSTEM_PROMPT  # legacy-only
-    assert "~70% neutral" in TRAJECTORY_SYSTEM_PROMPT
+    assert "Don't infer goals from agent actions." in CLASSIFY_SYSTEM_PROMPT
     assert "Never invent turn UUIDs." in CONFLICTS_SYSTEM_PROMPT
     assert "USE THIS FOR" not in USER_FRICTION_SYSTEM_PROMPT  # schema-side text, not prompt
     assert "THIS IS THE MAJORITY CLASS" in USER_FRICTION_SYSTEM_PROMPT

@@ -101,24 +101,6 @@ updates:
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
-      # numpy's ceiling belongs to numba, not to us. Measured 2026-08-28: the locked numba
-      # 0.67.0 declares `Requires-Dist: numpy<2.6,>=1.22`, and
-      # `packages/atif-analytics/pyproject.toml` restates that as `numpy>=2.4.4,<2.6` because
-      # uv resolves all packages symmetrically — with no ceiling on numpy, `uv lock --upgrade`
-      # takes the highest numpy and back-solves numba to 0.53.1, which breaks umap-learn and
-      # hdbscan.
-      #
-      # A pull request that widens the ceiling to `<2.7` reproduces exactly that: it can only
-      # resolve by downgrading numba. Raising the ceiling is a COORDINATED bump — numba first,
-      # then numpy — and Dependabot proposes one dependency at a time, so a minor or major
-      # numpy pull request here is guaranteed churn. Patch updates inside the ceiling
-      # (2.5.2 → 2.5.3) still flow, which is where numpy's security fixes land. Measured
-      # 2026-08-28: numpy's latest release is 2.5.2, inside the ceiling, so this entry also
-      # currently suppresses nothing.
-      - dependency-name: "numpy"
-        update-types:
-          - "version-update:semver-minor"
-          - "version-update:semver-major"
 
   # --- the actions the workflows pin --------------------------------------
   - package-ecosystem: "github-actions"

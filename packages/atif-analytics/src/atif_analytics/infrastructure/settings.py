@@ -3,12 +3,9 @@
 """Env-driven settings for the analytics pipelines.
 
 Pydantic v2 ``BaseSettings`` under the workspace ``ATIF_SQL_`` prefix
-(atif-corpus / atif-models precedent). Carries the corpus root, the
-per-pipeline knobs (friction char cutoff, batch size, transcript caps), the
-structural hyperparameters (defaults pinned by the frozen domain configs),
-and the lance-store location the structural stages read (the VSS branch owns the writer;
-CONTRACT-V2 documents the table schema ``{uuid, model, dim, embedding,
-embedded_at}``).
+(atif-corpus / atif-models precedent). Carries the corpus root and the
+per-pipeline knobs (friction char cutoff, batch size, budget ceilings,
+transcript caps).
 
 Composes :class:`atif_models.infrastructure.settings.LlmSettings` for the
 LLM family/size/region/concurrency selection rather than duplicating those
@@ -24,12 +21,7 @@ from typing import TYPE_CHECKING
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from atif_analytics.domain.config import (
-    ClusteringConfig,
-    CommunityConfig,
-    TermsConfig,
-    TranscriptCaps,
-)
+from atif_analytics.domain.config import TranscriptCaps
 from atif_analytics.domain.layout import AnalyticsLayout
 
 if TYPE_CHECKING:
@@ -77,10 +69,6 @@ class AnalyticsSettings(BaseSettings):
     #: Materialized corpus root (the directory containing ``sessions/``).
     corpus_root: Path = Field(default_factory=_default_corpus_root)
 
-    #: Lance embeddings store the structural stages read. ``None`` resolves
-    #: to ``<corpus_root>/embeddings_lance`` (the atif-embed convention).
-    lance_uri: Path | None = None
-
     # --- LLM pipeline knobs ---
     #: Char cutoff for friction candidates: longer user turns are almost
     #: always genuine instructions.
@@ -101,30 +89,6 @@ class AnalyticsSettings(BaseSettings):
     session_text_total_max_chars: int = 800_000
     session_text_tool_result_max_chars: int = 50_000
 
-    # --- Structural hyperparameters (pinned by CONTRACT-V2) ---
-    umap_n_components_50: int = 50
-    umap_n_components_2: int = 2
-    umap_n_neighbors: int = 30
-    umap_min_dist_cluster: float = 0.0
-    umap_min_dist_viz: float = 0.1
-    umap_metric: str = "cosine"
-    umap_compute_viz: bool = False
-    hdbscan_min_cluster_size: int = 20
-    hdbscan_min_samples: int = 5
-    leiden_knn_k: int = 15
-    leiden_edge_floor: float = 0.3
-    leiden_min_community_size: int = 3
-    leiden_resolution: float | None = None
-    leiden_resolution_range_lo: float = 0.05
-    leiden_resolution_range_hi: float = 0.95
-    leiden_n_iterations: int = -1
-    seed: int = 42
-    tfidf_min_df: int = 2
-    tfidf_max_df: float = 0.95
-    tfidf_ngram_min: int = 1
-    tfidf_ngram_max: int = 2
-    tfidf_top_n_terms: int = 10
-
     # ------------------------------------------------------------------
     # Derivations
     # ------------------------------------------------------------------
@@ -133,55 +97,11 @@ class AnalyticsSettings(BaseSettings):
         """The analytics artifact layout under :attr:`corpus_root`."""
         return AnalyticsLayout(corpus_root=self.corpus_root)
 
-    def resolve_lance_uri(self) -> Path:
-        """Effective lance dataset directory (atif-embed's convention)."""
-        if self.lance_uri is not None:
-            return self.lance_uri
-        return self.corpus_root / "embeddings_lance"
-
     def llm(self) -> LlmSettings:
         """The atif-models LLM settings (family/sizes/region/concurrency)."""
         from atif_models.infrastructure.settings import LlmSettings
 
         return LlmSettings()
-
-    def clustering_config(self) -> ClusteringConfig:
-        """Project the UMAP + HDBSCAN hyperparameters (+ seed)."""
-        return ClusteringConfig(
-            umap_n_components_50=self.umap_n_components_50,
-            umap_n_components_2=self.umap_n_components_2,
-            umap_n_neighbors=self.umap_n_neighbors,
-            umap_min_dist_cluster=self.umap_min_dist_cluster,
-            umap_min_dist_viz=self.umap_min_dist_viz,
-            umap_metric=self.umap_metric,
-            compute_viz_coords=self.umap_compute_viz,
-            hdbscan_min_cluster_size=self.hdbscan_min_cluster_size,
-            hdbscan_min_samples=self.hdbscan_min_samples,
-            seed=self.seed,
-        )
-
-    def community_config(self) -> CommunityConfig:
-        """Project the Leiden+CPM + mutual-kNN hyperparameters (+ seed)."""
-        return CommunityConfig(
-            leiden_knn_k=self.leiden_knn_k,
-            leiden_edge_floor=self.leiden_edge_floor,
-            leiden_min_community_size=self.leiden_min_community_size,
-            leiden_resolution=self.leiden_resolution,
-            leiden_resolution_range_lo=self.leiden_resolution_range_lo,
-            leiden_resolution_range_hi=self.leiden_resolution_range_hi,
-            leiden_n_iterations=self.leiden_n_iterations,
-            seed=self.seed,
-        )
-
-    def terms_config(self) -> TermsConfig:
-        """Project the c-TF-IDF hyperparameters."""
-        return TermsConfig(
-            tfidf_min_df=self.tfidf_min_df,
-            tfidf_max_df=self.tfidf_max_df,
-            tfidf_ngram_min=self.tfidf_ngram_min,
-            tfidf_ngram_max=self.tfidf_ngram_max,
-            tfidf_top_n_terms=self.tfidf_top_n_terms,
-        )
 
     def transcript_caps(self) -> TranscriptCaps:
         """Project the transcript char caps."""

@@ -55,19 +55,20 @@ class LlmSettings(BaseSettings):
 
     # Per-pipeline size assignments (CONTRACT-V2 §Pipeline size assignments):
     # conflicts is the hardest judgment task (sol), friction is a
-    # per-message enum (luna).
-    llm_size_classify: Size = "medium"
-    llm_size_trajectory: Size = "medium"
+    # per-message enum (luna). classify moved to luna on 2026-09-27 when its
+    # schema shrank to work category + goal; the trajectory pipeline (and its
+    # size) left the same day.
+    llm_size_classify: Size = "small"
     llm_size_conflicts: Size = "large"
     llm_size_friction: Size = "small"
     # perceived judges user-visible evidence over full transcripts — medium
-    # (terra), like classify/trajectory. Env: ATIF_SQL_LLM_SIZE_PERCEIVED.
+    # (terra). Env: ATIF_SQL_LLM_SIZE_PERCEIVED.
     llm_size_perceived: Size = "medium"
 
     def size_for(self, pipeline: str) -> Size:
         """The configured size alias for ``pipeline``.
 
-        Pipelines: classify / trajectory / conflicts / friction / perceived.
+        Pipelines: classify / conflicts / friction / perceived.
         """
         try:
             size = getattr(self, f"llm_size_{pipeline}")

@@ -148,7 +148,8 @@ description = "Second type checker: pyright in strict mode over the same trees t
 # `[tool.pyright]` in pyproject.toml records the measurement behind each exclusion:
 # reportUnknown{Member,Variable,Argument}Type and reportMissingTypeStubs. Those four are off
 # because their findings originate in distributions that ship no type information (pyarrow,
-# boto3, botocore, scipy, sklearn, hdbscan, umap, graspologic_native) or at an
+# boto3, botocore; scipy, sklearn, hdbscan, umap and graspologic_native until they left with
+# the structural pipelines on 2026-09-27) or at an
 # `isinstance` narrowing of an explicit `Any` read out of a decoded JSON document — never in a
 # missing or wrong first-party annotation. reportUnknownParameterType was 92% first-party, so
 # it stays ON.
@@ -384,6 +385,8 @@ description = "Dependency license report over uv.lock via osv-scanner's allowlis
 # hdbscan, hyperframe, jinja2, lancedb, numba, polars, prompt-toolkit, python-dateutil,
 # scipy, shellingham, tiktoken, tokenizers, umap-learn — every one of them permissive), and
 # `non-standard` is itself rejected as an allowlist entry, so no allowlist can clear them.
+# (hdbscan, numba, scipy, umap-learn and llvmlite left the lock on 2026-09-27; the counts
+# here are the 2026-08-28 record, not a re-measurement.)
 # The 17th is llvmlite, whose real expression `BSD-2-Clause AND Apache-2.0 WITH
 # LLVM-exception` cannot be allowlisted because `LLVM-exception` is not a standalone SPDX
 # id. `UNKNOWN` IS accepted and covers the seven workspace members, which have no

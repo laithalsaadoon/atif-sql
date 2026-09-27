@@ -2,31 +2,26 @@
 
 """Task-framing system prompts for the structured-output classifiers.
 
-The trajectory prompt here is the WINDOWED one, matching the windowed
-pipeline that consumes it; a per-message variant would describe a request
-shape this package never sends. Every "Claude Code" phrase describing the
-DATA is kept verbatim, because the corpus IS Claude Code transcripts.
+Every "Claude Code" phrase describing the DATA is kept verbatim, because the
+corpus IS Claude Code transcripts.
 
-Adaptations for the GPT-5.6 strict-structured-output backend (CONTRACT-V2:
-"adapting ONLY Claude-specific phrasing that misleads a GPT model"; every
-edit is enumerated here and asserted in ``tests/test_prompts.py``):
+Adaptation for the GPT-5.6 strict-structured-output backend (CONTRACT-V2:
+"adapting ONLY Claude-specific phrasing that misleads a GPT model"; asserted
+in ``tests/test_prompts.py``): ``_CLASSIFIER_APPENDIX`` <output_rules> says
+"The response_format json_schema strict mode enforces the schema" where the
+ported text said "Bedrock's output_config.format enforces the schema".
+output_config is the Anthropic-on-Bedrock wire shape; naming it to a GPT
+model asserts a mechanism that doesn't exist on its path.
 
-1. ``_CLASSIFIER_APPENDIX`` <output_rules>: "Bedrock's output_config.format
-   enforces the schema" → "The response_format json_schema strict mode
-   enforces the schema". output_config is the Anthropic-on-Bedrock wire
-   shape; naming it to a GPT model asserts a mechanism that doesn't exist
-   on its path.
-2. ``TRAJECTORY_SYSTEM_PROMPT`` <anti_patterns>: "Bedrock's
-   structured-output validator rejects additional fields" → "The strict
-   structured-output validator rejects additional fields". Same rationale.
-3. ``TRAJECTORY_SYSTEM_PROMPT``: the ported prompt carries no other
-   Claude-directed phrasing, so nothing else changed.
+Two house edits on 2026-09-27, both asserted in ``tests/test_prompts.py``:
+the classify prompt asks for work category and goal only (the autonomy and
+success labels were dropped with their schema fields), and the three
+transcript prompts carry ``_TRANSCRIPT_ROLES``, which names the author
+labels the renderer now puts on machine-written user-role text. The
+trajectory prompt left with its pipeline.
 
-Label semantics, calibration priors, examples, anti-patterns, and the
-appendix quality bar are otherwise the ported bytes.
-
-``PERCEIVED_SYSTEM_PROMPT`` is the one exception: it is not a port. It
-implements LangSmith's published "Perceived Error" definition
+``PERCEIVED_SYSTEM_PROMPT`` is not a port. It implements LangSmith's
+published "Perceived Error" definition
 (docs.langchain.com/langsmith/tuned-evaluators) in the house prompt style
 (instructions/context/calibration/examples/anti_patterns + the shared
 classifier appendix). Its two house anti-patterns beyond that definition,
@@ -45,26 +40,18 @@ You are an offline post-hoc analyst classifying complete Claude Code coding
 sessions. The user message contains the full session transcript (user turns,
 assistant turns, tool calls, and tool results) already concatenated.
 
-Emit exactly one JSON object matching the schema. Four label fields plus a
-self-assessed confidence, no surrounding prose, no markdown fences.
+Emit exactly one JSON object matching the schema: the work category, the
+user's goal, and a self-assessed confidence. No surrounding prose, no
+markdown fences.
 </instructions>
 
 <context>
 How to read the transcript:
 
-- The opening user message states or implies the goal.
-- Closing exchanges show whether the goal was met.
-- Tool calls plus tool results are the strongest evidence of what actually
-  happened — read past chitchat to the actions.
-
-Pacing patterns:
-
-- Confirmation pattern (user replies "ok", "thanks", "looks good", short
-  turns separated by long agent runs) → autonomous.
-- Course correction (user re-instructs, names files the agent missed,
-  rewrites the plan mid-flight) → assisted.
-- Step-by-step (user types every instruction, confirms each step, rejects
-  more than they accept) → manual.
+- The opening user message states or implies the goal; later user turns
+  refine it.
+- Tool calls plus tool results are the strongest evidence of what kind of
+  work happened — read past chitchat to the actions.
 
 Work category cues:
 
@@ -80,317 +67,44 @@ Work category cues:
   conference abstracts, LinkedIn). Polished prose, not internal docs.
 - other: only when nothing else fits. Sessions that mix sde plus a second
   category should pick the one with more turns / tool calls.
-
-Success semantics:
-
-- success: goal as stated was clearly met. Tests pass, feature works,
-  document is done, decision is made.
-- partial: the work landed with explicit caveats or leftover TODOs the
-  user acknowledged.
-- failure: session ended without reaching the goal — agent gave up,
-  blocked indefinitely, or wrong path landed.
-- unknown: insufficient signal. Session ends mid-task, no clear close,
-  too short to judge.
 </context>
 
 <calibration>
-- Use unknown plus confidence < 0.5 when the evidence is genuinely mixed.
-  Do not manufacture certainty to fill the schema.
 - goal must be one sentence in present tense, paraphrasing the user — not
   a literal quote, not two goals concatenated with "and".
-- A session that explores three options and doesn't pick one is partial,
-  with unknown only if the user never confirmed the session was over.
-- Confidence is per-row, not per-field. If you're sure of three fields
-  and uncertain about work_category, pick the most likely and reflect
-  the uncertainty in the overall confidence.
+- Use confidence < 0.5 when the category is genuinely mixed or the goal
+  is unclear. Do not manufacture certainty to fill the schema.
 </calibration>
 
 <examples>
 <example>
 <input>A 4-hour session where the user opens with "implement Phase 2 of the
 auth migration", the agent runs ~80 tool calls, the user replies "ok",
-"good", "ship it" between long agent runs, ends with green tests plus a
-successful merge.</input>
-<output>autonomy_tier=autonomous, work_category=sde, success=success,
-confidence=0.9</output>
-</example>
-<example>
-<input>A 30-minute session where the user pastes a stack trace, the agent
-reads the offending file and proposes a fix, the user says "actually I
-think the bug is in module Y, can you check there", the agent verifies,
-fixes Y, tests pass, the user thanks the agent and ends.</input>
-<output>autonomy_tier=assisted (user redirected), work_category=sde,
-success=success, confidence=0.85</output>
+"good", "ship it" between long agent runs.</input>
+<output>work_category=sde, goal="Implement Phase 2 of the auth
+migration.", confidence=0.9</output>
 </example>
 <example>
 <input>A 2-hour session of strategic memo work — user dictates section
-outlines, agent drafts, user rewrites paragraphs heavily, three rounds
-of revision, ends with a published draft.</input>
-<output>autonomy_tier=assisted, work_category=strategy_business,
-success=success, confidence=0.85</output>
+outlines, agent drafts, user rewrites paragraphs heavily.</input>
+<output>work_category=strategy_business, goal="Draft the strategy memo
+section by section.", confidence=0.85</output>
 </example>
 <example>
 <input>A session that opens with "schedule a 1:1 with X", the agent calls
-calendar, finds slots, user picks one, agent books, user confirms.</input>
-<output>autonomy_tier=manual, work_category=admin, success=success,
+calendar, finds slots, user picks one, agent books.</input>
+<output>work_category=admin, goal="Schedule a 1:1 with X.",
 confidence=0.95</output>
-</example>
-<example>
-<input>A 5-minute session where the user asks "how should I structure the
-test fixture?", the agent explains, the user says "got it" and ends
-without writing code.</input>
-<output>autonomy_tier=manual, work_category=sde, success=success (goal was
-advice, which was given), confidence=0.7</output>
-</example>
-<example>
-<input>A session where the user pastes a 500-line markdown plan and says
-"let's start", the agent runs through the first three sections, but the
-session ends mid-flight with five sections still unaddressed.</input>
-<output>autonomy_tier=assisted, work_category=sde, success=partial,
-confidence=0.85</output>
 </example>
 </examples>
 
 <anti_patterns>
-- Don't grade on agent skill. success means the goal was met, even if
-  the path was meandering. failure doesn't mean the agent was bad; it
-  means the goal wasn't met.
 - Don't infer goals from agent actions. The user's opening message is
   the ground truth for goal. If the agent went on a tangent, the goal is
   still what the user asked for.
-- Don't confuse autonomous with "agent did a lot". Autonomous requires
-  the user to step back and let the agent run. A session where the
-  agent produces lots of code but the user reviews each diff is assisted.
-- goal is the user's goal, not the session's outcome. If the user asked
-  to refactor X but the agent ended up debugging an unrelated test
-  failure, goal is still "refactor X". The detour shows up in success.
+- Don't judge whether the goal was met. That is not a field.
 </anti_patterns>
 """
-
-
-TRAJECTORY_SYSTEM_PROMPT = """\
-<instructions>
-You score the emotional polarity arc across pairs of adjacent text turns
-inside ONE Claude Code coding session. The user message contains the full
-chunk: an ordered list of <window idx=N> XML blocks, each with a <prev>
-text turn and a <curr> text turn from the same session.
-
-Emit exactly one JSON object matching the schema:
-
-{
-  "windows": [
-    {
-      "prev_uuid": "<echo from <prev uuid='...'>; null on session-first window>",
-      "curr_uuid": "<echo from <curr uuid='...'>",
-      "prev_sentiment": "negative" | "neutral" | "positive" | null,
-      "curr_sentiment": "negative" | "neutral" | "positive",
-      "delta": -2 | -1 | 0 | 1 | 2 | null,
-      "is_transition": true | false,
-      "transition_kind": "frustration_spike" | "resolution" | "reset" | "drift" | "clarification" | "none",
-      "confidence": 0.0..1.0
-    }, ...
-  ]
-}
-
-Output JSON only. No surrounding prose, no markdown fences. The host
-pipeline parses your output with a strict JSON Schema validator —
-missing fields, wrong types, or unknown enum values fail the row.
-</instructions>
-
-<context>
-Each <window> represents two adjacent text turns from one session. The
-ordering inside a chunk reflects chronological order. When a window has
-no <prev> (the session-first window), set prev_uuid=null,
-prev_sentiment=null, delta=null, transition_kind="none" unless curr
-itself is a salient frustration_spike or resolution opening.
-
-Sentiment labels (applied to a single turn):
-
-- positive — excitement, approval, momentum, explicit thanks beyond
-  politeness ("nice!", "love this", "shipping it", "huge win", "perfect,
-  exactly what I needed").
-- neutral — factual, procedural, acknowledgement, plain instruction,
-  plain question. THIS IS THE MAJORITY CLASS. Coding sessions are
-  ~70% neutral. "Tests pass.", "Run the linter.", "Where does X live?",
-  "ok let me check", "running pytest" — all neutral.
-- negative — frustration, pushback, blocked, sharp correction ("ugh",
-  "seriously?", "this entire approach is wrong", "no don't do that",
-  "you keep messing this up", "I'm stuck").
-
-delta encoding (curr - prev, integer):
-
-  prev          curr          delta
-  --------      --------      -----
-  negative      negative       0
-  negative      neutral       +1
-  negative      positive      +2
-  neutral       negative      -1
-  neutral       neutral        0
-  neutral       positive      +1
-  positive      negative      -2
-  positive      neutral       -1
-  positive      positive       0
-  null  (session-first)        null
-
-transition_kind labels (six):
-
-- frustration_spike — prev is neutral/positive, curr is negative, AND
-  the negative is salient (visible affect, not just a curt instruction).
-  Example: agent reports "tests pass", user replies "no they don't,
-  you're looking at the wrong file".
-- resolution — prev is negative, curr is neutral or positive, AND there's
-  evidence the underlying problem moved. Example: long debugging back-
-  and-forth, user finally replies "got it, that fix works, thanks".
-- reset — abrupt topic change, prev and curr discuss different subjects
-  with no narrative bridge. Example: prev was about CI configuration,
-  curr is "actually let's switch gears, draft a PR-FAQ for X".
-- drift — same polarity, related sub-topic but a clear evolution.
-  Example: prev was about adding test coverage to module A, curr is
-  about extending coverage to a related module B.
-- clarification — curr restates, refines, or narrows prev's substance.
-  Example: user asked a vague question, then immediately re-asks with
-  a concrete file path or constraint added.
-- none — DEFAULT. Use this when no transition_kind clearly fits, when
-  prev and curr are both routine procedural turns, or when the session-
-  first window has no prior context. Most windows will be "none".
-
-is_transition (per-row boolean): True when the *current* turn (curr) is
-pure filler / acknowledgement with no substantive content. "ok", "running
-tests", "done.", "got it, moving on" — all transitions. Independent of
-transition_kind: a window can have transition_kind="none" and still have
-is_transition=true if the curr turn is just filler.
-</context>
-
-<calibration>
-- Use confidence < 0.5 when the cue is ambiguous (single-word turns,
-  mixed signals, missing prev context).
-- Use confidence > 0.85 only when an explicit affect cue (curse word,
-  exclamation, "perfect", "ugh") makes the polarity unambiguous.
-- The downstream pipeline weights by confidence — honesty pays.
-- Do NOT manufacture "slightly positive" or "mildly negative" labels.
-  Three-class output: pick the closest one, lower confidence on the
-  borderline.
-- "thanks" alone is neutral, not positive. Bare politeness is pacing.
-- "ok" / "ok let me check" / "running" are neutral with is_transition=true.
-- Tool-use narration ("calling X", "reading Y") is neutral.
-- A long technical turn is not necessarily neutral — affect lives in
-  the words, not the length. "this entire approach is wrong because…"
-  stays negative even at 200 chars.
-</calibration>
-
-<examples>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid="u1">tests pass</prev>
-<curr role="user" uuid="u2">no they don't, you're reading the wrong file — look at tests/test_auth.py</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":"u1","curr_uuid":"u2","prev_sentiment":"neutral","curr_sentiment":"negative","delta":-1,"is_transition":false,"transition_kind":"frustration_spike","confidence":0.9}]}</output>
-</example>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid="u3">I'm stuck on this — the migration keeps failing the same way</prev>
-<curr role="user" uuid="u4">got it, that's exactly what I needed — the rotator change is the missing piece</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":"u3","curr_uuid":"u4","prev_sentiment":"negative","curr_sentiment":"positive","delta":2,"is_transition":false,"transition_kind":"resolution","confidence":0.9}]}</output>
-</example>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid="u5">add a test for the empty-input case in module A</prev>
-<curr role="user" uuid="u6">also add the same coverage to module B while you're at it</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":"u5","curr_uuid":"u6","prev_sentiment":"neutral","curr_sentiment":"neutral","delta":0,"is_transition":false,"transition_kind":"drift","confidence":0.85}]}</output>
-</example>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid="u7">running the linter</prev>
-<curr role="user" uuid="u8">ok let me check that</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":"u7","curr_uuid":"u8","prev_sentiment":"neutral","curr_sentiment":"neutral","delta":0,"is_transition":true,"transition_kind":"none","confidence":0.9}]}</output>
-</example>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid=""></prev>
-<curr role="user" uuid="u9">implement Phase 2 of the auth migration end-to-end</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":null,"curr_uuid":"u9","prev_sentiment":null,"curr_sentiment":"neutral","delta":null,"is_transition":false,"transition_kind":"none","confidence":0.9}]}</output>
-</example>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid="u10">where does the auth config live?</prev>
-<curr role="user" uuid="u11">specifically the rotator config — under src/auth/?</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":"u10","curr_uuid":"u11","prev_sentiment":"neutral","curr_sentiment":"neutral","delta":0,"is_transition":false,"transition_kind":"clarification","confidence":0.85}]}</output>
-</example>
-<example>
-<input>
-<window idx=0>
-<prev role="user" uuid="u12">we just shipped the rotator update — looks clean</prev>
-<curr role="user" uuid="u13">switching gears: draft a PR-FAQ for the new dashboard launch</curr>
-</window>
-</input>
-<output>{"windows":[{"prev_uuid":"u12","curr_uuid":"u13","prev_sentiment":"positive","curr_sentiment":"neutral","delta":-1,"is_transition":false,"transition_kind":"reset","confidence":0.85}]}</output>
-</example>
-</examples>
-
-<anti_patterns>
-- Do NOT echo back a prev_uuid that wasn't in the request. Bind exactly
-  to the (prev_uuid, curr_uuid) tuples supplied in the <window> blocks.
-  The host pipeline verifies completeness by uuid-pair echo; making up
-  uuids breaks the verification step and triggers a costly retry.
-- Do NOT skip windows. If the chunk has 12 <window> blocks, return 12
-  TrajectoryWindow objects. Missing entries trigger a retry that costs
-  another full LLM call.
-- Do NOT pick transition_kind to inject narrative drama. Most windows
-  are "none". A long session has at most a handful of frustration_spike
-  / resolution windows; if you find yourself emitting frustration_spike
-  on more than ~10% of windows, you're over-classifying.
-- Do NOT confuse is_transition with transition_kind="none". They are
-  independent axes: is_transition tags a filler/acknowledgement turn,
-  transition_kind tags the prev→curr arc.
-- Do NOT round confidence to 1.0. The downstream pipeline uses
-  confidence as a weight; saturating at 1.0 erases the calibration
-  signal. 0.9 means "very sure"; 0.95+ should be reserved for
-  unambiguous explicit cues.
-- Do NOT recompute delta in your head differently from the table above.
-  delta is mechanical: encode prev (-1/0/+1), encode curr (-1/0/+1),
-  subtract. The schema accepts {-2,-1,0,1,2,null}; anything else fails
-  validation.
-- Do NOT treat agent-role turns. Only user-role turns appear in the
-  windows. The role attribute is informational; you score the same way
-  regardless of role.
-- Do NOT add commentary fields. The schema has exactly seven keys per
-  window plus the outer "windows" array. The strict structured-output
-  validator rejects additional fields.
-</anti_patterns>
-
-<operating_context>
-You run offline against a snapshot of Claude Code transcripts already on
-disk. There is no live user to clarify with — commit to one output for
-each chunk. The downstream pipeline writes your output to a parquet file
-used by SQL views and analytics macros; future you (or a human auditor)
-reads these rows in aggregate, not in isolation. Idempotence matters:
-the same input must produce the same output across runs. Don't introduce
-randomness or invent details that aren't in the input.
-
-Failure mode: if a window's polarity is genuinely undecidable, set
-curr_sentiment="neutral", transition_kind="none", and confidence below
-0.5. Do not refuse the chunk — every requested (prev_uuid, curr_uuid)
-must appear in your "windows" array, even if low-confidence.
-</operating_context>
-"""
-
 
 _CONFLICTS_SYSTEM_PROMPT_BODY = """\
 <instructions>
@@ -962,6 +676,25 @@ collaboration — the user never perceived a mistake.</output>
 """
 
 
+#: How the transcript renderer labels user-role text a human did not write
+#: (atif_analytics.domain.authorship). Appended to the three prompts that read
+#: a whole transcript; friction classifies one human message and never sees
+#: these labels.
+_TRANSCRIPT_ROLES = """\
+
+<transcript_roles>
+- [user ...] lines are the human. [assistant ...] lines are the agent.
+- [stop_hook ...], [task_notification ...], [harness ...] and
+  [audit_prompt ...] lines are machine-written text Claude Code delivered
+  in the user role: a reviewer hook blocking the agent's stop, a background
+  task finishing, a retry or continuation nudge, a skill body, a command
+  wrapper, screenshot metadata. Their bodies are clipped. They are NOT the
+  user: nothing in them is the user's words, request, approval, or
+  correction.
+</transcript_roles>
+"""
+
+
 _CLASSIFIER_APPENDIX = """\
 
 <operating_context>
@@ -1003,19 +736,15 @@ a human auditor) will read these rows in aggregate, not in isolation.
 # expression per prompt, rather than appended to the public name in place: a module-level
 # `NAME += ...` leaves the constant bound to an incomplete value for every reader who
 # stops at its definition, and for any importer that reads it mid-module.
-CLASSIFY_SYSTEM_PROMPT = _CLASSIFY_SYSTEM_PROMPT_BODY + _CLASSIFIER_APPENDIX
-CONFLICTS_SYSTEM_PROMPT = _CONFLICTS_SYSTEM_PROMPT_BODY + _CLASSIFIER_APPENDIX
+CLASSIFY_SYSTEM_PROMPT = _CLASSIFY_SYSTEM_PROMPT_BODY + _TRANSCRIPT_ROLES + _CLASSIFIER_APPENDIX
+CONFLICTS_SYSTEM_PROMPT = _CONFLICTS_SYSTEM_PROMPT_BODY + _TRANSCRIPT_ROLES + _CLASSIFIER_APPENDIX
 USER_FRICTION_SYSTEM_PROMPT = _USER_FRICTION_SYSTEM_PROMPT_BODY + _CLASSIFIER_APPENDIX
-PERCEIVED_SYSTEM_PROMPT = _PERCEIVED_SYSTEM_PROMPT_BODY + _CLASSIFIER_APPENDIX
-# The windowed trajectory prompt carries its OWN <operating_context> tuned to
-# the chunked-window shape, so it deliberately does NOT get the generic
-# appendix: the two would contradict each other on the request shape.
+PERCEIVED_SYSTEM_PROMPT = _PERCEIVED_SYSTEM_PROMPT_BODY + _TRANSCRIPT_ROLES + _CLASSIFIER_APPENDIX
 
 
 __all__ = [
     "CLASSIFY_SYSTEM_PROMPT",
     "CONFLICTS_SYSTEM_PROMPT",
     "PERCEIVED_SYSTEM_PROMPT",
-    "TRAJECTORY_SYSTEM_PROMPT",
     "USER_FRICTION_SYSTEM_PROMPT",
 ]

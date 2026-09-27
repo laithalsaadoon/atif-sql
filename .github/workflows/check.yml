@@ -45,7 +45,7 @@ jobs:
       # and says nothing about it. Runs after mise-action, which is what puts uv on PATH.
       - run: echo "UV_CACHE_DIR=$(uv cache dir)" >> "$GITHUB_ENV"
       # uv's wheel cache, keyed on the lockfile. mise-action caches mise's own tools; this
-      # cache is separate, and without it every run rebuilds the numba/scipy/pyarrow set.
+      # cache is separate, and without it every run rebuilds the pyarrow/polars/lancedb set.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.UV_CACHE_DIR }}

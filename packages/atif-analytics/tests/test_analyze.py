@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_analyze orchestration: budget ceilings across the LLM lane.
+"""run_analyze orchestration: budget ceilings across the four LLM stages.
 
 FakeProvider-driven (no boto3 client is ever built): ``build_provider`` is
 monkeypatched at each use-case module's binding so every stage gets a
@@ -29,7 +29,6 @@ SPEC = resolve("medium")
 
 _USE_CASE_MODULES = (
     "atif_analytics.application.use_cases.classify",
-    "atif_analytics.application.use_cases.trajectory",
     "atif_analytics.application.use_cases.conflicts",
     "atif_analytics.application.use_cases.friction",
     "atif_analytics.application.use_cases.perceived",
@@ -62,13 +61,13 @@ def fake_providers(monkeypatch: pytest.MonkeyPatch) -> list[_BillingFakeProvider
 
 
 def test_dry_run_summary_surfaces_budget(settings: AnalyticsSettings) -> None:
-    summary = run_analyze(settings, llm_only=True, dry_run=True, since_days=None)
+    summary = run_analyze(settings, dry_run=True, since_days=None)
     assert summary["llm_budget"] == {
         "max_sessions_per_run": 50,
         "max_cost_usd_per_run": 25.0,
     }
     assert summary["budget_exhausted"] is False
-    for stage in ("classify", "trajectory", "conflicts", "friction", "perceived"):
+    for stage in ("classify", "conflicts", "friction", "perceived"):
         plan = summary[stage]
         assert plan["dry_run"] is True
         assert plan["max_sessions_per_run"] == 50
@@ -82,10 +81,9 @@ def test_cost_ceiling_skips_remaining_stages_and_flags_report(
     # $2/call on terra; classify makes 2 calls = $4 > $3 ceiling — every
     # later stage must be skipped with nothing stamped.
     capped = settings.model_copy(update={"llm_max_cost_usd_per_run": 3.0})
-    summary = run_analyze(capped, llm_only=True, dry_run=False, since_days=None)
+    summary = run_analyze(capped, dry_run=False, since_days=None)
     assert summary["classify"] == 2
     skipped = {"skipped": "budget_exhausted", "consecutive_skips": 1}
-    assert summary["trajectory"] == skipped
     assert summary["conflicts"] == skipped
     assert summary["friction"] == skipped
     assert summary["perceived"] == skipped
@@ -93,7 +91,6 @@ def test_cost_ceiling_skips_remaining_stages_and_flags_report(
     assert summary["llm_spent_usd"] == pytest.approx(4.0)
     # Unstarted stages stamped nothing.
     state_db = capped.layout().state_db_path
-    assert checkpointer.load_as_map(state_db, "trajectory") == {}
     assert checkpointer.load_as_map(state_db, "conflicts") == {}
     assert checkpointer.load_as_map(state_db, "user_friction") == {}
     assert checkpointer.load_as_map(state_db, "perceived") == {}
@@ -112,7 +109,7 @@ def test_consecutive_budget_skips_escalate_to_error(settings: AnalyticsSettings)
     try:
         for run in range(3):
             records.clear()
-            summary = run_analyze(starved, llm_only=True, dry_run=False, since_days=None)
+            summary = run_analyze(starved, dry_run=False, since_days=None)
             assert summary["perceived"] == {
                 "skipped": "budget_exhausted",
                 "consecutive_skips": run + 1,
@@ -129,15 +126,15 @@ def test_consecutive_budget_skips_escalate_to_error(settings: AnalyticsSettings)
     # The persisted streak survived across runs in the state db.
     assert checkpointer.budget_skip_count(state_db, "perceived") == 3
     # A run where the stage actually executes clears its streak.
-    run_analyze(settings, llm_only=True, dry_run=False, since_days=None)
+    run_analyze(settings, dry_run=False, since_days=None)
     assert checkpointer.budget_skip_count(state_db, "perceived") == 0
 
 
 @pytest.mark.usefixtures("fake_providers")
 def test_under_ceiling_runs_every_stage(settings: AnalyticsSettings) -> None:
-    summary = run_analyze(settings, llm_only=True, dry_run=False, since_days=None)
+    summary = run_analyze(settings, dry_run=False, since_days=None)
     assert summary["budget_exhausted"] is False
-    for stage in ("classify", "trajectory", "conflicts", "friction", "perceived"):
+    for stage in ("classify", "conflicts", "friction", "perceived"):
         assert isinstance(summary[stage], int)
 
 
@@ -157,13 +154,13 @@ def test_streak_survives_a_stage_that_runs_but_exhausts_the_budget(
 
     # Ceiling 0.0: budget-skipped before the first call, so classify takes a streak.
     starved = settings.model_copy(update={"llm_max_cost_usd_per_run": 0.0})
-    run_analyze(starved, llm_only=True, dry_run=False, since_days=None)
+    run_analyze(starved, dry_run=False, since_days=None)
     assert checkpointer.budget_skip_count(state_db, "classify") == 1
 
     # $3 ceiling against $2 per call over two sessions: classify RUNS, bills
     # past the ceiling, and leaves the budget exhausted for everyone after it.
     partial = settings.model_copy(update={"llm_max_cost_usd_per_run": 3.0})
-    summary = run_analyze(partial, llm_only=True, dry_run=False, since_days=None)
+    summary = run_analyze(partial, dry_run=False, since_days=None)
     assert summary["budget_exhausted"] is True
     assert not isinstance(summary["classify"], dict), "classify ran; it was not skipped outright"
     assert checkpointer.budget_skip_count(state_db, "classify") == 1

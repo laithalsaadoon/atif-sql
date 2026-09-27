@@ -4,11 +4,20 @@
 
 from __future__ import annotations
 
-from analytics_fixtures import SESSION_IDS
+from analytics_fixtures import (
+    IMAGE_META,
+    RETRY_NUDGE,
+    S1_HUMAN_UUIDS,
+    S1_MACHINE_UUIDS,
+    SESSION_IDS,
+)
 
 from atif_analytics.domain.transcript import (
+    NON_HUMAN_PREVIEW_CHARS,
     StepEvent,
+    is_human_turn,
     render_session_text,
+    session_kind,
     tool_input_preview,
     tool_result_preview,
 )
@@ -72,28 +81,54 @@ def test_tool_previews_pure() -> None:
     assert clipped.endswith("…(truncated, 50 chars dropped)")
 
 
-def test_text_windows_shape(reader: CorpusReader) -> None:
-    windows = reader.text_windows(SESSION_IDS[0])
-    # 7 main-chain text steps with uuids (marker step included as a text
-    # turn; sidechain + compact-summary excluded) → one window per turn.
-    curr_uuids = [w[2] for w in windows]
-    assert "u-sc" not in curr_uuids
-    assert "u-cs" not in curr_uuids
-    # Session-first window has null prevs.
-    first = windows[0]
-    assert first[1] is None
-    assert first[3] is None
-    assert first[5] is None
-    assert first[2] == "u-01"
-    # Adjacency: each window's prev is the prior window's curr.
-    import itertools
+def test_machine_user_text_renders_under_its_author(reader: CorpusReader) -> None:
+    """Hook, retry and image text never reaches the model as ``[user ...]``."""
+    text = reader.session_text(SESSION_IDS[0])
+    lines = text.split("\n")
+    assert any(ln.startswith("[stop_hook 2026-08-20T10:01:01.000Z] Stop hook") for ln in lines)
+    assert any(ln.startswith("[harness 2026-08-20T10:01:02.000Z] Your previous") for ln in lines)
+    assert any(ln.startswith("[harness 2026-08-20T10:01:02.500Z] [Image: original") for ln in lines)
+    user_lines = [ln for ln in lines if ln.startswith("[user ")]
+    assert not any(RETRY_NUDGE in ln or IMAGE_META in ln for ln in user_lines)
+    assert not any("Stop hook feedback" in ln for ln in user_lines)
 
-    for prev_win, curr_win in itertools.pairwise(windows):
-        assert curr_win[1] == prev_win[2]
-    # ContentPart[] messages flatten with blank lines.
-    last = windows[-1]
-    assert last[2] == "u-07"
-    assert last[6] == "fixed the race\n\nre-ran twice, green"
+
+def test_non_human_body_is_clipped() -> None:
+    body = "Stop hook feedback: " + "x" * (NON_HUMAN_PREVIEW_CHARS * 2)
+    steps = [StepEvent(ts="t", role="user", text=body, uuid="u")]
+    line = render_session_text(steps)
+    assert line.startswith("[stop_hook t] Stop hook feedback: ")
+    assert line.endswith("chars dropped)")
+    assert len(line) < NON_HUMAN_PREVIEW_CHARS + 80
+
+
+def test_step_event_author_derivation() -> None:
+    assert StepEvent(ts="t", role="user", text="  fix it").author == "human"
+    assert StepEvent(ts="t", role="user", text="<task-notification> x").author == (
+        "task_notification"
+    )
+    compact = StepEvent(ts="t", role="user", text="fix it", is_compact_summary=True)
+    assert compact.author == "harness"
+    assert StepEvent(ts="t", role="agent", text="Stop hook feedback").author is None
+
+
+def test_human_turns_and_session_kind(reader: CorpusReader) -> None:
+    steps = reader.load_steps(SESSION_IDS[0])
+    human = [s.uuid for s in steps if is_human_turn(s)]
+    assert human == S1_HUMAN_UUIDS
+    assert not set(S1_MACHINE_UUIDS) & set(human)
+    assert session_kind(steps) == "interactive"
+    assert reader.session_kind(SESSION_IDS[0]) == "interactive"
+    audit = [
+        StepEvent(ts="t", role="user", text="You are auditing an agent turn for x"),
+        StepEvent(ts="t", role="agent", text='{"ok": true}'),
+    ]
+    assert session_kind(audit) == "turn_audit"
+    job = [
+        StepEvent(ts="t", role="user", text="Run the nightly brief."),
+        StepEvent(ts="t", role="user", text=RETRY_NUDGE),
+    ]
+    assert session_kind(job) == "one_shot_job"
 
 
 def test_edges_uuids(reader: CorpusReader) -> None:
