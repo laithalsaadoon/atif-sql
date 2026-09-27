@@ -19,7 +19,7 @@ original build.
 ## New packages
 - atif-models: model alias registry + structured-output LLM client. NO other
   package hardcodes a model id.
-- atif-analytics: eight v2 pipelines (classify, trajectory, conflicts,
+- atif-analytics: the v2 pipelines (classify, trajectory, conflicts,
   friction, perceived, cluster, terms, community). Depends on atif-models
   ONLY — the `forbidden` contract bars atif-duck. atif-cli composes.
 
@@ -69,7 +69,7 @@ prompts = steps-based rendering under fixed caps (50K/tool_result,
 800K/session). conflicts needs uuid-addressable turns -> use messages(edges)
 uuids in headers; validate returned uuids against edges.
 Schemas/enums are fixed vocabularies (autonomy tiers, work categories,
-6 transition_kinds, 4 conflict kinds, 7 friction labels) — parity of meaning.
+transition_kinds, conflict kinds, friction labels) — parity of meaning.
 Friction tiers: regex + SQL stamp layers run first (zero-cost), LLM tier on luna.
 Structural pipelines (cluster/terms/community): fixed hyperparameters
 (UMAP 50d/HDBSCAN 20,5/Leiden k15 floor .3 min 3 seed 42/c-TF-IDF 2,.95,1-2,top10).
@@ -82,7 +82,7 @@ analogue = steps text >=32 chars (main+sidechain), uuid-keyed via source_uuids
 primary uuid (first source uuid per step; document choice).
 
 ## Cron
-scripts/atif-sql-refresh.sh: three lanes (materialize */10, structural :17,
+scripts/atif-sql-refresh.sh: lanes (materialize */10, structural :17,
 llm nightly 10:20Z), flock per lane, AWS env hygiene + bearer-token read at
 runtime, both corpora via ATIF_SQL_SOURCE_ROOT, log to
 scripts/.run/, selftest script with the opt-out tripwire pattern. Installs via

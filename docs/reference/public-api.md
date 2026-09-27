@@ -2,36 +2,36 @@
 
 **The supported entry point is the `atif-sql` command, not an import.** This repository ships exactly
 one installable distribution, `atif-sql`, whose only console script is
-`atif-sql = "atif_cli.app:main"` — `pyproject.toml:64`. All seven workspace members ship inside that
+`atif-sql = "atif_cli.app:main"` — `pyproject.toml:64`. Every workspace member ships inside that
 one wheel rather than as install targets, and the published name is deliberately split from the
 `atif_cli` module that provides the entry point — `pyproject.toml:16-18`. Install with `uvx atif-sql` or
 `uv tool install atif-sql`; `docs/reference/cli.md` is the primary reference for the surface a user
 actually calls.
 
-What follows documents the **internal seam**: the 30 highest-traffic symbols that one workspace member
+What follows documents the **internal seam**: the highest-traffic symbols that one workspace member
 imports from another. That seam is enforced rather than conventional — the root `pyproject.toml`
-declares `[tool.importlinter]` over all seven root packages at `pyproject.toml:462-463`, with an
+declares `[tool.importlinter]` over every root package at `pyproject.toml:462-463`, with an
 `independence` contract at `pyproject.toml:514-517` forbidding atif-converter, atif-corpus, atif-duck,
 atif-models, and atif-embed from importing each other at all, and a `forbidden` contract at
 `pyproject.toml:519-523` limiting atif-analytics to atif-models alone. Every symbol below is a real
 declaration read at the cited line; none of them is a supported import path for code outside this
 workspace, and no compatibility promise attaches to any of them.
 
-Two facts about the seam shape are worth carrying into every entry below. First, the boundary
-abstractions are `typing.Protocol` classes and there are exactly five, all under a `domain/` package:
+These facts about the seam shape are worth carrying into every entry below. First, the boundary
+abstractions are `typing.Protocol` classes, and all of them sit under a `domain/` package:
 `ConverterPort` at `packages/atif-corpus/src/atif_corpus/domain/ports.py:41`, `EmbeddingProvider`,
 `VectorStorePort`, and `TextRowsPort` at
 `packages/atif-embed/src/atif_embed/domain/ports.py:31`, `:59`, and `:87`, and
 `LlmStructuredProvider` at `packages/atif-models/src/atif_models/domain/ports.py:116`. No
 `abstractmethod` exists anywhere in the workspace, so adapters satisfy a port structurally. Second,
-the name `DomainError` is declared three independent times — one base class per erroring package, at
+the name `DomainError` is declared independently more than once — one base class per erroring package, at
 `packages/atif-converter/src/atif_converter/domain/errors.py:14`,
 `packages/atif-embed/src/atif_embed/domain/errors.py:14`, and
-`packages/atif-models/src/atif_models/domain/ports.py:39` — and the three are unrelated types that
+`packages/atif-models/src/atif_models/domain/ports.py:39` — and they are unrelated types that
 share only a spelling.
 
 There is no HTTP or RPC surface: a grep for route decorators, `FastAPI(`, `APIRouter`, `add_route`,
-and `uvicorn` across all 100 source files under `packages/*/src` returns zero hits, and no module
+and `uvicorn` across every source file under `packages/*/src` returns no hits, and no module
 imports fastapi, starlette, flask, or uvicorn.
 
 ### AnalyticsSettings
@@ -71,7 +71,7 @@ def build_plan(
 ) -> MaterializationPlan:
 ```
 
-Partitions scanned sessions into the three plan buckets — the pure decision at the centre of
+Partitions scanned sessions into the plan buckets — the pure decision at the centre of
 materialization, taking the watermark and the quiescence policy as data.
 
 `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159-211`
@@ -407,7 +407,7 @@ async def run_backfill(
 ) -> int | dict[str, Any]:
 ```
 
-Discovers unembedded steps, embeds them, and appends to the Lance store; all three ports default to
+Discovers unembedded steps, embeds them, and appends to the Lance store; all its ports default to
 None and are constructed lazily so a dry run never loads boto3.
 
 `packages/atif-embed/src/atif_embed/application/embed.py:61-262`
@@ -448,8 +448,8 @@ this dict fails CI instead of surfacing as a runtime mystery.
 
 ## See also
 
-- [module map](../architecture/module-map.md) — 23 shared source citations
-- [processes](../behavior/processes.md) — 22 shared source citations
-- [business logic](../insights/business-logic.md) — 20 shared source citations
-- [contract map](../insights/contract-map.md) — 18 shared source citations
-- [impact analysis](../insights/impact-analysis.md) — 18 shared source citations
+- [module map](../architecture/module-map.md)
+- [processes](../behavior/processes.md)
+- [business logic](../insights/business-logic.md)
+- [contract map](../insights/contract-map.md)
+- [impact analysis](../insights/impact-analysis.md)

@@ -2,7 +2,7 @@
 
 ## What it does
 
-`atif-sql` is a command-line analytics tool over agent trajectories from two agents. It reads the
+`atif-sql` is a command-line analytics tool over agent trajectories from Claude Code and Codex CLI. It reads the
 session transcripts Claude Code leaves at `~/.claude/projects/**/*.jsonl` and the rollouts Codex CLI
 leaves at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`, converts each one to
 ATIF — Harbor's Agent Trajectory Interchange Format — materializes the results as an on-disk
@@ -18,27 +18,27 @@ actually went — which tools ran, where tokens went, where a session turned int
 
 Users get one installable distribution and one console script,
 `atif-sql = "atif_cli.app:main"` (`packages/atif-cli/pyproject.toml:42`), installed with
-`uv tool install atif-sql` (`README.md:26`). The command surface is ten commands: nine registered
-with `@app.command` in `packages/atif-cli/src/atif_cli/app.py` (1120 LOC) plus the `cron` sub-app
+`uv tool install atif-sql` (`README.md:26`). The command surface is the commands registered
+with `@app.command` in `packages/atif-cli/src/atif_cli/app.py` plus the `cron` sub-app
 attached at `:65`. Nothing here is a server — DuckDB is embedded
 (`packages/atif-duck/pyproject.toml:20`), as are the SQLite analytics state file and the LanceDB
-vector store. Three commands, `analyze` / `embed` / `search`, call Amazon Bedrock and spend money
+vector store. The commands `analyze` / `embed` / `search` call Amazon Bedrock and spend money
 per invocation, and each is dry-run by default (`README.md:37`).
 
 ## How the pieces fit
 
-The seven directories under `packages/` are internal module boundaries, not seven installs
+The directories under `packages/` are internal module boundaries, not separate installs
 (`README.md:43`); they are uv workspace members (`pyproject.toml:100`). `atif-converter` owns the
-conversion itself: two converters ported from Harbor 0.22.0 under Apache-2.0
+conversion itself: its converters ported from Harbor 0.22.0 under Apache-2.0
 (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py`,
 `packages/atif-converter/src/atif_converter/domain/codex_conversion.py`), built on Harbor's public
 ATIF data classes and validator, which is all the pinned `harbor>=0.22.0,<1`
 (`packages/atif-converter/pyproject.toml:26`) is for. Harbor's private converters survive only as the
 parity oracle in the converter's tests (`packages/atif-converter/tests/harbor_oracle.py:94`). It also
 owns the fidelity policy as types: `FidelityGap` enumerates the
-seven known upstream conversion gaps
-(`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`, 137 LOC), and `CodexFidelityGap`
-enumerates the seven that are Codex's
+known upstream conversion gaps
+(`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`), and `CodexFidelityGap`
+enumerates the ones that are Codex's
 (`packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:64`). `atif-corpus`
 drives materialization, writing per-session artifacts plus a corpus watermark
 (`docs/CONTRACT.md:21`). Its `ConverterPort` Protocol lets an implementation raise anything: the
@@ -63,8 +63,8 @@ owner of model ids, so no other package hardcodes one (`packages/atif-models/pyp
 The direction of those edges is enforced rather than conventional. `[tool.importlinter]`
 (`pyproject.toml:462`) declares a layer contract per member, an independence contract forbidding
 converter / corpus / duck / models / embed from importing each other (`:417`), and a forbidden
-contract limiting `atif-analytics` to `atif-models` alone among the seven (`:422`). `atif-cli` is
-the sole composition root, and it imports its five siblings lazily inside command bodies
+contract limiting `atif-analytics` to `atif-models` alone among the members (`:422`). `atif-cli` is
+the sole composition root, and it imports its siblings lazily inside command bodies
 (`packages/atif-cli/src/atif_cli/app.py:388`, `:583`, `:688`) so that `atif-sql schema` pays for
 none of the analytics or vector stack. Failures surface as typed exceptions mapped to stable
 process exit codes at the CLI edge (`:38`).
@@ -88,13 +88,13 @@ process exit codes at the CLI edge (`:38`).
 | Lint and format | ruff, `select = ["ALL"]` | `pyproject.toml:146` |
 | Architecture gate | import-linter contracts | `pyproject.toml:462` |
 | Tests | pytest, `testpaths = ["packages/*/tests"]` | `pyproject.toml:389` |
-| Definition of done | `mise run check`, nine gates | `mise.toml:197` |
+| Definition of done | `mise run check` | `mise.toml:197` |
 
 ## Module map
 
-Nodes are the seven uv workspace members. Every edge is an import confirmed at an import site.
+Nodes are the uv workspace members. Every edge is an import confirmed at an import site.
 There is no `atif-corpus` to `atif-converter` edge — the independence contract forbids it, and
-`RealConverter` in `packages/atif-cli/src/atif_cli/converter_adapter.py:44` (72 LOC) satisfies
+`RealConverter` in `packages/atif-cli/src/atif_cli/converter_adapter.py:44` satisfies
 `ConverterPort` by importing both from the composition root (`:36`, `:38`). `atif-duck`,
 `atif-analytics`, and `atif-embed` exchange data through corpus files on disk, never through an
 import.
@@ -119,8 +119,8 @@ flowchart LR
 
 ## See also
 
-- [contract map](../insights/contract-map.md) — 11 shared source citations
-- [dependency graph](../diagrams/structural/dependency-graph.md) — 10 shared source citations
-- [impact analysis](../insights/impact-analysis.md) — 10 shared source citations
-- [module map](module-map.md) — 9 shared source citations
-- [processes](../behavior/processes.md) — 8 shared source citations
+- [contract map](../insights/contract-map.md)
+- [dependency graph](../diagrams/structural/dependency-graph.md)
+- [impact analysis](../insights/impact-analysis.md)
+- [module map](module-map.md)
+- [processes](../behavior/processes.md)

@@ -42,7 +42,7 @@ Sources, in dispatch order:
   seam at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`; harbor
   supplies only the data classes and the validator (`:68`).
 - corpus artifacts — path arithmetic in
-  `packages/atif-corpus/src/atif_corpus/domain/layout.py:26`; the four artifacts written and the
+  `packages/atif-corpus/src/atif_corpus/domain/layout.py:26`; the artifacts written and the
   directory swapped at `packages/atif-corpus/src/atif_corpus/application/materialize.py:222-240`
   through `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:64` and `:98`.
 
@@ -149,8 +149,8 @@ Sources, in dispatch order:
 
 ## See also
 
-- [processes](../../behavior/processes.md) — 26 shared source citations
-- [debugging guide](../../insights/debugging-guide.md) — 18 shared source citations
-- [module map](../../architecture/module-map.md) — 17 shared source citations
-- [business logic](../../insights/business-logic.md) — 17 shared source citations
-- [data flow](../../architecture/data-flow.md) — 16 shared source citations
+- [processes](../../behavior/processes.md)
+- [debugging guide](../../insights/debugging-guide.md)
+- [module map](../../architecture/module-map.md)
+- [business logic](../../insights/business-logic.md)
+- [data flow](../../architecture/data-flow.md)

@@ -58,10 +58,10 @@ classDiagram
 
 ### Classes
 
-Each node is one uv workspace member, the unit the seven import-linter contracts
+Each node is one uv workspace member, the unit the import-linter contracts
 at `pyproject.toml:462-523` constrain. Every use case and registration entry point
 is a module-level function, so the `+` entries are functions rather than methods.
-`AtifCliApp`'s five entries each carry an `@app.command` decorator on the line
+`AtifCliApp`'s entries each carry an `@app.command` decorator on the line
 above; `app` is the `cyclopts.App` at `packages/atif-cli/src/atif_cli/app.py:52`
 and `main` at `packages/atif-cli/src/atif_cli/app.py:1125` is the `atif-sql`
 console script declared at `packages/atif-cli/pyproject.toml:42`.
@@ -114,13 +114,13 @@ of `duckdb`, `harbor`, `lancedb`, `boto3`, or `polars` —
 `_FORBIDDEN_EAGER_IMPORTS` at `packages/atif-cli/tests/test_lean_import.py:17-31`
 — and `packages/atif-cli/src/atif_cli/app.py:22-25` records that as the reason the
 heavy imports sit in the command bodies. A line-anchored grep for `^from atif_`
-therefore finds none of these six edges.
+therefore finds none of these edges.
 
-Five edges originate at `AtifCliApp`, which
+Most edges originate at `AtifCliApp`, which
 `packages/atif-cli/src/atif_cli/app.py:3-7` names the workspace's composition
-root. Those five are the whole of its outbound surface: an unanchored grep for
+root. Those edges are the whole of its outbound surface: an unanchored grep for
 `from atif_(converter|corpus|duck|models|embed|analytics)` across
-`packages/atif-cli/src` returns 26 hits spanning exactly those five members, and
+`packages/atif-cli/src` returns hits spanning exactly those members, and
 **atif-cli never imports atif-models**.
 
 | Edge | Verb | Import site | Call site |
@@ -136,9 +136,9 @@ root. Those five are the whole of its outbound surface: an unanchored grep for
 
 `pyproject.toml:514-517` declares an `independence` contract over
 `atif_converter`, `atif_corpus`, `atif_duck`, `atif_models`, and `atif_embed`, so
-no edge may connect any two of those five. `pyproject.toml:519-523` declares a
+no edge may connect any two of them. `pyproject.toml:519-523` declares a
 `forbidden` contract admitting exactly one analytics edge — to `atif_models`. Both
-are checked by `lint:imports`, the fifth of the nine gates `mise run check`
+are checked by `lint:imports`, one of the gates `mise run check`
 depends on (`mise.toml:204`, in the list at `mise.toml:199-211`).
 
 A Protocol declared in one member and implemented in another is **not** an edge
@@ -162,8 +162,8 @@ atif-models", which grants reach that atif-cli does not take.
 
 ## See also
 
-- [module map](../../architecture/module-map.md) — 23 shared source citations
-- [processes](../../behavior/processes.md) — 23 shared source citations
-- [impact analysis](../../insights/impact-analysis.md) — 23 shared source citations
-- [contract map](../../insights/contract-map.md) — 20 shared source citations
-- [business logic](../../insights/business-logic.md) — 18 shared source citations
+- [module map](../../architecture/module-map.md)
+- [processes](../../behavior/processes.md)
+- [impact analysis](../../insights/impact-analysis.md)
+- [contract map](../../insights/contract-map.md)
+- [business logic](../../insights/business-logic.md)

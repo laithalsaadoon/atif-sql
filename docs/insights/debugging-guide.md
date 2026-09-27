@@ -2,13 +2,13 @@
 
 Something is broken. Where do you look first?
 
-atif-sql is a CLI plus six libraries with no server, no job queue, and no
-observability platform. That narrows the search surface to four places, and
+atif-sql is a CLI plus its libraries with no server, no job queue, and no
+observability platform. That narrows the search surface to a few places, and
 this guide is organized around them:
 
-1. **The process exit code.** `EXIT_CODES` is one dict of 11 keys
+1. **The process exit code.** `EXIT_CODES` is one dict
    (`packages/atif-cli/src/atif_cli/errors.py:25-39`) and it is the primary
-   diagnostic. Nine of the eleven are reachable.
+   diagnostic. Not every key is reachable.
 2. **The classified error envelope on stderr** — one readable line on a TTY,
    one JSON object on a pipe (`packages/atif-cli/src/atif_cli/output.py:274-281`).
 3. **The loguru sink.** Exactly one, added in `main()`, stderr, WARNING and up
@@ -59,7 +59,7 @@ On a pipe the envelope is the last line on stderr, in this shape:
 | `search` exits 2, kind `no_embeddings` | The store is empty or absent, so `register_vss` bound an empty fallback table | `atif-sql query 'SELECT count(*) FROM message_embeddings'`; zero rows confirms it | `packages/atif-cli/src/atif_cli/app.py:930-941`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:896-914` |
 | A bare `atif-sql embed` exits 64 | The scope guard, which runs before any Bedrock client is built | Pass `--limit N`, `--all`, or `--dry-run`; this is the accidental-full-backfill guard, not a fault | `packages/atif-cli/src/atif_cli/app.py:810-820` |
 | `embed` exits 78 and the cron lane stops trying | A `DomainError` with `terminal = True` — the store or its config needs an operator | Read the terminal marker file the refresh lane drops: three lines, store path, mtime, reason | `packages/atif-embed/src/atif_embed/domain/errors.py:14-26`, `scripts/atif-sql-refresh.sh:244-249` |
-| A session directory exists under `sessions/` but no view returns its rows | Torn artifact set: the dir has no `meta.json`, so the meta gate excludes it from every reader | Grep the WARNING; the complete set is four files, and `meta.json` is written last | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:173-177`, `docs/CONTRACT.md:22-31` |
+| A session directory exists under `sessions/` but no view returns its rows | Torn artifact set: the dir has no `meta.json`, so the meta gate excludes it from every reader | Grep the WARNING; `meta.json` is written last and completes the set | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:173-177`, `docs/CONTRACT.md:22-31` |
 | `atif-sql status` and `SELECT count(*) FROM sessions` disagree | `status` counts directories with no meta check; the view applies the meta gate | The difference is exactly the number of incomplete dirs — use it as the torn-set count | `packages/atif-cli/src/atif_cli/app.py:482-486`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:221` |
 | `materialize` prints all zeroes and reads as an idle, complete corpus | Every session was unreadable; an unreadable session lands in no other counter | Read the `unreadable` field, not just `materialized` | `packages/atif-cli/src/atif_cli/app.py:312-346`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:136-142` |
 | `materialize` aborts with a traceback naming `SuspiciousEmptyScanError`, exit 1 | The scan found zero sessions over a non-empty corpus — almost always a wrong `source_root` | Compare the `source_root` line in `atif-sql status` against where the transcripts actually are | `packages/atif-corpus/src/atif_corpus/application/materialize.py:97-104`, raise at `packages/atif-corpus/src/atif_corpus/application/materialize.py:553-559` |
@@ -69,7 +69,7 @@ On a pipe the envelope is the last line on stderr, in this shape:
 | Every session fails conversion at once, on the same `ConversionError` | The converter is a port of harbor 0.22.0's, so a systematic failure is a bug in the port or a transcript shape it never saw | Run the parity oracle: `ATIF_PARITY_LIMIT=0 uv run pytest packages/atif-converter/tests/test_parity_live.py`, and read the diff paths | `packages/atif-converter/tests/harbor_oracle.py:142` |
 | One session fails with `N source file(s) changed while converting …` | The session is still being written; the snapshot re-check refused to publish inconsistent artifacts | Retry once the session goes quiet — this is self-clearing | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:93-102`, `packages/atif-converter/src/atif_converter/domain/errors.py:57-70` |
 | `convert` prints a trajectory and then exits 65 | The enriched trajectory failed harbor's `TrajectoryValidator` | Read `validation_errors` in the JSON it already printed | `packages/atif-cli/src/atif_cli/app.py:283-304`, `packages/atif-cli/src/atif_cli/converter_adapter.py:62-64` |
-| `loss_report.json` shows `records_dropped > 0` | Fidelity gap 2: harbor 0.22.0 converts only user and assistant records | Check `gaps_observed` against the seven named gaps — these are documented losses, not defects | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79` |
+| `loss_report.json` shows `records_dropped > 0` | Fidelity gap 2: harbor 0.22.0 converts only user and assistant records | Check `gaps_observed` against the named gaps — these are documented losses, not defects | `packages/atif-converter/src/atif_converter/domain/fidelity.py:44-79` |
 | `analyze` summary carries `budget_exhausted: true` and a stage `{"skipped": "budget_exhausted"}` | The dollar ceiling was crossed against running actual usage | Read `llm_spent_usd` in the same summary; raise `--max-cost-usd` or wait for the next run | `packages/atif-analytics/src/atif_analytics/application/analyze.py:164-179`, `packages/atif-analytics/src/atif_analytics/application/analyze.py:202-204` |
 | An LLM stage skips the same sessions every run, forever | The retry queue is exhausted at 5 attempts; `attempts >= 5` with `completed_at IS NULL` is permanent and nothing resets it | `sqlite3 <corpus_root>/analytics/state.db 'SELECT * FROM retry_queue'` — note the pipeline is `user_friction`, never `friction` | `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:176-193`, `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:35-41` |
 | An LLM run stalls for minutes with no output | Bedrock throttling under tenacity: 10 attempts, exponential 2 s to 60 s | The per-backoff WARNING names the attempt number and the sleep | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:251-257`, `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:112-121` |
@@ -91,7 +91,7 @@ shell-side refresh log.
 | The one loguru sink | stderr, WARNING and above; `logger.remove()` deletes loguru's default handler first | `WARNING` / `ERROR`; nothing at INFO or DEBUG is emitted at all | `packages/atif-cli/src/atif_cli/app.py:1125-1135` |
 | Classified error envelope, pipe form | stderr, one JSON object | `"error"`, `"kind"`, `"hint"` | `packages/atif-cli/src/atif_cli/errors.py:60-68` |
 | Classified error, TTY form | stderr, one line plus an optional hint line | `[<kind>]` at line start, then `hint:` | `packages/atif-cli/src/atif_cli/output.py:274-281` |
-| Process exit code | the shell | the nine reachable `EXIT_CODES` values | `packages/atif-cli/src/atif_cli/errors.py:25-39` |
+| Process exit code | the shell | the reachable `EXIT_CODES` values | `packages/atif-cli/src/atif_cli/errors.py:25-39` |
 | Per-session materialize failures | stderr, table format only | `FAILED <session_id>:` and `UNREADABLE <session_id>` | `packages/atif-cli/src/atif_cli/app.py:343-346` |
 | Materialize report | stdout, JSON on a pipe | `unreadable`, `failures`, `removed_session_ids` | `packages/atif-cli/src/atif_cli/app.py:320-332` |
 | Corpus freshness | `atif-sql status` stdout | `watermark_age_seconds`, `staleness`, `source_root` | `packages/atif-cli/src/atif_cli/app.py:508-520` |
@@ -107,14 +107,14 @@ shell-side refresh log.
 | Terminally failed embed batch | stderr ERROR | `failed terminally`, `the next run re-picks these rows` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:377-384` |
 | Clipped embedding input | stderr WARNING | `Clipping text at position`, `content past the cap will not match a search` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:332-338` |
 | Refresh-script log | a file appended under the script's `.run/` sibling, one `date -Is`-stamped line per event; the directory is gitignored, so the path is named in prose only | `refresh complete (mode=`, `skip[`, `TERMINAL:`, `FATAL:` | `scripts/atif-sql-refresh.sh:100-103`, `scripts/atif-sql-refresh.sh:337` |
-| Refresh log, machine-read subset | `atif-sql cron status` stdout | only two line shapes are parsed: completion and skip | `packages/atif-cli/src/atif_cli/cron.py:55-56` |
+| Refresh log, machine-read subset | `atif-sql cron status` stdout | only the completion and skip line shapes are parsed | `packages/atif-cli/src/atif_cli/cron.py:55-56` |
 | Lane lock state | `atif-sql cron status`, from a nonblocking flock probe plus the pidfile | `RUNNING (pid …)` versus `idle` | `packages/atif-cli/src/atif_cli/cron.py:109-124`, `packages/atif-cli/src/atif_cli/cron.py:127-144` |
 | Embed terminal marker | one file per corpus beside the refresh log; three lines — store path, store mtime, reason | the reason string, parsed out of the exit-78 envelope | `scripts/atif-sql-refresh.sh:238-249` |
 | Analytics durable state | `<corpus_root>/analytics/state.db`, sqlite in WAL mode, no read command | `retry_queue`, `budget_skips`, `session_checkpoint` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:81-83`, `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:43-62` |
 | Analyze summary | stdout JSON | `budget_exhausted`, `llm_spent_usd`, `consecutive_skips` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:121`, `packages/atif-analytics/src/atif_analytics/application/analyze.py:144-146` |
 | Per-session loss accounting | `loss_report.json` inside each corpus session dir | `gaps_observed`, `records_dropped`, `records_total` | `packages/atif-converter/src/atif_converter/domain/fidelity.py:114-137` |
 
-Two properties of this surface change how you read it.
+These properties of this surface change how you read it.
 
 **Everything below WARNING is unreachable through the CLI.** `main()` hardcodes
 the level and there is no `--verbose`, no `--log-level`, and no `LOGURU_LEVEL`
@@ -198,8 +198,8 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
 ## Known incident patterns
 
 - **`EmbeddingStoreSchemaStale` and the silent retry storm:** a store state no
-  retry can clear once retried 400+ times across 3 days of 10-minute ticks with
-  zero escalation, because every failure exited alike. Signal: an embed failing
+  retry can clear once retried on every 10-minute tick for days with
+  no escalation, because every failure exited alike. Signal: an embed failing
   identically every tick with no operator ever paged. Mitigation: the terminal
   flag on the error, exit 78 as its own code, and a marker keyed on the store
   path plus its mtime that suppresses retries until an operator touch changes
@@ -207,7 +207,7 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   `scripts/atif-sql-refresh.sh:187-194`
 - **Destroy-and-rebuild on a missing column:** raising a rebuild-demanding
   error for a store that merely predates the `text_hash` stamp rebuilt both
-  production corpora, roughly 3.4M vectors of Cohere spend. Signal: a full
+  production corpora at the cost of a full Cohere re-embed. Signal: a full
   re-embed triggered by a schema read rather than by a provider change.
   Mitigation: additive drift now migrates online via `Table.add_columns` and a
   sentinel that re-embeds incrementally through the ordinary staleness path,
@@ -270,7 +270,7 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   `AWS_DEFAULT_PROFILE`, and authenticates from a run-time-read bearer token or
   the default credential chain.
   `scripts/atif-sql-refresh.sh:91-96`, `scripts/atif-sql-refresh.sh:116-128`
-- **The seven `FidelityGap` members:** these are documented, verified upstream
+- **The `FidelityGap` members:** these are documented, verified upstream
   losses, not defects — workflow-nested subagents missed by harbor's own
   discovery, non-message records dropped, the parent chain flattened by
   timestamp sort, subagents inlined rather than embedded, compaction summaries
@@ -313,8 +313,8 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
 
 ## See also
 
-- [processes](../behavior/processes.md) — 29 shared source citations
-- [module map](../architecture/module-map.md) — 24 shared source citations
-- [business logic](business-logic.md) — 22 shared source citations
-- [impact analysis](impact-analysis.md) — 21 shared source citations
-- [contract map](contract-map.md) — 20 shared source citations
+- [processes](../behavior/processes.md)
+- [module map](../architecture/module-map.md)
+- [business logic](business-logic.md)
+- [impact analysis](impact-analysis.md)
+- [contract map](contract-map.md)
