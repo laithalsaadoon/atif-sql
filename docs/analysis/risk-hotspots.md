@@ -12,12 +12,12 @@ at `pyproject.toml:535`. Combined line-and-branch coverage is measured against t
 file's share of the remaining uncovered units on the same scale as one located defect.
 
 Churn is rejected as a signal. The log sits under a single bot
-identity, `bgagent`, with no human authors, so commit frequency measures authoring order rather
+identity with no human authors, so commit frequency measures authoring order rather
 than defect density and ranking by it would produce confident noise. The `Trend` column below still
 runs the mechanical 30-day slope rule — `↑ rising` is anything more than one standard deviation
 above the median commit count — but it contributes zero weight to the score, and
 `↓ falling` is unreachable because every file in the repo has more than one commit. `Top owner` is
-likewise `bgagent` on every row and carries no bus-factor information. Further limits: the
+likewise the bot identity on every row and carries no bus-factor information. Further limits: the
 scanner tier yields no `error`-severity findings workspace-wide, so `E` never discriminates, and
 `packages/atif-embed/src/atif_embed/domain/ports.py` is excluded from the ranking despite reading
 as uncovered, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
@@ -31,18 +31,18 @@ describes code that's gone. The ranking hasn't been re-measured.
 
 | File | Trend | Open findings | Top owner | Citation |
 | --- | --- | --- | --- | --- |
-| `atif_duck.infrastructure.registry` | ↑ rising | warn only | bgagent | `packages/atif-duck/src/atif_duck/infrastructure/registry.py` |
-| `atif_analytics.infrastructure.parquet_cache` | → flat | none | bgagent | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py` |
-| `atif_cli.app` | ↑ rising | warn only | bgagent | `packages/atif-cli/src/atif_cli/app.py` |
-| `atif_converter.domain.enrichment` | ↑ rising | none | bgagent | `packages/atif-converter/src/atif_converter/domain/enrichment.py` |
-| `atif_analytics.application.use_cases.friction` | ↑ rising | none | bgagent | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py` |
-| `atif_analytics.application.use_cases.trajectory` | ↑ rising | none | bgagent | `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py` |
-| `atif_analytics.application.use_cases.community` | → flat | none | bgagent | `packages/atif-analytics/src/atif_analytics/application/use_cases/community.py` |
-| `atif_analytics.application.use_cases.cluster` | → flat | none | bgagent | `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py` |
-| `atif_analytics.infrastructure.corpus_reader` | → flat | none | bgagent | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py` |
-| `atif_duck.domain.examples` | → flat | warn only | bgagent | `packages/atif-duck/src/atif_duck/domain/examples.py` |
-| `atif_analytics.application.analyze` | ↑ rising | none | bgagent | `packages/atif-analytics/src/atif_analytics/application/analyze.py` |
-| `atif_cli.output` | → flat | none | bgagent | `packages/atif-cli/src/atif_cli/output.py` |
+| `atif_duck.infrastructure.registry` | ↑ rising | warn only | bot | `packages/atif-duck/src/atif_duck/infrastructure/registry.py` |
+| `atif_analytics.infrastructure.parquet_cache` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py` |
+| `atif_cli.app` | ↑ rising | warn only | bot | `packages/atif-cli/src/atif_cli/app.py` |
+| `atif_converter.domain.enrichment` | ↑ rising | none | bot | `packages/atif-converter/src/atif_converter/domain/enrichment.py` |
+| `atif_analytics.application.use_cases.friction` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py` |
+| `atif_analytics.application.use_cases.trajectory` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py` |
+| `atif_analytics.application.use_cases.community` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/community.py` |
+| `atif_analytics.application.use_cases.cluster` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py` |
+| `atif_analytics.infrastructure.corpus_reader` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py` |
+| `atif_duck.domain.examples` | → flat | warn only | bot | `packages/atif-duck/src/atif_duck/domain/examples.py` |
+| `atif_analytics.application.analyze` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/analyze.py` |
+| `atif_cli.output` | → flat | none | bot | `packages/atif-cli/src/atif_cli/output.py` |
 
 The open findings are `B608` hardcoded-SQL sites plus a build-configuration finding against
 `[tool.uv]` at `pyproject.toml:102`, which asks for an `exclude-newer` dependency cooldown. All of them
@@ -68,7 +68,7 @@ failure (`:31-32`, `:816-819`, `:1217-1220`).
 mechanical rule — which here means the file was written and rewritten during the short authoring
 run, not that it is destabilizing.
 
-**Owners.** `bgagent` at 100% — every commit touching the path, merges included —
+**Owners.** The bot identity at 100% — every commit touching the path, merges included —
 a bot identity.
 
 **Findings.** Most of the workspace's `B608` sites live here, each carrying a per-line
@@ -97,7 +97,7 @@ or unreadable stats (`:116-156`), which is the safe direction.
 signals alone with no help from churn, which is the clearest demonstration that the two are
 independent here.
 
-**Owners.** `bgagent` at 100% — every commit touching the path — a bot identity.
+**Owners.** The bot identity at 100% — every commit touching the path — a bot identity.
 
 **Findings.** No scanner findings, and several of the workspace's unguarded IO windows, all in the
 same file. `write_part`'s sharded branch drops `part-<time_ns>.parquet` straight into the live
@@ -125,7 +125,7 @@ property pinned by a fresh-interpreter test rather than by a lint (`:22-26`).
 **Recent activity.** The most commits of any file in the repo, so `↑ rising` — expected of a
 composition root that gains a wiring line whenever any member changes.
 
-**Owners.** `bgagent` at 100% — every commit touching the path, merges included —
+**Owners.** The bot identity at 100% — every commit touching the path, merges included —
 a bot identity.
 
 **Findings.** A `B608` at the `search` kNN query, whose `# noqa` records that `dim` is
@@ -151,7 +151,7 @@ lands in extra and there is nothing to join on (`:15-20`).
 
 **Recent activity.** Commits well above the median, so `↑ rising`.
 
-**Owners.** `bgagent` at 100% — every commit touching the path — a bot identity.
+**Owners.** The bot identity at 100% — every commit touching the path — a bot identity.
 
 **Findings.** No scanner findings, no IO windows — this is a pure function — and both
 complexity ratchets in the workspace that a single function sets: `max-branches = 39` and
@@ -175,7 +175,7 @@ views bind to those literal values, so the vocabulary is a fixed contract (`:29-
 
 **Recent activity.** Commits well above the median, so `↑ rising`.
 
-**Owners.** `bgagent` at 100% — every commit touching the path — a bot identity.
+**Owners.** The bot identity at 100% — every commit touching the path — a bot identity.
 
 **Findings.** No scanner findings, and the `max-statements = 119` ratchet, set at `_friction_async`
 (`pyproject.toml:269`, `:183`; the function at
