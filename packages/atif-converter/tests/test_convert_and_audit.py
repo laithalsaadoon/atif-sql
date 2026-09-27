@@ -158,10 +158,23 @@ class TestLossReport:
         _, report = converted
         assert {
             FidelityGap.PARENT_CHAIN_FLATTENED,
-            FidelityGap.CACHE_SPLIT_PARTIAL,
-            FidelityGap.UUID_NOT_PRESERVED,
             FidelityGap.SUBAGENTS_INLINED,
         } <= report.gaps_observed
+
+    def test_gaps_enrichment_repaired_are_not_reported(self, converted: Converted) -> None:
+        """Every step attributed and cache_creation_total surfaced: the three repairable gaps stay out."""
+        result, report = converted
+        extra = result.trajectory.get("extra") or {}
+        assert "enrichment_unattributed_steps" not in extra
+        assert "cache_creation_total" in extra
+        assert (
+            not {
+                FidelityGap.CACHE_SPLIT_PARTIAL,
+                FidelityGap.UUID_NOT_PRESERVED,
+                FidelityGap.COMPACT_SUMMARY_UNHANDLED,
+            }
+            & report.gaps_observed
+        )
 
     def test_workflow_records_now_reach_the_trajectory(self, converted: Converted) -> None:
         """With our own side-file discovery the workflow file's user record becomes a

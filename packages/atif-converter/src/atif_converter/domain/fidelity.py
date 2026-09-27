@@ -42,6 +42,9 @@ class RecordType(Enum):
     PR_LINK = "pr-link"
     STARTED = "started"
     RESULT = "result"
+    #: Claude Code's running session cost (``totalCostUSD`` + per-model usage).
+    COST_STATE = "cost-state"
+    PERMISSION_MODE = "permission-mode"
     OTHER = "other"
 
 
@@ -67,6 +70,10 @@ class FidelityGap(Enum):
 
     #: (2) Only user/assistant events are converted; system / attachment /
     #: queue-operation / mode / last-prompt / summary records are silently dropped.
+    #: The ones :mod:`atif_converter.domain.session_events` keeps (hooks, injected
+    #: context, API errors, compaction boundaries, cost-state, mode changes) land
+    #: in ``session_events.jsonl`` and count as ``records_captured``; the gap is
+    #: observed only when something is left over after that.
     NON_MESSAGE_RECORDS_DROPPED = "non_message_records_dropped"
 
     #: (3) The parentUuid tree is flattened by timestamp sort, not chain-walked,
@@ -108,7 +115,8 @@ class LossReport:
     """Per-session loss accounting: raw-side census vs converted output.
 
     ``record_counts`` is the raw census by :class:`RecordType`;
-    ``records_converted`` / ``records_dropped`` partition the total;
+    ``records_converted`` (became steps), ``records_captured`` (became
+    ``session_events`` rows) and ``records_dropped`` partition the total;
     ``gaps_observed`` names which :class:`FidelityGap` members this session
     actually exhibits (a session with no subagents cannot observe gap 1 or 4).
 
@@ -125,6 +133,7 @@ class LossReport:
     record_counts: dict[AnyRecordType, int] = field(default_factory=dict)
     records_converted: int = 0
     records_dropped: int = 0
+    records_captured: int = 0
     gaps_observed: frozenset[AnyFidelityGap] = frozenset()
     subagent_files_found: int = 0
     subagent_files_convertible: int = 0
@@ -153,6 +162,7 @@ class LossReport:
             },
             "records_total": self.records_total,
             "records_converted": self.records_converted,
+            "records_captured": self.records_captured,
             "records_dropped": self.records_dropped,
             "gaps_observed": sorted(gap.value for gap in self.gaps_observed),
             "subagent_files_found": self.subagent_files_found,

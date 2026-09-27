@@ -20,12 +20,18 @@ bump if output can change, then re-pin the digest either way.
 History:
 
 * 1 — every converter before this constant existed (implicit).
+* 2 — ``session_events.jsonl`` (hooks, injected context, API errors,
+  compaction boundaries, cost-state, mode changes); ``records_captured`` in
+  ``loss_report.json`` and the structural gaps reported only when enrichment
+  didn't repair them; an unpriced model yields ``total_cost_usd`` NULL instead
+  of $0; ``final_metrics.extra.reported_cost_usd`` from Claude Code's
+  ``cost-state``; local price overrides for claude-opus-5-5 / claude-fable-5-1.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 1
+CONVERTER_SCHEMA_VERSION: Final = 2
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

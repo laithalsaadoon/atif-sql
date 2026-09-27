@@ -168,6 +168,28 @@ RESULT_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: ``session_events`` columns after ``session_id``, over an ``ev`` JSON column
+#: holding one whole ``session_events.jsonl`` line. The registry's JSON path
+#: reads the lines with ``read_json_objects`` and the producer hands each line
+#: in as text, so both spell every column through these same expressions.
+#: ``payload`` is the bounded record body (a parsed JSON value); ``ts`` is NULL
+#: for the record types that carry no timestamp (``cost-state``, ``mode``).
+EVENT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("json_extract(ev, '$.seq')::BIGINT", "seq"),
+    ("json_extract_string(ev, '$.ts')::TIMESTAMP", "ts"),
+    ("json_extract_string(ev, '$.event_type')", "event_type"),
+    ("json_extract_string(ev, '$.subtype')", "subtype"),
+    ("json_extract_string(ev, '$.uuid')", "uuid"),
+    ("json_extract_string(ev, '$.parent_uuid')", "parent_uuid"),
+    ("json_extract_string(ev, '$.tool_use_id')", "tool_use_id"),
+    ("coalesce(json_extract(ev, '$.is_sidechain')::BOOLEAN, false)", "is_sidechain"),
+    ("json_extract_string(ev, '$.source_file')", "source_file"),
+    ("json_extract(ev, '$.payload')", "payload"),
+    ("json_extract(ev, '$.payload_bytes')::BIGINT", "payload_bytes"),
+    ("coalesce(json_extract(ev, '$.payload_truncated')::BOOLEAN, false)", "payload_truncated"),
+)
+
+
 def render(columns: tuple[tuple[str, str], ...]) -> SqlFragment:
     """Join ``(expression, alias)`` pairs into a SELECT list body."""
     return SqlFragment(",\n    ".join(f"{expression} AS {alias}" for expression, alias in columns))
@@ -175,6 +197,7 @@ def render(columns: tuple[tuple[str, str], ...]) -> SqlFragment:
 
 __all__ = [
     "CALL_COLUMNS",
+    "EVENT_COLUMNS",
     "MEMBER_COLUMNS",
     "RESULT_COLUMNS",
     "STEP_MEMBERS",

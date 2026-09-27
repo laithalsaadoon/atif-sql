@@ -18,6 +18,8 @@ from pathlib import Path
 TRAJECTORY_FILENAME = "trajectory.json"
 LOSS_REPORT_FILENAME = "loss_report.json"
 EDGES_FILENAME = "edges.jsonl"
+#: One line per kept non-message record (hooks, API errors, cost-state, ...).
+SESSION_EVENTS_FILENAME = "session_events.jsonl"
 META_FILENAME = "meta.json"
 WATERMARK_FILENAME = "watermark.json"
 #: Corpus-level record of sessions whose source converted to nothing.
@@ -84,6 +86,10 @@ class CorpusLayout:
     def edges_path(self, session_id: str) -> Path:
         """One line per RAW record: uuid/parent_uuid edge list."""
         return self.session_dir(session_id) / EDGES_FILENAME
+
+    def session_events_path(self, session_id: str) -> Path:
+        """One line per kept non-message record: hooks, errors, cost-state, modes."""
+        return self.session_dir(session_id) / SESSION_EVENTS_FILENAME
 
     def meta_path(self, session_id: str) -> Path:
         """Provenance record: source files, mtimes, versions, materialized_at."""

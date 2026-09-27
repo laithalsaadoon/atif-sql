@@ -20,6 +20,7 @@ from cli_fixtures import write_synthetic_session
 from atif_cli.app import _print_report, materialize, query, status
 from atif_cli.errors import EXIT_CODES
 from atif_cli.output import OutputFormat
+from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION
 
 SESSION_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 SESSION_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -102,12 +103,13 @@ class TestMaterializeWritesColumnar:
                 "steps.parquet",
                 "tool_calls.parquet",
                 "tool_results.parquet",
+                "session_events.parquet",
             ):
                 path = session_dir / name
                 assert path.is_file(), path
                 assert stat.S_IMODE(path.stat().st_mode) == 0o444
             meta = json.loads((session_dir / "meta.json").read_text())
-            assert meta["columnar_schema"] == 1
+            assert meta["columnar_schema"] == COLUMNAR_SCHEMA_VERSION
 
         st = _status(source_root, corpus, capsys)
         assert st["query_path"] == "columnar"
@@ -128,6 +130,7 @@ class TestMaterializeWritesColumnar:
             "edges.jsonl",
             "loss_report.json",
             "meta.json",
+            "session_events.jsonl",
             "source",
             "trajectory.json",
         ]

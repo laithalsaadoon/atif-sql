@@ -348,6 +348,58 @@ def test_loss_reports_per_session(con: duckdb.DuckDBPyConnection) -> None:
     assert gaps[0] == "parent_chain_flattened"
 
 
+def test_loss_reports_carry_records_captured_or_null(con: duckdb.DuckDBPyConnection) -> None:
+    """A report written before records_captured existed reads NULL, not 0."""
+    rows = con.execute(
+        "SELECT session_id, records_captured FROM loss_reports ORDER BY session_id"
+    ).fetchall()
+    assert rows == [(SESSION_IDS[0], None), (SESSION_IDS[1], None)]
+
+
+# ---------------------------------------------------------------------------
+# Functional coverage — session events and reported cost
+# ---------------------------------------------------------------------------
+
+
+def test_session_events_rows_in_seq_order(con: duckdb.DuckDBPyConnection) -> None:
+    rows = con.execute(
+        "SELECT session_id, seq, event_type, subtype, ts IS NULL, tool_use_id, "
+        "payload_truncated FROM session_events ORDER BY session_id, seq"
+    ).fetchall()
+    assert rows == [
+        (SESSION_IDS[0], 0, "attachment", "hook_success", False, "toolu_1", False),
+        (SESSION_IDS[0], 1, "system", "api_error", False, None, True),
+        (SESSION_IDS[0], 2, "cost-state", None, True, None, False),
+    ]
+
+
+def test_session_events_payload_is_parsed_json(con: duckdb.DuckDBPyConnection) -> None:
+    row = con.execute(
+        "SELECT json_extract_string(payload, '$.content'), payload_bytes "
+        "FROM session_events WHERE subtype = 'hook_success'"
+    ).fetchone()
+    assert row == ("ok — ünïcode", 72)
+
+
+def test_session_events_join_their_step_through_source_uuids(
+    con: duckdb.DuckDBPyConnection,
+) -> None:
+    rows = con.execute(
+        "SELECT e.subtype, s.step_id FROM session_events e "
+        "JOIN steps s ON s.session_id = e.session_id "
+        "AND list_contains(CAST(s.source_uuids AS VARCHAR[]), e.parent_uuid) "
+        "ORDER BY e.seq"
+    ).fetchall()
+    assert [subtype for subtype, _ in rows] == ["hook_success", "api_error"]
+
+
+def test_sessions_report_both_costs(con: duckdb.DuckDBPyConnection) -> None:
+    rows = con.execute(
+        "SELECT session_id, total_cost_usd, reported_cost_usd FROM sessions ORDER BY session_id"
+    ).fetchall()
+    assert rows == [(SESSION_IDS[0], 1.79, 0.4125), (SESSION_IDS[1], 0.0016, None)]
+
+
 # ---------------------------------------------------------------------------
 # Functional coverage — macros
 # ---------------------------------------------------------------------------
@@ -442,6 +494,9 @@ def test_cost_estimate_reports_unpriced_steps(corpus_root: Path) -> None:
 #: mispriced without any test noticing, and the fixture corpus's own model
 #: (claude-opus-4-6) sits in exactly that blind spot.
 _EXPECTED_PRICING: dict[str, tuple[float, float]] = {
+    # Both fetched 2026-09-27 from platform.claude.com/docs/en/models/<id>/overview.
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-fable-5": (10.0, 50.0),
     "claude-mythos-5": (10.0, 50.0),
     "claude-opus-5": (5.0, 25.0),

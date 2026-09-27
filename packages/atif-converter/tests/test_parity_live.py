@@ -28,9 +28,9 @@ from pathlib import Path
 
 import pytest
 from harbor_oracle import (
-    diff_paths,
     harbor_claude_code_trajectory,
     harbor_codex_trajectory,
+    parity_diffs,
     require_harbor_private_api,
 )
 
@@ -119,7 +119,7 @@ class TestLiveParity:
                         f"harbor={'None' if theirs is None else 'Trajectory'} ours={'None' if ours_dict is None else 'Trajectory'}"
                     ]
                 continue
-            diffs = diff_paths(theirs, ours_dict)
+            diffs = parity_diffs(theirs, ours_dict)
             if diffs:
                 divergences[session] = diffs
         assert not divergences, _report(divergences, len(sessions))
@@ -143,7 +143,7 @@ class TestLiveParity:
                         f"harbor={'None' if theirs is None else 'Trajectory'} ours={'None' if ours_dict is None else 'Trajectory'}"
                     ]
                 continue
-            diffs = diff_paths(theirs, ours_dict)
+            diffs = parity_diffs(theirs, ours_dict)
             if diffs:
                 divergences[rollout] = diffs
         assert not divergences, _report(divergences, len(rollouts))

@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from harbor_oracle import (
-    diff_paths,
     harbor_claude_code_trajectory,
     load_golden,
+    parity_diffs,
     require_harbor_private_api,
 )
 
@@ -30,12 +30,12 @@ class TestParityClaudeCode:
         ours = convert_claude_code_session(synthetic_session)
         assert theirs is not None
         assert ours is not None
-        assert diff_paths(theirs, ours.to_json_dict()) == []
+        assert parity_diffs(theirs, ours.to_json_dict()) == []
 
     def test_synthetic_matches_frozen_golden(self, synthetic_session: Path) -> None:
         ours = convert_claude_code_session(synthetic_session)
         assert ours is not None
-        assert diff_paths(load_golden("claude_code.synthetic"), ours.to_json_dict()) == []
+        assert parity_diffs(load_golden("claude_code.synthetic"), ours.to_json_dict()) == []
 
     def test_without_subagents_matches_live_oracle(self, synthetic_session: Path) -> None:
         require_harbor_private_api("claude-code")
@@ -43,7 +43,7 @@ class TestParityClaudeCode:
         ours = convert_claude_code_session(synthetic_session, include_subagents=False)
         assert theirs is not None
         assert ours is not None
-        assert diff_paths(theirs, ours.to_json_dict()) == []
+        assert parity_diffs(theirs, ours.to_json_dict()) == []
         # The flag has to change the answer, or the test above proves nothing.
         assert len(ours.steps) < len(load_golden("claude_code.synthetic")["steps"])
         assert all(step.extra is not None and not step.extra["is_sidechain"] for step in ours.steps)

@@ -43,6 +43,7 @@ VIEW_NAMES: tuple[str, ...] = (
     "skill_usage",
     "subagent_steps",
     "loss_reports",
+    "session_events",
     "message_embeddings",
 )
 
@@ -63,6 +64,7 @@ VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("step_count", "BIGINT"),
         ("model_name", "VARCHAR"),
         ("total_cost_usd", "DOUBLE"),
+        ("reported_cost_usd", "DOUBLE"),
         ("trajectory_path", "VARCHAR"),
     ),
     "steps": (
@@ -206,6 +208,7 @@ VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("session_id", "VARCHAR"),
         ("records_total", "BIGINT"),
         ("records_converted", "BIGINT"),
+        ("records_captured", "BIGINT"),
         ("records_dropped", "BIGINT"),
         ("gaps_observed", "JSON"),
         ("record_counts", "JSON"),
@@ -213,6 +216,21 @@ VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("subagent_files_convertible", "BIGINT"),
         ("workflow_subagent_files_found", "BIGINT"),
         ("report_path", "VARCHAR"),
+    ),
+    "session_events": (
+        ("session_id", "VARCHAR"),
+        ("seq", "BIGINT"),
+        ("ts", "TIMESTAMP"),
+        ("event_type", "VARCHAR"),
+        ("subtype", "VARCHAR"),
+        ("uuid", "VARCHAR"),
+        ("parent_uuid", "VARCHAR"),
+        ("tool_use_id", "VARCHAR"),
+        ("is_sidechain", "BOOLEAN"),
+        ("source_file", "VARCHAR"),
+        ("payload", "JSON"),
+        ("payload_bytes", "BIGINT"),
+        ("payload_truncated", "BOOLEAN"),
     ),
     # VSS surface bound by ``register_vss``: a view over the Lance-attached
     # embeddings table, or an empty fallback table with the same shape when
@@ -336,7 +354,10 @@ DESCRIPTIONS: dict[str, str] = {
     # -- core views ---------------------------------------------------------
     "sessions": (
         "One row per materialized session: which agent wrote it, timing, step "
-        "counts, model, total cost."
+        "counts, model, cost. total_cost_usd is our estimate from token counts "
+        "(NULL when any step's model has no price); reported_cost_usd is what "
+        "Claude Code itself recorded (its last cost-state record), NULL for Codex "
+        "and for sessions without one."
     ),
     "steps": "One row per ATIF step (turn): flattened message text plus token metrics.",
     "messages": "Raw-record identity from edges.jsonl: uuid, parent_uuid, type, timestamp.",
@@ -351,7 +372,21 @@ DESCRIPTIONS: dict[str, str] = {
     "skill_invocations": "Skill tool calls and /slash-command invocations, unioned.",
     "skill_usage": "skill_invocations plus derived skill_name, plugin, is_builtin.",
     "subagent_steps": "Only the inlined subagent (sidechain) steps.",
-    "loss_reports": "Per-session conversion loss accounting from atif-converter.",
+    "loss_reports": (
+        "Per-session conversion loss accounting from atif-converter: records "
+        "converted to steps, captured as session_events rows, or dropped."
+    ),
+    "session_events": (
+        "Non-message transcript records, one row each: hooks (event_type "
+        "'attachment', subtype 'hook_success' / 'hook_blocking_error' / ...; "
+        "'system' / 'stop_hook_summary'), injected context ('queued_command', "
+        "'hook_additional_context'), 'api_error', 'compact_boundary', "
+        "'model_refusal_fallback', 'cost-state', 'mode', 'permission-mode'; for "
+        "Codex 'compacted' and event_msg 'turn_aborted' / 'error'. payload is the "
+        "record body, cut to 8 KB (payload_bytes = original size, "
+        "payload_truncated says whether it was cut). ts is NULL for cost-state and "
+        "mode rows; order by seq. parent_uuid joins steps.source_uuids."
+    ),
     "message_embeddings": "Step embeddings from the Lance store: uuid, model, dim, vector.",
     # -- core macros --------------------------------------------------------
     "ago": "Timestamp N ago; use in filters like WHERE ts >= ago('7 days').",
@@ -417,6 +452,8 @@ DESCRIPTIONS: dict[str, str] = {
 DEFAULT_PRICING: dict[str, tuple[float, float]] = {
     "claude-fable-5": (10.0, 50.0),
     "claude-mythos-5": (10.0, 50.0),
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
     "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
