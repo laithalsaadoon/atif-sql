@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""v2 analytics views + macros: registration gating, aliases, dedup, drift.
+"""v2 analytics views + macros: registration gating, compat columns, drift.
 
 The analytics parquets are written with DuckDB itself (``COPY TO``) so
 atif-duck's test suite keeps its duckdb-only dependency surface.
@@ -19,6 +19,7 @@ from duck_fixtures import SESSION_IDS
 from atif_duck.domain.catalog import (
     ANALYTICS_MACRO_SIGNATURES,
     ANALYTICS_VIEW_NAMES,
+    ANALYTICS_VIEW_SCHEMA,
 )
 from atif_duck.infrastructure import analytics as analytics_mod
 from atif_duck.infrastructure.analytics import (
@@ -38,35 +39,28 @@ def _populate_analytics(corpus_root: Path) -> None:
     a = corpus_root / "analytics"
     scratch = duckdb.connect()
     s0, s1 = SESSION_IDS
-    # Sharded LLM caches: one part file each.
+    # Sharded LLM caches. session_classifications spans BOTH shard schemas: a
+    # pre-2026-09-27 shard that still carries the LLM autonomy_tier/success
+    # labels, and a current one without them. The view must read both.
     _write_parquet(
         scratch,
         f"""
         SELECT * FROM (VALUES
             ('{s0}', 'assisted', 'sde', 'success', 'Fix the flaky test.',
-             CAST(0.9 AS FLOAT), TIMESTAMPTZ '2026-08-22 01:00:00+00'),
-            ('{s1}', 'autonomous', 'admin', 'unknown', 'Tidy the docs.',
-             CAST(0.4 AS FLOAT), TIMESTAMPTZ '2026-08-22 01:00:00+00')
+             CAST(0.9 AS FLOAT), TIMESTAMPTZ '2026-08-22 01:00:00+00')
         ) t(session_id, autonomy_tier, work_category, success, goal, confidence, classified_at)
         """,
         a / "session_classifications" / "part-1.parquet",
     )
-    # Trajectory with a DUPLICATE window pair — the QUALIFY dedup must keep
-    # the later classified_at.
     _write_parquet(
         scratch,
         f"""
         SELECT * FROM (VALUES
-            ('{s0}', NULL, 'u-1', NULL, 'neutral', NULL, false, 'none',
-             CAST(0.8 AS FLOAT), TIMESTAMPTZ '2026-08-22 01:00:00+00'),
-            ('{s0}', 'u-1', 'u-2', 'neutral', 'positive', CAST(1.0 AS DOUBLE), false,
-             'resolution', CAST(0.5 AS FLOAT), TIMESTAMPTZ '2026-08-22 01:00:00+00'),
-            ('{s0}', 'u-1', 'u-2', 'neutral', 'negative', CAST(-1.0 AS DOUBLE), false,
-             'frustration_spike', CAST(0.9 AS FLOAT), TIMESTAMPTZ '2026-08-23 01:00:00+00')
-        ) t(session_id, prev_uuid, curr_uuid, prev_sentiment, curr_sentiment, delta,
-            is_transition, transition_kind, confidence, classified_at)
+            ('{s1}', 'admin', 'Tidy the docs.',
+             CAST(0.4 AS FLOAT), TIMESTAMPTZ '2026-09-27 01:00:00+00')
+        ) t(session_id, work_category, goal, confidence, classified_at)
         """,
-        a / "message_trajectory" / "part-1.parquet",
+        a / "session_classifications" / "part-2.parquet",
     )
     _write_parquet(
         scratch,
@@ -112,49 +106,6 @@ def _populate_analytics(corpus_root: Path) -> None:
         """,
         a / "perceived_errors" / "part-1.parquet",
     )
-    # Structural single-file parquets.
-    _write_parquet(
-        scratch,
-        """
-        SELECT * FROM (VALUES
-            ('u-1', CAST(0 AS INT), CAST(NULL AS FLOAT), CAST(NULL AS FLOAT), false),
-            ('a-1', CAST(0 AS INT), CAST(NULL AS FLOAT), CAST(NULL AS FLOAT), false),
-            ('a-3', CAST(-1 AS INT), CAST(NULL AS FLOAT), CAST(NULL AS FLOAT), true)
-        ) t(uuid, cluster_id, x, y, is_noise)
-        """,
-        a / "clusters.parquet",
-    )
-    _write_parquet(
-        scratch,
-        """
-        SELECT * FROM (VALUES
-            (CAST(0 AS INT), 'auth', CAST(0.9 AS FLOAT), CAST(1 AS INT)),
-            (CAST(0 AS INT), 'flaky test', CAST(0.7 AS FLOAT), CAST(2 AS INT))
-        ) t(cluster_id, term, weight, rank)
-        """,
-        a / "cluster_terms.parquet",
-    )
-    _write_parquet(
-        scratch,
-        f"""
-        SELECT * FROM (VALUES
-            ('{s0}', CAST(0 AS INT), CAST(2 AS INT), true,
-             CAST(0.8 AS FLOAT), CAST(0.3 AS FLOAT)),
-            ('{s1}', CAST(0 AS INT), CAST(2 AS INT), false,
-             CAST(0.8 AS FLOAT), CAST(0.3 AS FLOAT))
-        ) t(session_id, community_id, size, is_medoid, coherence, gamma_used)
-        """,
-        a / "session_communities.parquet",
-    )
-    _write_parquet(
-        scratch,
-        """
-        SELECT * FROM (VALUES
-            (CAST(0.1 AS DOUBLE), CAST(3 AS INT), CAST(0.5 AS DOUBLE), CAST(100 AS INT))
-        ) t(gamma, n_communities, quality, plateau_length)
-        """,
-        a / "community_profile.parquet",
-    )
     scratch.close()
 
 
@@ -183,26 +134,24 @@ def test_fresh_corpus_registers_nothing(corpus_root: Path) -> None:
     con.close()
 
 
-def test_classification_aliases(analytics_con: duckdb.DuckDBPyConnection) -> None:
-    row = analytics_con.execute(
-        "SELECT autonomy, success_outcome, category FROM session_classifications "
-        f"WHERE session_id = '{SESSION_IDS[0]}'"
-    ).fetchone()
-    assert row == ("assisted", "success", "sde")
+def test_classifications_read_both_shard_schemas(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    """Old and new shards union by NAME, and the dropped labels read as NULL.
 
-
-def test_trajectory_qualify_dedup(analytics_con: duckdb.DuckDBPyConnection) -> None:
+    The old shard still holds ``autonomy_tier='assisted'`` and
+    ``success='success'``; the view must not surface either, because those
+    LLM labels were dropped as unreliable. A positional union would instead
+    put the old shard's ``autonomy_tier`` text into ``work_category``.
+    """
     rows = analytics_con.execute(
-        "SELECT curr_sentiment, confidence FROM message_trajectory "
-        "WHERE prev_uuid = 'u-1' AND curr_uuid = 'u-2'"
+        "SELECT session_id, work_category, category, goal, autonomy_tier, success "
+        "FROM session_classifications ORDER BY session_id"
     ).fetchall()
-    # Two shards carried the pair; the later classified_at wins.
-    assert rows == [("negative", pytest.approx(0.9))]
-
-
-def test_trajectory_alias_columns(analytics_con: duckdb.DuckDBPyConnection) -> None:
-    cols = {d[0] for d in analytics_con.execute("DESCRIBE message_trajectory").fetchall()}
-    assert {"sentiment", "transition"} <= cols
+    assert rows == [
+        (SESSION_IDS[0], "sde", "sde", "Fix the flaky test.", None, None),
+        (SESSION_IDS[1], "admin", "admin", "Tidy the docs.", None, None),
+    ]
 
 
 def test_session_goals_projection(analytics_con: duckdb.DuckDBPyConnection) -> None:
@@ -219,36 +168,19 @@ def test_conflicts_summary_counts(analytics_con: duckdb.DuckDBPyConnection) -> N
 
 def test_analytics_macros_bind_and_run(analytics_con: duckdb.DuckDBPyConnection) -> None:
     # work_mix over the classification rows.
-    mix = dict(analytics_con.execute("SELECT * FROM work_mix(365)").fetchall())
+    mix = dict(analytics_con.execute("SELECT * FROM work_mix(3650)").fetchall())
     assert mix == {"sde": 1, "admin": 1}
-    # success_rate_by_work: known-denominator semantics — admin is all
-    # unknown so its rates are NULL and unknown_fraction is 1.0.
-    rows = {
-        r[0]: r for r in analytics_con.execute("SELECT * FROM success_rate_by_work(365)").fetchall()
-    }
-    sde = rows["sde"]
-    assert sde[1] == 1  # sessions
-    assert sde[2] == 1  # known_sessions
-    assert sde[3] == 0.0  # unknown_fraction
-    assert sde[4] == 1.0  # success_rate
-    admin = rows["admin"]
-    assert admin[2] == 0
-    assert admin[3] == 1.0
-    assert admin[4] is None
-    # autonomy_trend joins sessions.started_at (NOT classified_at).
-    trend = analytics_con.execute("SELECT * FROM autonomy_trend(3650)").fetchall()
-    assert {t[1] for t in trend} == {"assisted", "autonomous"}
-    # sentiment_arc joins messages on curr_uuid.
-    arc = analytics_con.execute(f"SELECT * FROM sentiment_arc('{SESSION_IDS[0]}')").fetchall()
-    assert len(arc) == 2
     # friction_counts excludes 'none'.
     counts = analytics_con.execute("SELECT label, n FROM friction_counts(NULL)").fetchall()
     assert counts == [("confusion", 1)]
-    # friction_rate computes a per-session rate against user steps.
+    # friction_rate divides by HUMAN turns. Session one's user steps are a
+    # slash-command wrapper (harness), a sidechain prompt and a compaction
+    # summary (harness), so it has none: the rate is NULL, not 1/2 as the old
+    # every-user-step denominator made it.
     rate = analytics_con.execute(
-        "SELECT session_id, n_friction FROM friction_rate(NULL)"
+        "SELECT session_id, n_friction, n_user_msgs, rate FROM friction_rate(NULL)"
     ).fetchall()
-    assert rate == [(SESSION_IDS[0], 1)]
+    assert rate == [(SESSION_IDS[0], 1, 0, None)]
     # friction_examples filters by label.
     ex = analytics_con.execute("SELECT * FROM friction_examples('confusion', 5)").fetchall()
     assert len(ex) == 1
@@ -256,12 +188,6 @@ def test_analytics_macros_bind_and_run(analytics_con: duckdb.DuckDBPyConnection)
     cot = analytics_con.execute("SELECT * FROM conflicts_over_time(NULL)").fetchall()
     assert len(cot) == 1
     assert cot[0][2] == SESSION_IDS[0]  # root_session_id == session_id
-    # cluster_top_terms + community_top_topics.
-    terms = analytics_con.execute("SELECT term FROM cluster_top_terms(0, 5)").fetchall()
-    assert [t[0] for t in terms] == ["auth", "flaky test"]
-    topics = analytics_con.execute("SELECT * FROM community_top_topics(0, 5)").fetchall()
-    assert topics[0][0] == 0  # cluster 0 leads
-    assert "auth" in topics[0][2]
 
 
 def test_perceived_summary_aggregates(analytics_con: duckdb.DuckDBPyConnection) -> None:
@@ -281,15 +207,11 @@ def test_perceived_macros_bind_and_run(analytics_con: duckdb.DuckDBPyConnection)
     }
     assert counts["correction"][1:] == (1, 1, 0, 0, 1)
     assert counts["unresolved_outcome"][1:] == (1, 1, 1, 0, 0)
-    # perceived_rate divides by user-role main-chain text steps.
+    # perceived_rate divides by human turns (none in session one, see above).
     rate = analytics_con.execute(
         "SELECT session_id, n_errors, n_user_msgs, rate FROM perceived_rate(NULL)"
     ).fetchall()
-    assert len(rate) == 1
-    assert rate[0][0] == SESSION_IDS[0]
-    assert rate[0][1] == 2
-    assert rate[0][2] > 0
-    assert rate[0][3] == pytest.approx(2 / rate[0][2])
+    assert rate == [(SESSION_IDS[0], 2, 0, None)]
     # perceived_examples filters by signal, confidence-ranked.
     ex = analytics_con.execute(
         "SELECT evidence FROM perceived_examples('correction', 5)"
@@ -328,76 +250,60 @@ def test_analytics_macro_signatures_match_ddl() -> None:
     assert parsed == ANALYTICS_MACRO_SIGNATURES
 
 
-def test_analytics_view_schema_stability(analytics_con: duckdb.DuckDBPyConnection) -> None:
-    """Join columns for all five LLM views, plus the perceived rollup."""
-    cols = {d[0] for d in analytics_con.execute("DESCRIBE session_classifications").fetchall()}
-    assert {
-        "session_id",
-        "autonomy_tier",
-        "work_category",
-        "success",
-        "goal",
-        "confidence",
-        "classified_at",
-        # The additive aliases, asserted for the same reason as
-        # message_trajectory's below: a subset assertion passes when an alias
-        # has replaced the column it was supposed to sit beside.
-        "autonomy",
-        "success_outcome",
-        "category",
-    } == cols
-    cols = {d[0] for d in analytics_con.execute("DESCRIBE session_conflicts").fetchall()}
-    assert {
-        "session_id",
-        "turn_a_uuid",
-        "turn_b_uuid",
-        "conflict_kind",
-        "severity",
-        "agent_position",
-        "user_position",
-        "confidence",
-        "detected_at",
-    } == cols
-    cols = {d[0] for d in analytics_con.execute("DESCRIBE message_trajectory").fetchall()}
-    assert {
-        "session_id",
-        "prev_uuid",
-        "curr_uuid",
-        "prev_sentiment",
-        "curr_sentiment",
-        "delta",
-        "is_transition",
-        "transition_kind",
-        "confidence",
-        "classified_at",
-        # `_VIEW_PROJECTIONS` promises the alias projections are ADDITIVE, so
-        # both the parquet's own name and its alias have to be present. An
-        # equality assertion is what catches an alias that REPLACED a column.
-        "sentiment",
-        "transition",
-    } == cols
-    cols = {d[0] for d in analytics_con.execute("DESCRIBE user_friction").fetchall()}
-    assert {
-        "uuid",
-        "session_id",
-        "ts",
-        "text_snippet",
-        "label",
-        "rationale",
-        "source",
-        "confidence",
-        "classified_at",
-    } == cols
-    cols = {d[0] for d in analytics_con.execute("DESCRIBE perceived_errors").fetchall()}
-    assert {
-        "session_id",
-        "turn_uuid",
-        "signal",
-        "severity",
-        "evidence",
-        "agent_error_summary",
-        "confidence",
-        "detected_at",
-    } == cols
-    cols = [d[0] for d in analytics_con.execute("DESCRIBE perceived_summary").fetchall()]
-    assert cols == ["session_id", "n_errors", "max_severity", "signals"]
+def test_analytics_view_schema_matches_describe(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    """``ANALYTICS_VIEW_SCHEMA`` equals DESCRIBE, column for column and in order.
+
+    ``atif-sql schema`` prints this catalog for the analytics views, so a
+    column added, dropped or retyped in the DDL must fail here rather than
+    reach an agent as a wrong schema.
+    """
+    assert set(ANALYTICS_VIEW_SCHEMA) == set(ANALYTICS_VIEW_NAMES)
+    for view, expected in ANALYTICS_VIEW_SCHEMA.items():
+        got = tuple(
+            (str(r[0]), str(r[1])) for r in analytics_con.execute(f"DESCRIBE {view}").fetchall()
+        )
+        assert got == expected, f"ANALYTICS_VIEW_SCHEMA[{view!r}] diverges: {got}"
+
+
+def test_removed_analytics_surfaces_stay_unbound(corpus_root: Path) -> None:
+    """A corpus still holding the cut pipelines' parquets binds none of them.
+
+    The live corpora keep ``message_trajectory/`` and the structural files
+    until an operator deletes them, so registration must ignore them rather
+    than resurrect a view the catalog no longer lists.
+    """
+    _populate_analytics(corpus_root)
+    a = corpus_root / "analytics"
+    scratch = duckdb.connect()
+    _write_parquet(
+        scratch,
+        "SELECT 's' AS session_id, 'u-1' AS curr_uuid",
+        a / "message_trajectory" / "part-1.parquet",
+    )
+    _write_parquet(scratch, "SELECT 'u-1' AS uuid, 0 AS cluster_id", a / "clusters.parquet")
+    _write_parquet(scratch, "SELECT 0 AS cluster_id, 't' AS term", a / "cluster_terms.parquet")
+    _write_parquet(
+        scratch, "SELECT 's' AS session_id, 0 AS community_id", a / "session_communities.parquet"
+    )
+    scratch.close()
+    con = duckdb.connect()
+    register(con, corpus_root)
+    names = {str(r[0]) for r in con.execute("SELECT view_name FROM duckdb_views()").fetchall()} | {
+        str(r[0]) for r in con.execute("SELECT function_name FROM duckdb_functions()").fetchall()
+    }
+    for removed in (
+        "message_trajectory",
+        "message_clusters",
+        "cluster_terms",
+        "session_communities",
+        "community_profile",
+        "autonomy_trend",
+        "success_rate_by_work",
+        "sentiment_arc",
+        "cluster_top_terms",
+        "community_top_topics",
+    ):
+        assert removed not in names, f"{removed} is still registered"
+    con.close()

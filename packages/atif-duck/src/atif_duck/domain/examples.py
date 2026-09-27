@@ -35,6 +35,7 @@ from typing import Literal, cast, get_args
 from atif_duck.domain.catalog import (
     ANALYTICS_MACRO_SIGNATURES,
     ANALYTICS_VIEW_NAMES,
+    ANALYTICS_VIEW_SCHEMA,
     DESCRIPTIONS,
     MACRO_SIGNATURES,
     TABLE_MACRO_NAMES,
@@ -76,12 +77,12 @@ ARG_EXEMPLARS: dict[str, str] = {
     "sid": "(SELECT session_id FROM sessions LIMIT 1)",
     "since_days": "30",
     "last_n_days": "30",
-    "window_days": "30",
     "k": "10",
     "n": "10",
     "label_name": "'correction'",
     "signal_name": "'correction'",
-    "cid": "0",
+    "src": "'user'",
+    "msg": "'Stop hook feedback: the claim has no evidence'",
     "interval_text": "'7 days'",
     "query_vec": (
         "(SELECT list_transform("
@@ -124,20 +125,32 @@ class ExampleQuery:
     category: Category
 
 
-def _view_requires(name: str) -> Requires:
-    """Core views are corpus-only; ``message_embeddings`` needs the store."""
-    return "vss" if name == "message_embeddings" else "core"
+#: Catalog objects that need the embeddings store (``atif-sql embed``).
+_VSS_OBJECTS: frozenset[str] = frozenset({"message_embeddings", "semantic_search"})
+
+
+def object_requires(name: str) -> Requires:
+    """What must be registered/populated before catalog object ``name`` binds.
+
+    ``analytics`` for the parquet-gated analytics views and macros, ``vss``
+    for the embeddings surface, ``core`` for everything the corpus alone
+    registers (the authorship views included). ``atif-sql schema`` prints
+    this beside every view and macro, and each derived example carries it.
+    """
+    if name in ANALYTICS_VIEW_SCHEMA or name in ANALYTICS_MACRO_SIGNATURES:
+        return "analytics"
+    return "vss" if name in _VSS_OBJECTS else "core"
 
 
 def _view_sql(name: str) -> str:
     """Canonical top-N SELECT for one view.
 
-    When the static :data:`~atif_duck.domain.catalog.VIEW_SCHEMA` declares a
+    When the static :data:`~atif_duck.domain.catalog.VIEW_SCHEMA` (or
+    :data:`~atif_duck.domain.catalog.ANALYTICS_VIEW_SCHEMA`) declares a
     timestamp column, the example orders by the FIRST one descending
     (newest-first is the agent's default question); otherwise a plain LIMIT.
-    Analytics views have no static schema entry, so they take the plain form.
     """
-    schema = VIEW_SCHEMA.get(name, ())
+    schema = VIEW_SCHEMA.get(name) or ANALYTICS_VIEW_SCHEMA.get(name, ())
     ts_col = next((col for col, typ in schema if typ.startswith("TIMESTAMP")), None)
     if ts_col is not None:
         # The view name and its timestamp column both come from the static catalog.
@@ -192,7 +205,7 @@ def build_examples() -> tuple[ExampleQuery, ...]:
                 name=view,
                 sql=_view_sql(view),
                 description=_description(view),
-                requires=_view_requires(view),
+                requires=object_requires(view),
                 category="view",
             )
         )
@@ -205,7 +218,7 @@ def build_examples() -> tuple[ExampleQuery, ...]:
                 name=view,
                 sql=_view_sql(view),
                 description=_description(view),
-                requires="analytics",
+                requires=object_requires(view),
                 category="view",
             )
         )
@@ -218,7 +231,7 @@ def build_examples() -> tuple[ExampleQuery, ...]:
                 name=macro,
                 sql=_macro_sql(macro, params),
                 description=_description(macro),
-                requires="vss" if macro == "semantic_search" else "core",
+                requires=object_requires(macro),
                 category="table-macro" if macro in TABLE_MACRO_NAMES else "scalar-macro",
             )
         )
@@ -231,7 +244,7 @@ def build_examples() -> tuple[ExampleQuery, ...]:
                 name=macro,
                 sql=_macro_sql(macro, params),
                 description=_description(macro),
-                requires="analytics",
+                requires=object_requires(macro),
                 category="table-macro" if macro in TABLE_MACRO_NAMES else "scalar-macro",
             )
         )
@@ -248,4 +261,5 @@ __all__ = [
     "ExampleQuery",
     "Requires",
     "build_examples",
+    "object_requires",
 ]

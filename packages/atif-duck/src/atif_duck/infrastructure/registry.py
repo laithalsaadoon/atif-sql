@@ -1698,9 +1698,11 @@ def register(
     Order matters: raw TEMP tables first (views bind against them at CREATE
     time), then views, then VSS (``semantic_search``'s body binds against
     ``message_embeddings`` at CREATE time), then macros (macro bodies bind
-    against views at CREATE time), then the v2 analytics views + macros
-    (which bind against both the analytics parquets AND the base views —
-    ``autonomy_trend`` joins ``sessions``, ``sentiment_arc`` joins
+    against views at CREATE time), then the authorship surface
+    (``step_author`` and the ``user_steps`` / ``human_turns`` /
+    ``session_outcomes`` views over ``steps``), then the v2 analytics views +
+    macros (which bind against the analytics parquets AND the base views —
+    ``friction_rate`` counts ``human_turns``, ``conflicts_over_time`` joins
     ``messages``).
 
     Parameters
@@ -1733,6 +1735,7 @@ def register(
         register_analytics,
         register_analytics_macros,
     )
+    from atif_duck.infrastructure.authorship import register_authorship
 
     sources = register_raw(con, corpus_root)
     register_views(con)
@@ -1744,6 +1747,7 @@ def register(
             expected_dim=expected_dim,
         )
     register_macros(con, pricing=pricing, skip_vss=skip_vss)
+    register_authorship(con)
     registered = register_analytics(con, corpus_root)
     register_analytics_macros(con, registered)
     return sources

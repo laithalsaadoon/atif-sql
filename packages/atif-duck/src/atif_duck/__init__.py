@@ -6,8 +6,9 @@ Layered: ``infrastructure`` (DuckDB registry) > ``domain`` (static
 view/macro catalog). ``register(con, corpus_root)`` wires a connection to a
 CONTRACT-shaped corpus (``<root>/sessions/<id>/{trajectory.json,
 edges.jsonl, loss_report.json, meta.json}``) and exposes the core query
-surface: the 16 views in :data:`VIEW_NAMES` (sessions / steps / messages /
-tool_calls / ...) plus the 9 macros in :data:`MACRO_NAMES`. The v2
+surface: the views in :data:`VIEW_NAMES` (sessions / steps / messages /
+tool_calls / user_steps / human_turns / session_outcomes / ...) plus the
+macros in :data:`MACRO_NAMES`. The v2
 analytics surface (``ANALYTICS_VIEW_NAMES``,
 ``ANALYTICS_MACRO_SIGNATURES``) registers separately and needs
 ``atif-sql analyze`` to have run.
