@@ -57,37 +57,69 @@ The module is a deliberate twin of `atif_corpus.domain.session_id`, pinned by
 a test on each side, because the corpus writer applies the same rule before
 it writes.
 
-## Core surface (16 views, 9 macros)
+## Core surface
 
 - **Views**: `sessions`, `steps` (one row per ATIF step — the
   messages-parity view), `messages` (uuid-keyed COMPAT view from
   `edges.jsonl`), `tool_calls`, `tool_results`, `todo_events`,
   `todo_state_current`, `subagent_spawns`, `subagent_steps`,
   `task_creations`, `task_updates`, `tasks_state_current`,
-  `skill_invocations`, `skill_usage`, `loss_reports`, and
+  `skill_invocations`, `skill_usage`, `loss_reports`,
   `message_embeddings` (the VSS view; empty until `atif-sql embed --all
-  --no-dry-run` runs).
+  --no-dry-run` runs), and the three authorship views `user_steps`,
+  `human_turns`, `session_outcomes` (below).
 - **Macros**: `ago`, `model_used`, `cost_estimate`, `tool_rank`,
-  `todo_velocity`, `subagent_fanout`, `skill_rank`, `skill_source_mix`, and
+  `todo_velocity`, `subagent_fanout`, `skill_rank`, `skill_source_mix`,
   `semantic_search(query_vec, k)` (kNN over `message_embeddings`; skipped
-  when `register(..., skip_vss=True)`).
+  when `register(..., skip_vss=True)`), and `step_author(src, msg)`.
 
-## v2 analytics surface (12 views, 13 macros)
+## Authorship: who wrote a user step
+
+Claude Code and Codex put a lot of machine-written text in the user role:
+Stop hook feedback, task notifications, retry nudges, skill bodies, image
+metadata, turn-audit prompts. The authorship surface tells those apart from
+what a human typed. It reads only `steps`, so it registers on every corpus
+(`requires: core`), before any analytics pipeline has run.
+
+- `step_author(src, msg)` returns `human`, `stop_hook`,
+  `task_notification`, `harness`, or `audit_prompt`, and NULL for a step
+  that isn't a user step. It's a prefix match after stripping leading
+  space, tab, CR and LF; the first rule that matches wins.
+- `user_steps` has one row per user step, sidechains included:
+  `session_id`, `step_id`, `ts`, `uuid`, `is_sidechain`,
+  `is_compact_summary`, `author`, `message`. A compaction summary is
+  `harness` whatever its text says.
+- `human_turns` is the main-chain rows of `user_steps` with
+  `author = 'human'`: `session_id`, `step_id`, `ts`, `uuid`, `message`.
+  The analytics rate macros count their denominators from it.
+- `session_outcomes` has one row per session: `kind` (`interactive`,
+  `one_shot_job`, `turn_audit`), `outcome` (`pass`, `block`,
+  `reviewer_blocked`, `interrupted`, `clean_end`), and the counts
+  `human_turns`, `interrupts`, `reviewer_blocks`.
+
+The rule table lives in `atif_duck.domain.authorship` and the DDL in
+`atif_duck.infrastructure.authorship.register_authorship`, which `register`
+calls after the core macros and before the analytics surface. atif-analytics
+can't import atif-duck, so `atif_analytics.domain.authorship` carries a twin
+of the table; `packages/atif-duck/tests/test_authorship_twin_pin.py` fails on
+any difference, and `packages/atif-cli/tests/test_authorship_parity.py` runs
+the SQL and the Python side by side over the same steps.
+
+## v2 analytics surface
 
 Bound from the parquet artifacts atif-analytics writes under
 `<corpus_root>/analytics/`, so each view registers only once its backing
 parquet is populated — run `atif-sql analyze` first.
 
 - **Views**: `session_classifications`, `session_goals`,
-  `message_trajectory`, `session_conflicts`, `conflicts_summary`,
-  `user_friction`, `perceived_errors`, `perceived_summary`,
-  `message_clusters`, `cluster_terms`, `session_communities`,
-  `community_profile`.
-- **Macros**: `work_mix`, `autonomy_trend`, `success_rate_by_work`,
-  `sentiment_arc`, `conflicts_over_time`, `friction_rate`,
-  `friction_counts`, `friction_examples`, `perceived_rate`,
-  `perceived_counts`, `perceived_examples`, `cluster_top_terms`,
-  `community_top_topics`.
+  `session_conflicts`, `conflicts_summary`, `user_friction`,
+  `perceived_errors`, `perceived_summary`. In `session_classifications`,
+  `category` is an alias of `work_category`, and `autonomy_tier` and
+  `success` are compatibility columns that are always NULL.
+- **Macros**: `work_mix`, `friction_counts`, `friction_rate`,
+  `friction_examples`, `conflicts_over_time`, `perceived_counts`,
+  `perceived_rate`, `perceived_examples`. `friction_rate` and
+  `perceived_rate` count their denominators from `human_turns`.
 
 The static catalogs (`VIEW_NAMES`, `VIEW_SCHEMA`, `MACRO_NAMES`,
 `MACRO_SIGNATURES`, `ANALYTICS_VIEW_NAMES`, `ANALYTICS_MACRO_SIGNATURES`)

@@ -4,13 +4,18 @@
 
 A three-tier pipeline over the materialized corpus:
 
-1. Pre-filter to user-role text steps below ``settings.friction_max_chars``
-   (default 300), main chain only, system markers excluded.
+1. Pre-filter to HUMAN turns (:func:`~atif_analytics.domain.transcript.is_human_turn`:
+   main-chain user steps whose author is ``human``) below
+   ``settings.friction_max_chars`` (default 300). Stop hook feedback, task
+   notifications, retry nudges, interrupt markers and screenshot metadata
+   are never candidates. Before this filter they drew most of the rule-1
+   ``unmet_expectation`` stamps on a busy corpus (the same retry nudge or
+   ``[Image: original ...]`` line "repeated" within ten turns).
 2. Regex fast-path (:mod:`atif_analytics.domain.friction`) for strong
    unambiguous patterns — confidence 0.9, skips the LLM.
 3. Deterministic stamp tier — three rules over steps + error tool_results:
 
-   * Rule 1 — repeated user message body within 10 user turns →
+   * Rule 1 — repeated human message body within 10 human turns →
      ``unmet_expectation`` @ 0.85 (re-asking means the first answer fell
      short).
    * Rule 2 — short imperative (≤30 chars, first token ∈ {stop, redo,
@@ -61,7 +66,7 @@ from atif_analytics.application.use_cases._shared import (
 from atif_analytics.domain.costs import estimate_cost_tokens, tokens_for_chars
 from atif_analytics.domain.friction import regex_fast_path
 from atif_analytics.domain.models import UserFrictionSignal
-from atif_analytics.domain.transcript import CLI_BOOKKEEPING_TEXTS
+from atif_analytics.domain.transcript import is_human_turn
 from atif_analytics.infrastructure.corpus_reader import CorpusReader, parse_ts
 from atif_analytics.infrastructure.sqlite_state import checkpointer
 
@@ -90,14 +95,6 @@ _SCHEMA: dict[str, Any] = {
     "confidence": pl.Float32,
     "classified_at": pl.Datetime("us", "UTC"),
 }
-
-#: Claude Code injects these strings as user-role messages even though
-#: they're system-generated bookkeeping, and they dominate the candidate set
-#: (~94% of friction LLM calls without this filter). Excluded at the
-#: candidate boundary. The set itself lives in the domain
-#: (:data:`CLI_BOOKKEEPING_TEXTS`) so the perceived-eligibility pair counter
-#: shares the same definition.
-_SYSTEM_MARKER_TEXTS = CLI_BOOKKEEPING_TEXTS
 
 #: Rule 2's imperative first-token set.
 _IMPERATIVE_TOKENS: frozenset[str] = frozenset(
@@ -158,18 +155,15 @@ def candidate_messages(
 ) -> list[tuple[str, str, _dt | None, str]]:
     """The friction candidates for one session: ``(uuid, sid-slot, ts, text)``.
 
-    User-role text steps on the main chain, 1..``max_chars`` chars, system
-    markers excluded, uuid present (the row key). The session id slot is
-    filled by the caller.
+    Human turns (:func:`is_human_turn`), 1..``max_chars`` chars, uuid present
+    (the row key). The session id slot is filled by the caller.
     """
     out: list[tuple[str, str, _dt | None, str]] = []
     for step in steps:
-        if step.is_sidechain or step.role != "user" or not step.uuid:
+        if not is_human_turn(step) or not step.uuid:
             continue
         text = step.text
         if not text or len(text) > max_chars:
-            continue
-        if text.strip() in _SYSTEM_MARKER_TEXTS:
             continue
         out.append((step.uuid, "", parse_ts(step.ts), text))
     return out
@@ -194,8 +188,10 @@ def deterministic_stamps(
         if existing is None or conf > existing[1]:
             out[uuid] = (label, conf, "sql")
 
-    # Rule 1 — repeated user message body within 10 user turns.
-    user_turns = [s for s in main if s.role == "user" and s.text and s.uuid]
+    # Rule 1 — repeated human message body within 10 human turns. Only human
+    # turns are compared: a retry nudge or a screenshot's metadata line
+    # repeats by construction and says nothing about the user.
+    user_turns = [s for s in main if is_human_turn(s) and s.text and s.uuid]
     norms = [_WS_RE.sub(" ", s.text).lower() for s in user_turns]
     for i, step in enumerate(user_turns):
         if step.uuid not in candidate_uuids:

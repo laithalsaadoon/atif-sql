@@ -2,8 +2,8 @@
 
 """Schema/enum pins — expected values HARDCODED, never read from the models.
 
-CONTRACT-V2 freezes these enum sets: autonomy tiers, work categories, 6
-transition_kinds, 4 conflict kinds, 7 friction labels. A hardcoded expectation
+CONTRACT-V2 freezes these enum sets: work categories, 4 conflict kinds, 7
+friction labels, 7 perceived signals. A hardcoded expectation
 is the point — reading the values off the model under test would pass no
 matter how far the enums drifted, and a drifted enum silently unbinds the
 analytics views keyed on it.
@@ -22,10 +22,8 @@ from atif_analytics.domain.models import (
     PerceivedError,
     PerceivedErrorsResult,
     SessionClassification,
-    TrajectoryWindow,
     UserFrictionSignal,
 )
-from atif_analytics.domain.trajectory import TRANSITION_KINDS
 
 
 def _literal_values(model: type[BaseModel], field: str) -> set[str]:
@@ -39,12 +37,9 @@ def _literal_values(model: type[BaseModel], field: str) -> set[str]:
     return values
 
 
-def test_autonomy_tier_values_exact() -> None:
-    assert _literal_values(SessionClassification, "autonomy_tier") == {
-        "manual",
-        "assisted",
-        "autonomous",
-    }
+def test_classification_fields_are_category_goal_confidence() -> None:
+    """autonomy_tier and success were dropped on 2026-09-27; nothing may bring them back."""
+    assert list(SessionClassification.model_fields) == ["work_category", "goal", "confidence"]
 
 
 def test_work_category_values_exact() -> None:
@@ -55,40 +50,6 @@ def test_work_category_values_exact() -> None:
         "events",
         "thought_leadership",
         "other",
-    }
-
-
-def test_success_values_exact() -> None:
-    assert _literal_values(SessionClassification, "success") == {
-        "success",
-        "partial",
-        "failure",
-        "unknown",
-    }
-
-
-def test_transition_kinds_are_exactly_six() -> None:
-    assert TRANSITION_KINDS == (
-        "frustration_spike",
-        "resolution",
-        "reset",
-        "drift",
-        "clarification",
-        "none",
-    )
-    assert _literal_values(TrajectoryWindow, "transition_kind") == set(TRANSITION_KINDS)
-
-
-def test_sentiment_values_exact() -> None:
-    assert _literal_values(TrajectoryWindow, "curr_sentiment") == {
-        "negative",
-        "neutral",
-        "positive",
-    }
-    assert _literal_values(TrajectoryWindow, "prev_sentiment") == {
-        "negative",
-        "neutral",
-        "positive",
     }
 
 
@@ -120,9 +81,7 @@ def test_friction_labels_exactly_seven() -> None:
 def test_goal_length_bounds() -> None:
     with pytest.raises(ValidationError):
         SessionClassification(
-            autonomy_tier="manual",
             work_category="sde",
-            success="success",
             goal="x" * 281,
             confidence=0.5,
         )
@@ -137,12 +96,10 @@ def test_extra_fields_forbidden() -> None:
     with pytest.raises(ValidationError):
         SessionClassification.model_validate(
             {
-                "autonomy_tier": "manual",
                 "work_category": "sde",
-                "success": "success",
                 "goal": "g",
                 "confidence": 0.5,
-                "bonus": True,
+                "success": "success",
             }
         )
 

@@ -190,36 +190,32 @@ lock` must land in ONE commit, or CI fails on a lockfile instead of on the renam
 
 One install carries every capability. There are no capability-gating extras, no
 `atif-sql[embed]`, and nothing to install afterwards to make a command work — so the weight
-below is what every user pays, and it belongs in the release record rather than in a
-surprise. Measured 2026-08-28 against `uv.lock`, CPython 3.13, linux x86_64:
+is what every user pays, and it belongs in the release record rather than in a surprise. The heaviest distributions are `polars-runtime-32`, `pyarrow`, `lancedb`, `litellm`
+and `duckdb`. Measure a release against `uv.lock` on CPython 3.13 the same way each time:
 
-| | |
-| --- | --- |
-| Third-party runtime packages | **113** (linux and macOS). 115 counting `colorama` and `win32-setctime`, which are gated `sys_platform == 'win32'`; 120 including the seven members. |
-| Wheels downloaded | **381 MiB** |
-| Installed on disk | **1.15 GiB** (1.29 GiB once bytecode is compiled) |
-| Heaviest five | `polars-runtime-32` 206 MiB, `llvmlite` 171, `lancedb` 155, `pyarrow` 150, `scipy` 107 — 67% of the install |
+```bash
+uv export --no-dev --all-packages --no-hashes --no-emit-workspace --format requirements-txt  # the closure
+UV_PROJECT_ENVIRONMENT=/tmp/atif-weight uv sync --locked --no-dev --all-packages             # a fresh install
+du -sh /tmp/atif-weight/lib/python3.13/site-packages                                         # its size on disk
+```
 
-**Prebuilt wheel coverage is complete except for one combination.** 31 of the closure ship
-native code; all 31 have cp313 wheels for manylinux x86_64, macOS arm64, and Windows x86_64.
-The gap is `hdbscan==0.8.44` on **manylinux aarch64**: no hdbscan release has ever published
-an aarch64 wheel, so there is no version to move to, and its sdist compiles five Cython
-extensions. A first `uvx atif-sql` on Graviton, an ARM CI runner, or a `linux/arm64` container
-needs a C toolchain and pays that build. macOS arm64 is unaffected — hdbscan's
-`macosx_*_universal2` wheels cover it.
+**Prebuilt wheel coverage is complete on every glibc target.** Every package in the closure
+that ships native code has cp313 wheels for manylinux x86_64, manylinux aarch64, macOS arm64,
+and Windows x86_64. The one gap there used to be, `hdbscan` on manylinux aarch64 (no release
+ever published an aarch64 wheel, so a first `uvx atif-sql` on Graviton compiled Cython
+extensions), left with hdbscan and the structural pipelines on 2026-09-27.
 
-Alpine and other musl targets are worse and are not supported: `duckdb`, `hdbscan`,
-`lancedb`, `llvmlite`, `numba`, and `scikit-learn` publish no musllinux wheels, and
-`lancedb==0.37.1` publishes **no sdist at all**, so there is nothing to build from.
+Alpine and other musl targets are not supported: `duckdb` and `lancedb` publish no
+musllinux wheels, and `lancedb==0.37.1` publishes **no sdist at all**, so there is nothing to
+build from.
 
-**The harbor subtree is the standing follow-up.** 63 of the 113 runtime packages reach this
+**The harbor subtree is the standing follow-up.** Most of the runtime packages reach this
 project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client
 stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`,
 `aiohttp` — while `atif-converter` uses harbor for its public ATIF data classes and validator
-only (the conversion itself is ours since the port away from harbor's private methods). That
-is 57% of the dependency roster and 13% of the bytes (155 MiB): a CLI that converts JSONL
-ships a web server and a database client to do it. It is a supply-chain and install-weight
-question, not a release blocker, and it does not change the shape of a release. `litellm` in
+only (the conversion itself is ours since the port away from harbor's private methods). A CLI
+that converts JSONL ships a web server and a database client to do it. It is a supply-chain and
+install-weight question, not a release blocker, and it does not change the shape of a release. `litellm` in
 particular is no longer imported on the conversion hot path (`atif_converter.domain.pricing`
 reads its bundled price table directly and matches `cost_per_token` bit for bit; the import is
 now a fallback), which removed about four seconds from every convert process. The port

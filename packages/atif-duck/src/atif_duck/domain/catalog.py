@@ -47,6 +47,9 @@ VIEW_NAMES: tuple[str, ...] = (
     "loss_reports",
     "session_events",
     "message_embeddings",
+    "user_steps",
+    "human_turns",
+    "session_outcomes",
 )
 
 # Hand-maintained column schema for every view in :data:`VIEW_NAMES`.
@@ -281,11 +284,40 @@ VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("embedding", "FLOAT[1024]"),
         ("embedded_at", "TIMESTAMP WITH TIME ZONE"),
     ),
+    # Authorship surface bound by ``register_authorship`` over ``steps``: no
+    # analytics run needed. ``author`` values and rules live in
+    # :mod:`atif_duck.domain.authorship`.
+    "user_steps": (
+        ("session_id", "VARCHAR"),
+        ("step_id", "BIGINT"),
+        ("ts", "TIMESTAMP"),
+        ("uuid", "VARCHAR"),
+        ("is_sidechain", "BOOLEAN"),
+        ("is_compact_summary", "BOOLEAN"),
+        ("author", "VARCHAR"),
+        ("message", "VARCHAR"),
+    ),
+    "human_turns": (
+        ("session_id", "VARCHAR"),
+        ("step_id", "BIGINT"),
+        ("ts", "TIMESTAMP"),
+        ("uuid", "VARCHAR"),
+        ("message", "VARCHAR"),
+    ),
+    "session_outcomes": (
+        ("session_id", "VARCHAR"),
+        ("kind", "VARCHAR"),
+        ("outcome", "VARCHAR"),
+        ("human_turns", "BIGINT"),
+        ("interrupts", "BIGINT"),
+        ("reviewer_blocks", "BIGINT"),
+    ),
 }
 
-# The nine macros ``register_macros`` creates: eight over the always-present
-# transcript-derived views, plus ``semantic_search``, which needs the
-# embedding store and is skipped when ``skip_vss=True``. The analytics macros
+# The core macros: the ones ``register_macros`` creates over the
+# always-present transcript-derived views, ``semantic_search``, which needs the
+# embedding store and is skipped when ``skip_vss=True``, and ``step_author``,
+# which ``register_authorship`` creates beside its views. The analytics macros
 # are NOT here — they live in :data:`ANALYTICS_MACRO_SIGNATURES` and register
 # separately, because their backing views exist only once the pipelines run.
 MACRO_NAMES: tuple[str, ...] = (
@@ -298,6 +330,7 @@ MACRO_NAMES: tuple[str, ...] = (
     "semantic_search",
     "skill_rank",
     "skill_source_mix",
+    "step_author",
 )
 
 # Hand-maintained signatures for every macro in :data:`MACRO_NAMES`. They are
@@ -316,6 +349,7 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
     "semantic_search": ("query_vec", "k"),
     "skill_rank": ("last_n_days",),
     "skill_source_mix": ("last_n_days",),
+    "step_author": ("src", "msg"),
 }
 
 # ---------------------------------------------------------------------------
@@ -326,33 +360,97 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
 # ---------------------------------------------------------------------------
 
 # Views registered by ``atif_duck.infrastructure.analytics.register_analytics``
-# (parquet-gated; ``session_goals`` / ``conflicts_summary`` derive from their
-# upstream view).
+# (parquet-gated; ``session_goals`` / ``conflicts_summary`` /
+# ``perceived_summary`` derive from their upstream view).
+#
+# Removed 2026-09-27 with the trajectory and structural pipelines:
+# ``message_trajectory``, ``message_clusters``, ``cluster_terms``,
+# ``session_communities``, ``community_profile``.
 ANALYTICS_VIEW_NAMES: tuple[str, ...] = (
     "session_classifications",
     "session_goals",
-    "message_trajectory",
     "session_conflicts",
     "conflicts_summary",
     "user_friction",
     "perceived_errors",
     "perceived_summary",
-    "message_clusters",
-    "cluster_terms",
-    "session_communities",
-    "community_profile",
 )
 
-# The 13 macros ``register_analytics_macros`` creates. Each one registers only
+# Column schema for every analytics view, in DESCRIBE order. Drift-tested by
+# ``test_analytics_view_schema_matches_describe`` over a fixture corpus with
+# every parquet present, and printed by ``atif-sql schema`` under
+# ``requires: analytics``.
+ANALYTICS_VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
+    "session_classifications": (
+        ("session_id", "VARCHAR"),
+        ("work_category", "VARCHAR"),
+        ("goal", "VARCHAR"),
+        ("confidence", "FLOAT"),
+        ("classified_at", "TIMESTAMP WITH TIME ZONE"),
+        ("autonomy_tier", "VARCHAR"),
+        ("success", "VARCHAR"),
+        ("category", "VARCHAR"),
+    ),
+    "session_goals": (
+        ("session_id", "VARCHAR"),
+        ("goal", "VARCHAR"),
+        ("confidence", "FLOAT"),
+        ("classified_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "session_conflicts": (
+        ("session_id", "VARCHAR"),
+        ("turn_a_uuid", "VARCHAR"),
+        ("turn_b_uuid", "VARCHAR"),
+        ("conflict_kind", "VARCHAR"),
+        ("severity", "VARCHAR"),
+        ("agent_position", "VARCHAR"),
+        ("user_position", "VARCHAR"),
+        ("confidence", "DOUBLE"),
+        ("detected_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "conflicts_summary": (
+        ("session_id", "VARCHAR"),
+        ("conflict_count", "BIGINT"),
+    ),
+    "user_friction": (
+        ("uuid", "VARCHAR"),
+        ("session_id", "VARCHAR"),
+        ("ts", "TIMESTAMP WITH TIME ZONE"),
+        ("text_snippet", "VARCHAR"),
+        ("label", "VARCHAR"),
+        ("rationale", "VARCHAR"),
+        ("source", "VARCHAR"),
+        ("confidence", "FLOAT"),
+        ("classified_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "perceived_errors": (
+        ("session_id", "VARCHAR"),
+        ("turn_uuid", "VARCHAR"),
+        ("signal", "VARCHAR"),
+        ("severity", "VARCHAR"),
+        ("evidence", "VARCHAR"),
+        ("agent_error_summary", "VARCHAR"),
+        ("confidence", "DOUBLE"),
+        ("detected_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "perceived_summary": (
+        ("session_id", "VARCHAR"),
+        ("n_errors", "BIGINT"),
+        ("max_severity", "VARCHAR"),
+        ("signals", "VARCHAR[]"),
+    ),
+}
+
+# The macros ``register_analytics_macros`` creates. Each one registers only
 # when every view it binds against exists, so a corpus with no analytics run
 # has these names in the catalog and not on the connection — which is what
 # ``requires: analytics`` on an example means. The regex drift test parses the
 # signatures out of the DDL source.
+#
+# Removed 2026-09-27: ``autonomy_trend``, ``success_rate_by_work``,
+# ``sentiment_arc``, ``cluster_top_terms``, ``community_top_topics``.
 ANALYTICS_MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
-    "autonomy_trend": ("window_days",),
     "work_mix": ("since_days",),
-    "success_rate_by_work": ("since_days",),
-    "sentiment_arc": ("sid",),
     "friction_counts": ("since_days",),
     "friction_rate": ("since_days",),
     "friction_examples": ("label_name", "n"),
@@ -360,8 +458,6 @@ ANALYTICS_MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
     "perceived_counts": ("since_days",),
     "perceived_rate": ("since_days",),
     "perceived_examples": ("signal_name", "n"),
-    "cluster_top_terms": ("cid", "n"),
-    "community_top_topics": ("cid", "n"),
 }
 
 # Macros whose DDL is ``CREATE OR REPLACE MACRO ... AS TABLE`` — callers
@@ -443,6 +539,16 @@ DESCRIPTIONS: dict[str, str] = {
         "mode rows; order by seq. parent_uuid joins steps.source_uuids."
     ),
     "message_embeddings": "Step embeddings from the Lance store: uuid, model, dim, vector.",
+    "user_steps": (
+        "Every user-role step with its author: human, stop_hook, task_notification, "
+        "harness, or audit_prompt. Machine-written text arrives in the user role too."
+    ),
+    "human_turns": "Main-chain user steps a human wrote; the rate macros count these.",
+    "session_outcomes": (
+        "Deterministic per-session outcome: kind (interactive | one_shot_job | "
+        "turn_audit), outcome (pass | block | reviewer_blocked | interrupted | "
+        "clean_end), and the human_turns / interrupts / reviewer_blocks counts behind them."
+    ),
     # -- core macros --------------------------------------------------------
     "ago": "Timestamp N ago; use in filters like WHERE ts >= ago('7 days').",
     "model_used": "Model name one session used.",
@@ -465,33 +571,30 @@ DESCRIPTIONS: dict[str, str] = {
     ),
     "skill_rank": "Skill/slash-command leaderboard over the last N days.",
     "skill_source_mix": "Per skill: tool vs slash-command invocation counts (non-builtin).",
+    "step_author": (
+        "Who wrote a step: NULL for non-user sources, else human, stop_hook, "
+        "task_notification, harness, or audit_prompt (prefix rules)."
+    ),
     # -- analytics views ----------------------------------------------------
-    "session_classifications": ("LLM session labels: autonomy tier, work category, success, goal."),
+    "session_classifications": (
+        "LLM session labels: work category and goal. autonomy_tier and success are "
+        "always-NULL compatibility columns; use session_outcomes instead."
+    ),
     "session_goals": "Session goal text plus confidence (session_classifications projection).",
-    "message_trajectory": "Per-turn sentiment trajectory with transition labels.",
     "session_conflicts": "LLM-detected agent/user conflicts per session.",
     "conflicts_summary": "Conflict counts per session.",
     "user_friction": "Labeled user friction moments (correction, confusion, ...).",
-    "message_clusters": "Cluster id per message uuid (HDBSCAN; -1 = noise).",
-    "cluster_terms": "Top TF-IDF terms per cluster.",
-    "session_communities": "Community id per session from the session graph.",
-    "community_profile": "Community-detection quality profile (gamma sweep).",
     # -- analytics macros ---------------------------------------------------
-    "autonomy_trend": "Weekly autonomy-tier mix over the last N days.",
     "work_mix": "Work-category counts over the last N days.",
-    "success_rate_by_work": "Success/failure/partial rates per work category (known outcomes).",
-    "sentiment_arc": "Chronological sentiment trajectory for one session.",
     "friction_counts": "Counts per friction label over the last N days (NULL = full corpus).",
-    "friction_rate": "Per-session friction hits vs user message count.",
+    "friction_rate": "Per-session friction hits vs human turn count.",
     "friction_examples": "Top-N example user messages for one friction label.",
     "perceived_errors": "User-perceived agent errors (7 signals), uuid-anchored with evidence.",
     "perceived_summary": "Per-session perceived-error rollup: count, max severity, signals.",
     "perceived_counts": "Counts per perceived-error signal over the last N days.",
-    "perceived_rate": "Per-session perceived-error pressure vs user message count.",
+    "perceived_rate": "Per-session perceived-error pressure vs human turn count.",
     "perceived_examples": "Top-N evidence quotes for one perceived-error signal.",
     "conflicts_over_time": "Conflicts on the conversation-time axis over the last N days.",
-    "cluster_top_terms": "Top-N TF-IDF terms for one cluster id.",
-    "community_top_topics": "Top clusters within one community, each with its top terms.",
 }
 
 # Model pricing per 1M tokens (in_rate, out_rate) at public list rates from

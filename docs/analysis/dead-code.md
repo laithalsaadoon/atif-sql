@@ -2,6 +2,13 @@
 
 Measured 2026-08-28.
 
+Note (2026-09-27): the trajectory and structural pipelines were removed after this
+measurement, and with them these rows below: `TRAJECTORY_DIRNAME`,
+`CLUSTERS_FILENAME`, `CLUSTER_TERMS_FILENAME`, `COMMUNITIES_FILENAME`, and
+`COMMUNITY_PROFILE_FILENAME` no longer exist in
+`packages/atif-analytics/src/atif_analytics/domain/layout.py`. The counts and line
+numbers here haven't been re-measured.
+
 **Nothing in this workspace is deletable code.** Of 314 public top-level
 definitions across the 100 files under `packages/*/src`, 34 have no reference
 outside their own file, and **zero** have no reference anywhere. Every one of the

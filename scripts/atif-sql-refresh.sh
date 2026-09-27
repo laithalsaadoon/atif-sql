@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Keep atif-sql's materialized corpora + analytics caches fresh (cron; one lane per plane).
 #
-# Three lanes, one per plane:
+# Two lanes, one per plane:
 #
 #   materialize  */10  Zero-cost CPU: scan -> plan -> convert -> write through
 #                      `atif-sql materialize`. Incremental by watermark +
@@ -12,21 +12,24 @@
 #                      pricing makes 500 steps cost fractions of a cent, the
 #                      anti-join means a steady-state tick embeds only what
 #                      just materialized, and riding the same lane means no
-#                      fourth crontab line / lock / failure mode. A dedicated
+#                      third crontab line / lock / failure mode. A dedicated
 #                      */30 lane was considered and rejected: it buys nothing
 #                      but drift between corpus and embeddings. The explicit
 #                      --limit keeps any one tick bounded even after a bulk
 #                      re-materialize; the backlog clears across ticks.
-#   structural   :17   `atif-sql analyze --structural-only` — the zero-cost
-#                      analytics stages (cluster/terms/community). Guarded:
-#                      see below.
 #   llm          10:20 `atif-sql analyze --no-dry-run --llm-only` — REAL SPEND
-#                      (classify/trajectory/conflicts/friction on Bedrock).
+#                      (classify/conflicts/friction/perceived on Bedrock).
 #                      Deliberate and nightly. Guarded: see below.
+#
+# THE STRUCTURAL LANE WAS REMOVED 2026-09-27 with the cluster/terms/community
+# stages it ran. `structural` (and `struct`) is still ACCEPTED: it logs one
+# "lane removed" line and exits 0 before any memory cap, lock or CLI probe, so
+# a :17 crontab line nobody has deleted yet stays quiet instead of failing
+# hourly. Delete that line; the mode can go once no crontab carries it.
 #
 # THE ANALYTICS GUARD. The CLI the resolution order below lands on can predate
 # the `analyze` subcommand (an older `~/.local/bin/atif-sql` wins over the
-# workspace venv). Both analyze lanes therefore probe `atif-sql --help` first
+# workspace venv). The llm lane therefore probes `atif-sql --help` first
 # and, when `analyze` is absent, log "analytics not yet installed, skipping"
 # and exit 0 — an armed crontab line is a no-op against a CLI that cannot serve
 # it, not an hourly error. The selftest
@@ -34,7 +37,7 @@
 # this script against a shimmed CLI with and without `analyze`.
 #
 # ONE LOCK PER MODE — load-bearing. The lock file name carries $MODE, so a slow
-# structural run can never starve the nightly llm tick. Two runs of the SAME
+# materialize run can never starve the nightly llm tick. Two runs of the SAME
 # mode must not overlap (two writers to one corpus/watermark is corruption),
 # which is what the per-mode lock preserves. flock is NONBLOCKING: a busy lane
 # means SKIP this tick, never queue behind it.
@@ -95,7 +98,6 @@
 # Arm with ONE user-crontab line per lane (`atif-sql cron install` prints this
 # block; check `crontab -l` first — no tool writes the crontab silently):
 #   */10 * * * * <repo>/scripts/atif-sql-refresh.sh materialize >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1   # Claude Code corpora + the Codex pass
-#   17   * * * * <repo>/scripts/atif-sql-refresh.sh structural  >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
 #   20  10 * * * <repo>/scripts/atif-sql-refresh.sh llm         >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
 #
 # scripts/atif-sql-refresh-selftest.sh asserts this file's flags against the
@@ -135,34 +137,35 @@ log() { echo "$(date -Is) $*" >> "$LOG"; }
 # the wrong plane.
 case "${1:-}" in
   materialize|mat)   MODE=materialize ;;
-  structural|struct) MODE=structural ;;
   llm|--llm)         MODE=llm ;;
-  *) log "FATAL: unknown mode '${1:-}' (expected: materialize | structural | llm)"; exit 64 ;;
+  structural|struct)
+    # Removed lane (see header): one line, exit 0, nothing else runs.
+    log "[structural] lane removed 2026-09-27 (cluster/terms/community cut); delete the :17 crontab line"
+    exit 0 ;;
+  *) log "FATAL: unknown mode '${1:-}' (expected: materialize | llm)"; exit 64 ;;
 esac
 
 # MEMORY CAP PER LANE. Each lane re-execs itself ONCE inside a transient
 # systemd user scope with a hard MemoryMax (and no swap), so a lane that
 # outgrows its budget is ended inside its own cgroup instead of pushing the
-# shared user slice to its limit. On 2026-09-25 01:43Z user-1001.slice hit
-# its 110 GiB MemoryMax with the structural lane holding 6.5 GB and a
-# materialize tick running; the kernel's OOM choice landed in an unrelated
-# service on the same host and took it down. The re-exec happens BEFORE the lane lock is taken,
+# shared user slice to its limit. On 2026-09-25 01:43Z the user slice hit
+# its 110 GiB MemoryMax with the (since removed) structural lane holding
+# 6.5 GB and a materialize tick running; the kernel's OOM choice landed in an
+# unrelated service and took it down. The re-exec happens BEFORE the lane lock is taken,
 # so the capped copy owns the lock and the single-flight rules below are
 # unchanged. ATIF_SQL_REFRESH_MEMORY_MAX_<LANE> overrides a lane's budget
 # (any systemd size, e.g. 16G); `off` runs uncapped. With no reachable user
 # manager the lane runs uncapped and logs that it did.
 #
 # Budgets are measured peaks plus headroom (2026-09-25, 236k-embedding primary
-# corpus). structural peaked at ~17 GB in the terms stage (dense clusters x
-# vocabulary matrix, with HDBSCAN's 16 workers still alive). materialize is
+# corpus). materialize is
 # set by its embed piggyback, not by materialize: DuckDB sizes memory_limit to
 # 80% of the scope's MemoryMax, and reading the corpus's 907 MB session needs
 # a limit between 16 and 20 GiB — MemoryMax=20G failed with OutOfMemory, 24G
-# passed. llm parses that same session in ~1.8 GB. Lower these only after the
-# embed pass stops re-reading unchanged sessions and terms stays sparse.
+# passed. llm parses that same session in ~1.8 GB. Lower materialize only
+# after the embed pass stops re-reading unchanged sessions.
 case "$MODE" in
   materialize) mem_max_default=24G ;;
-  structural)  mem_max_default=24G ;;
   llm)         mem_max_default=8G ;;
 esac
 mem_max_var="ATIF_SQL_REFRESH_MEMORY_MAX_${MODE^^}"
@@ -347,18 +350,6 @@ run_materialize() {
   fi
 }
 
-run_structural() {
-  # The zero-cost analytics stages only. `--structural-only` is the opt-IN
-  # spelling (rather than an opt-out skip list) so a new upstream stage can
-  # never join this unattended lane silently.
-  local name="$1"
-  if ! "$ATIF_SQL" analyze --structural-only >> "$LOG" 2>&1 9>&-; then
-    log "$name: structural refresh FAILED (see above)"
-    return 1
-  fi
-  log "$name: structural refresh ok"
-}
-
 run_llm() {
   # `--no-dry-run` is what makes analyze actually spend, so it appears exactly
   # here, in the lane a human scheduled deliberately, and nowhere else in this
@@ -371,6 +362,11 @@ run_llm() {
   # lanes. Both flags stay on the line because the selftest asserts them, set
   # to values the corpus cannot reach; the previous 50 / 25.0 skipped the
   # friction and perceived lanes on five consecutive nights.
+  #
+  # `--llm-only` is a no-op on a CLI from 2026-09-27 on (every stage is an
+  # LLM stage), but an older installed CLI still has structural stages and
+  # needs it to keep them out of this lane. Drop it once no host runs a CLI
+  # that predates the cut.
   local name="$1"
   if ! "$ATIF_SQL" analyze --no-dry-run --llm-only --max-sessions 1000000 --max-cost-usd 1000000 >> "$LOG" 2>&1 9>&-; then
     log "$name: LLM refresh FAILED (see above)"
@@ -428,7 +424,6 @@ for i in "${!CORPUS_NAMES[@]}"; do
 
   case "$MODE" in
     materialize) run_materialize "$name" || overall=1 ;;
-    structural)  run_structural "$name" || overall=1 ;;
     llm)         run_llm "$name" || overall=1 ;;
   esac
 done

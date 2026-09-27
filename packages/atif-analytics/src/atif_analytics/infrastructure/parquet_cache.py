@@ -8,14 +8,14 @@ the cache size. The legacy single-file branch is kept for tool-side
 inspection of ad-hoc ``*.parquet`` targets (tests use it).
 
 Public API: :func:`is_sharded_dir`, :func:`write_part`, :func:`read_all`,
-:func:`iter_part_files`, :func:`count_rows`, :func:`replace_sessions`.
+:func:`iter_part_files`, :func:`count_rows`. (``replace_sessions``, the
+per-session shard rewrite, left with the trajectory pipeline, its one
+caller, on 2026-09-27.)
 """
 
 from __future__ import annotations
 
 import time
-from bisect import bisect_left
-from collections.abc import Iterable
 from pathlib import Path
 
 import polars as pl
@@ -76,8 +76,8 @@ def iter_part_files(target: Path) -> list[Path]:
     legacy single-file path: ``[target]`` if it exists, else ``[]``.
 
     Torn files are dropped here rather than at each call site, because this
-    is the one choke point every reader shares — :func:`read_all`,
-    :func:`count_rows`, and :func:`replace_sessions` — so
+    is the one choke point every reader shares — :func:`read_all` and
+    :func:`count_rows` — so
     :data:`MIN_PARQUET_BYTES` governs the sharded read path and not only the
     legacy rewrite in :func:`write_part`.
     """
@@ -142,114 +142,6 @@ def count_rows(target: Path) -> int:
     return total
 
 
-def _shard_may_hold(part: Path, key_column: str, sorted_ids: list[str]) -> bool:
-    """True when ``part``'s footer statistics do not rule out every wanted id.
-
-    Reads each row group's ``[min, max]`` for ``key_column`` and asks whether
-    ANY wanted id falls inside it, via a binary search over the sorted id
-    list. That is a membership test, not a range-overlap test, and the
-    distinction is what makes it pay on the shape the pipelines actually
-    write: one random uuid session per shard. A ``[min(ids), max(ids)]``
-    comparison spans nearly the whole uuid space there, so it rules out
-    almost nothing; the membership test rules each shard out individually.
-    (Only when keys happen to be near-sorted do the two converge — and that
-    is not this cache's shape.)
-
-    Anything unclear — no statistics, an unreadable footer — answers True,
-    because a pruning check that guesses wrong drops rows.
-    """
-    import pyarrow.parquet as pq
-
-    try:
-        meta = pq.ParquetFile(str(part)).metadata
-        names = list(meta.schema.names)
-        if key_column not in names:
-            # No key column, so no row here can match — the full-read path
-            # would reach the same conclusion after decoding the shard.
-            return False
-        col_index = names.index(key_column)
-        for group in range(meta.num_row_groups):
-            stats = meta.row_group(group).column(col_index).statistics
-            if stats is None or not stats.has_min_max:
-                return True
-            lo = str(stats.min)
-            hi = str(stats.max)
-            at = bisect_left(sorted_ids, lo)
-            if at < len(sorted_ids) and sorted_ids[at] <= hi:
-                return True
-    except (OSError, ValueError, KeyError) as exc:
-        logger.warning(
-            "replace_sessions: unreadable footer for {} ({}); reading in full", part, exc
-        )
-        return True
-    return False
-
-
-def replace_sessions(
-    target: Path,
-    *,
-    key_column: str,
-    session_ids: Iterable[str],
-    skip_parts: Iterable[Path] = (),
-) -> int:
-    """Drop rows whose ``key_column`` is in ``session_ids`` across every shard.
-
-    A re-admitted session may already have rows under an earlier shard;
-    without this, those rows accumulate and every
-    ``(session_id, prev_uuid, curr_uuid)`` pair duplicates on rerun.
-
-    Call this ONCE per run with every id whose rows are being replaced: the
-    scan walks the whole shard set, so a per-session call in a loop pays it
-    once per session. ``skip_parts`` exempts shards the caller has just
-    written, letting fresh rows be written before the replace runs. Shards
-    with matches are rewritten in place; shards that become empty are
-    unlinked. Returns the total rows removed.
-    """
-    ids = set(session_ids)
-    if not ids:
-        return 0
-    parts = iter_part_files(target)
-    if not parts:
-        return 0
-    exempt = {p.resolve() for p in skip_parts}
-    sorted_ids = sorted(ids)
-    removed_total = 0
-    for part in parts:
-        if part.resolve() in exempt:
-            continue
-        if not _shard_may_hold(part, key_column, sorted_ids):
-            continue
-        try:
-            df = pl.read_parquet(part)
-        except (OSError, pl.exceptions.ComputeError) as exc:
-            # A truncated or unreadable shard must not block the replace.
-            logger.warning("replace_sessions: unreadable shard {} ({}); skipping", part, exc)
-            continue
-        if key_column not in df.columns or df.height == 0:
-            continue
-        mask = df[key_column].is_in(list(ids))
-        hit_count = int(mask.sum())
-        if hit_count == 0:
-            continue
-        removed_total += hit_count
-        kept = df.filter(~mask)
-        if kept.height == 0:
-            try:
-                part.unlink()
-            except OSError as exc:
-                logger.warning("replace_sessions: failed to unlink empty shard {}: {}", part, exc)
-            continue
-        kept.write_parquet(part)
-    if removed_total:
-        logger.info(
-            "replace_sessions: dropped {} row(s) for {} session(s) under {}",
-            removed_total,
-            len(ids),
-            target,
-        )
-    return removed_total
-
-
 class ParquetCache:
     """The cache port over one sharded-parquet target.
 
@@ -281,21 +173,6 @@ class ParquetCache:
         """Sorted list of backing parquet files."""
         return iter_part_files(self._target)
 
-    def replace_sessions(
-        self,
-        *,
-        key_column: str,
-        session_ids: Iterable[str],
-        skip_parts: Iterable[Path] = (),
-    ) -> int:
-        """Drop rows keyed to ``session_ids``; return the removed count."""
-        return replace_sessions(
-            self._target,
-            key_column=key_column,
-            session_ids=session_ids,
-            skip_parts=skip_parts,
-        )
-
 
 __all__ = [
     "MIN_PARQUET_BYTES",
@@ -305,6 +182,5 @@ __all__ = [
     "is_sharded_dir",
     "iter_part_files",
     "read_all",
-    "replace_sessions",
     "write_part",
 ]

@@ -21,7 +21,12 @@ Rendering rules the prompts depend on (documented per CONTRACT-V2):
 
 * role vocabulary — ATIF ``Step.source`` is ``user``/``agent``; ``agent``
   renders as ``assistant`` so the prompts' "user turns, assistant turns"
-  framing keeps matching the transcript.
+  framing keeps matching the transcript. A user-role step a HUMAN did not
+  write (:mod:`atif_analytics.domain.authorship`) renders under its author
+  label instead — ``stop_hook``, ``task_notification``, ``harness``,
+  ``audit_prompt`` — with its body clipped to
+  :data:`NON_HUMAN_PREVIEW_CHARS`, so the model never reads hook feedback or
+  a skill body as the user speaking, and a 20K-char skill body costs 300.
 * sidechain steps are EXCLUDED: the prompts are calibrated on transcripts
   containing no subagent content, and harbor inlines sidechains into the
   flat step list, so they must be filtered back out here.
@@ -45,6 +50,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+
+from atif_analytics.domain.authorship import SessionKind, kind_of, step_author
 
 #: Default per-``tool_use`` args preview length.
 TOOL_INPUT_PREVIEW_CHARS: int = 400
@@ -73,17 +80,10 @@ def escape_uuid_headers(text: str) -> str:
     return _UUID_HEADER_RE.sub(UUID_HEADER_ESCAPE, text)
 
 
-#: Claude Code injects these two strings as user-role messages even though
-#: they're system-generated CLI bookkeeping, so neither counts as a human
-#: turn. Defined ONCE here in the domain — the friction candidate filter and
-#: :func:`human_ai_pair_count` both reference it (application may import
-#: domain; the reverse is contract-forbidden).
-CLI_BOOKKEEPING_TEXTS: frozenset[str] = frozenset(
-    {
-        "Continue from where you left off.",
-        "[Request interrupted by user for tool use]",
-    }
-)
+#: Body budget for a user-role step a human did not write. Enough to show
+#: what the machine said (the first lines of a Stop hook's verdict, the task
+#: a notification reports on) without paying for a whole skill body.
+NON_HUMAN_PREVIEW_CHARS: int = 300
 
 
 def tool_input_preview(
@@ -115,7 +115,10 @@ class StepEvent:
     raw-record uuid per CONTRACT-V2 — the same choice the VSS branch keys
     embeddings on), or ``None`` when the enrichment pass recorded none.
     ``tool_calls`` is ``[(function_name, args_json)]``; ``tool_results`` is
-    ``[(source_call_id, content_str)]``.
+    ``[(source_call_id, content_str)]``. ``author`` is the
+    :func:`~atif_analytics.domain.authorship.step_author` label for a user
+    step (``harness`` for a compaction summary) and ``None`` for any other
+    role; left unset, it is derived from ``role`` and ``text``.
     """
 
     ts: str
@@ -127,6 +130,26 @@ class StepEvent:
     has_error_result: bool = False
     tool_calls: list[tuple[str, str]] = field(default_factory=list)
     tool_results: list[tuple[str, str]] = field(default_factory=list)
+    author: str | None = None
+
+    def __post_init__(self) -> None:
+        """Derive ``author`` for a user step the caller did not label."""
+        if self.author is None and self.role == "user":
+            self.author = "harness" if self.is_compact_summary else step_author("user", self.text)
+
+
+def is_human_turn(step: StepEvent) -> bool:
+    """A main-chain user step a human wrote: what every reader counts as the user."""
+    return step.role == "user" and not step.is_sidechain and step.author == "human"
+
+
+def session_kind(steps: list[StepEvent]) -> SessionKind:
+    """``interactive`` | ``one_shot_job`` | ``turn_audit`` for one session.
+
+    Same rule as atif-duck's ``session_outcomes.kind``: the first main-chain
+    user step's author, then the count of human turns.
+    """
+    return kind_of(s.author or "human" for s in steps if s.role == "user" and not s.is_sidechain)
 
 
 def main_chain(steps: list[StepEvent]) -> list[StepEvent]:
@@ -158,6 +181,9 @@ def render_session_text(
     Every body (text, tool arguments, tool results) is run through
     :func:`escape_uuid_headers` first, so only THIS function writes a real
     ``[uuid=`` header and a body cannot forge one.
+
+    A user step a human did not write renders under its ``author`` label
+    with its body clipped to :data:`NON_HUMAN_PREVIEW_CHARS`.
     """
     chain = main_chain(steps)
     events_total = sum(
@@ -170,11 +196,16 @@ def render_session_text(
     for step in chain:
         candidates: list[str] = []
         if step.text:
-            body = escape_uuid_headers(step.text)
+            role = step.role
+            text = step.text
+            if role == "user" and step.author not in (None, "human"):
+                role = step.author or role
+                text = tool_result_preview(text, NON_HUMAN_PREVIEW_CHARS)
+            body = escape_uuid_headers(text)
             if include_uuids and step.uuid:
-                candidates.append(f"[uuid={step.uuid} {step.role} {step.ts}] {body}")
+                candidates.append(f"[uuid={step.uuid} {role} {step.ts}] {body}")
             else:
-                candidates.append(f"[{step.role} {step.ts}] {body}")
+                candidates.append(f"[{role} {step.ts}] {body}")
         for name, args_json in step.tool_calls:
             preview = escape_uuid_headers(tool_input_preview(args_json))
             candidates.append(f"[tool_use:{name or 'tool'} {step.ts}] {preview}")
@@ -196,56 +227,17 @@ def render_session_text(
     return "\n".join(lines)
 
 
-def text_windows(
-    steps: list[StepEvent],
-    session_id: str,
-) -> list[tuple[str, str | None, str, str | None, str, str | None, str]]:
-    """Adjacent text-step pairs for the trajectory pipeline (turn_window analogue).
-
-    Main chain only, sidechain + compact-summary steps excluded: a compact
-    summary is synthetic text, not a turn the user or model produced, so
-    pairing across it would invent a transition. Steps without a uuid or
-    without text are skipped — the uuid keys the parquet row, so an
-    unkeyable step cannot participate in a window.
-
-    Returns window tuples ``(session_id, prev_uuid, curr_uuid, prev_role,
-    curr_role, prev_text, curr_text)``; the session-first window has
-    ``prev_* = None``.
-    """
-    turns = [
-        s for s in steps if not s.is_sidechain and not s.is_compact_summary and s.text and s.uuid
-    ]
-    out: list[tuple[str, str | None, str, str | None, str, str | None, str]] = []
-    prev: StepEvent | None = None
-    for curr in turns:
-        out.append(
-            (
-                session_id,
-                prev.uuid if prev is not None else None,
-                curr.uuid or "",
-                prev.role if prev is not None else None,
-                curr.role,
-                prev.text if prev is not None else None,
-                curr.text,
-            )
-        )
-        prev = curr
-    return out
-
-
 def human_ai_pair_count(steps: list[StepEvent]) -> int:
     """Count completed human→AI text exchanges (the perceived-error gate).
 
     Mirrors LangSmith's Perceived Error eligibility rule ("at least two
-    human-AI message pairs"): one pair = a non-empty main-chain user text
-    turn followed later by a non-empty main-chain assistant text turn.
-    Compact-summary steps don't count (synthetic, not conversation), CLI
-    bookkeeping strings don't count on the user side (synthetic user-role
-    injections, not the human responding — :data:`CLI_BOOKKEEPING_TEXTS`),
-    and consecutive user turns collapse into the same pending pair —
-    judging a perceived error requires the human RESPONDING to AI output,
-    so only a user turn that actually received an assistant reply
-    completes a pair.
+    human-AI message pairs"): one pair = a HUMAN turn (:func:`is_human_turn`)
+    followed later by a non-empty main-chain assistant text turn. A user-role
+    step a human did not write (hook feedback, notifications, harness text,
+    compaction summaries) is not the human responding, so it neither opens
+    nor closes a pair, and consecutive human turns collapse into the same
+    pending pair — only a human turn that actually received an assistant
+    reply completes one.
     """
     pairs = 0
     awaiting_reply = False
@@ -253,7 +245,7 @@ def human_ai_pair_count(steps: list[StepEvent]) -> int:
         if s.is_sidechain or s.is_compact_summary or not s.text:
             continue
         if s.role == "user":
-            if s.text.strip() in CLI_BOOKKEEPING_TEXTS:
+            if not is_human_turn(s):
                 continue
             awaiting_reply = True
         elif awaiting_reply:
@@ -263,15 +255,16 @@ def human_ai_pair_count(steps: list[StepEvent]) -> int:
 
 
 __all__ = [
-    "CLI_BOOKKEEPING_TEXTS",
+    "NON_HUMAN_PREVIEW_CHARS",
     "TOOL_INPUT_PREVIEW_CHARS",
     "UUID_HEADER_ESCAPE",
     "StepEvent",
     "escape_uuid_headers",
     "human_ai_pair_count",
+    "is_human_turn",
     "main_chain",
     "render_session_text",
-    "text_windows",
+    "session_kind",
     "tool_input_preview",
     "tool_result_preview",
 ]

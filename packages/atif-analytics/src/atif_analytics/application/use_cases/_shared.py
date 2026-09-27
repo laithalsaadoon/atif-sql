@@ -1,12 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-use-case plumbing shared by the five LLM pipelines.
+"""Cross-use-case plumbing shared by the four LLM pipelines.
 
-The five are ``PIPELINE_NAMES`` in
+The four are ``PIPELINE_NAMES`` in
 :mod:`atif_analytics.infrastructure.sqlite_state.checkpointer`: classify,
-trajectory, conflicts, user_friction, perceived. The three structural
-pipelines (cluster, terms, community) call no model and do not use this
-module.
+conflicts, user_friction, perceived.
 
 The provider factory + per-pipeline usage/cost logging (one provider
 instance per pipeline run, usage accumulated in the provider's
@@ -40,9 +38,9 @@ def build_provider(
 ) -> tuple[LlmStructuredProvider, ModelSpec]:
     """One provider per pipeline run, sized per atif-models settings.
 
-    CONTRACT-V2 §Pipeline size assignments: classify/trajectory=medium,
-    conflicts=large, friction=small — all resolved through the atif-models
-    registry (no model id is written down here).
+    Size assignments (atif-models ``LlmSettings``): classify=small,
+    conflicts=large, friction=small, perceived=medium — all resolved through
+    the atif-models registry (no model id is written down here).
     """
     from atif_models.infrastructure.openai_bedrock import OpenAiBedrockProvider
 
@@ -108,14 +106,10 @@ class RunBudget:
     the ceiling is a stop-dispatch trigger, not a hard cap. Worst case the run
     ends at ``max_cost_usd`` plus the cost of the units already in flight when
     the crossing became visible — at most :data:`BUDGET_CHECK_BATCH` units on
-    the most expensive watched model. Two dispatch shapes deliver that bound:
-    :func:`gather_under_budget` sends units in batches of that size and checks
-    the budget at each batch boundary, while trajectory (which starts every
-    session concurrently) holds a ``BUDGET_CHECK_BATCH``-wide semaphore and
-    reads the budget under it. Either way the overshoot does NOT scale with
-    the session ceiling or the write chunk size. Pinned by
-    ``test_overshoot_never_exceeds_the_documented_budget_batch`` over both
-    shapes.
+    the most expensive watched model: :func:`gather_under_budget` sends units
+    in batches of that size and checks the budget at each batch boundary, so
+    the overshoot does NOT scale with the session ceiling or the write chunk
+    size. Pinned by ``test_overshoot_never_exceeds_the_documented_budget_batch``.
     """
 
     def __init__(self, max_cost_usd: float) -> None:

@@ -16,6 +16,12 @@ the refusal instead lands as a durable audit row in the
 ``analytics/refusals`` sidecar (``{pipeline, unit_id, reason,
 refused_at}``) so refusal-skips are queryable, not just log lines.
 
+Only ``interactive`` sessions are sent (``session_kind``, the rule atif-duck's
+``session_outcomes.kind`` applies): a turn audit has no human turn and a
+one-shot job has one, and a stance conflict between the agent and the user
+needs the user to answer the agent at least once. Both kinds are
+checkpointed as skipped without a call; growth re-admits.
+
 The uuid-validity guard validates the model's returned ``turn_*_uuid``
 values against the session's ``edges.jsonl`` uuid set before they land in
 the parquet — a pair naming a uuid that is not a real raw-record uuid can
@@ -91,6 +97,9 @@ _PARQUET_SCHEMA: dict[str, Any] = {
 #: fixed guess.
 _AVG_OUT_TOKENS = 400
 
+#: The one session kind conflicts spends on.
+_CONFLICT_KIND = "interactive"
+
 
 def _already_done(cache: ParquetCache) -> set[str]:
     """Session ids already present in the cache."""
@@ -156,6 +165,10 @@ async def _conflicts_async(
         if len(pending) >= max_sessions:
             deferred += 1
             continue
+        # Kind gate before rendering (see the module docstring).
+        if reader.session_kind(sid) != _CONFLICT_KIND:
+            empty_sids.append(sid)
+            continue
         text = reader.session_text(sid, include_uuids=True)
         if not text:
             # A session that renders to nothing yields no row and no LLM
@@ -171,7 +184,7 @@ async def _conflicts_async(
             rows=[(sid, *bounds.get(sid, (None, None))) for sid in empty_sids],
         )
         logger.info(
-            "conflicts: checkpointed {} sessions with empty transcripts as skipped",
+            "conflicts: checkpointed {} non-interactive or empty-transcript sessions as skipped",
             len(empty_sids),
         )
 
@@ -373,7 +386,15 @@ def detect_conflicts(
         bounds = reader.session_bounds(since_days=since_days, limit=limit)
         pending = [sid for sid in bounds if sid not in already]
         max_sessions = settings.llm_max_sessions_per_run
-        capped = pending[:max_sessions]
+        capped: list[str] = []
+        skipped_kind = 0
+        for sid in pending:
+            if len(capped) >= max_sessions:
+                break
+            if reader.session_kind(sid) != _CONFLICT_KIND:
+                skipped_kind += 1
+                continue
+            capped.append(sid)
         in_tokens = sum(
             tokens_for_chars(len(reader.session_text(sid, include_uuids=True))) for sid in capped
         )
@@ -390,6 +411,7 @@ def detect_conflicts(
         return {
             "pipeline": "conflicts",
             "candidates": len(pending),
+            "skipped_not_interactive": skipped_kind,
             "capped_candidates": len(capped),
             "llm_calls": len(capped),
             "estimated_input_tokens": in_tokens,

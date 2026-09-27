@@ -32,9 +32,10 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
+#: The checkpointed LLM pipelines. ``trajectory`` left on 2026-09-27; its
+#: rows stay in an older ``state.db`` and nothing reads them.
 PIPELINE_NAMES: tuple[str, ...] = (
     "classify",
-    "trajectory",
     "conflicts",
     "user_friction",
     "perceived",

@@ -16,7 +16,7 @@ from typing import Any, override
 
 import polars as pl
 import pytest
-from analytics_fixtures import SESSION_IDS, FakeProvider
+from analytics_fixtures import S1_MACHINE_UUIDS, SESSION_IDS, FakeProvider
 
 from atif_analytics.application.use_cases._shared import RunBudget
 from atif_analytics.application.use_cases.perceived import detect_perceived_errors
@@ -131,13 +131,18 @@ def test_perceived_writes_valid_rows_and_drops_hallucinated_uuid(
     assert all("[uuid=" in p for _, p in provider.calls)
 
 
-class _AssistantUuidProvider(FakeProvider):
-    """Returns one perceived-error row anchored on an ASSISTANT turn's uuid.
+class _AnchoredProvider(FakeProvider):
+    """Returns one perceived-error row anchored on a chosen raw-record uuid.
 
-    ``u-02`` is a real raw-record uuid (it's in edges.jsonl and in the
-    rendered ``[uuid=...]`` headers) but belongs to an agent step — the
-    documented invariant is USER turns only, so the guard must drop it.
+    Every uuid used below is real (it's in edges.jsonl and in the rendered
+    ``[uuid=...]`` headers) but belongs to a step the human did not write: an
+    agent step, or a user-role step a hook, retry nudge or image read wrote.
+    The documented invariant is HUMAN turns only, so the guard must drop it.
     """
+
+    def __init__(self, anchor: str) -> None:
+        super().__init__()
+        self.anchor = anchor
 
     @override
     async def classify_structured(self, *, system: str, prompt: str, schema: type) -> Any:
@@ -146,11 +151,11 @@ class _AssistantUuidProvider(FakeProvider):
             return PerceivedErrorsResult(
                 errors=[
                     PerceivedError(
-                        turn_uuid="u-02",
+                        turn_uuid=self.anchor,
                         signal="acknowledged_mistake",
                         severity="minor",
                         evidence="Reading the test file now.",
-                        agent_error_summary="Anchored on an assistant turn.",
+                        agent_error_summary="Anchored on a non-human turn.",
                         confidence=0.7,
                     )
                 ]
@@ -158,11 +163,12 @@ class _AssistantUuidProvider(FakeProvider):
         return await super().classify_structured(system=system, prompt=prompt, schema=schema)
 
 
-def test_perceived_drops_row_anchored_on_assistant_turn_uuid(
-    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any]
+@pytest.mark.parametrize("anchor", ["u-02", *S1_MACHINE_UUIDS])
+def test_perceived_drops_row_anchored_on_a_non_human_turn(
+    settings: AnalyticsSettings, reader: CorpusReader, ports: dict[str, Any], anchor: str
 ) -> None:
-    """USER-turn enforcement: an edges-valid assistant uuid is still dropped."""
-    provider = _AssistantUuidProvider()
+    """HUMAN-turn enforcement: an edges-valid agent or machine uuid is still dropped."""
+    provider = _AnchoredProvider(anchor)
     n = detect_perceived_errors(
         settings,
         dry_run=False,

@@ -17,7 +17,9 @@ Clean sessions produce ZERO rows.
 
 Eligibility (LangSmith parity): a session needs >= 2 human-AI message
 pairs before it can be judged — perceiving an error requires the human
-RESPONDING to AI output. Ineligible sessions are checkpointed as skipped
+RESPONDING to AI output. Only HUMAN turns open a pair (Stop hook feedback,
+task notifications and harness text do not), so a turn audit (no human
+turn) and a one-shot job (one) are never eligible. Ineligible sessions are checkpointed as skipped
 (zero LLM calls) so they never re-render; if the session later grows, the
 advancing (last_ts, mtime) bounds re-admit it through the normal
 checkpoint path. Two more LangSmith runtime traits carry over through
@@ -26,10 +28,11 @@ materializer only finalizes settled sessions) and "skipped/failed units
 are never billed" (checkpoint + blocked-units retry gate).
 
 The uuid-validity guard (conflicts precedent) validates the model's
-returned ``turn_uuid`` values against the session's USER-role main-chain
-text-step header uuids before they land in the parquet — the documented
-invariant is USER turns only, so an assistant uuid (or a hallucinated one)
-is dropped at the source (logged, reason 'non-user turn_uuid'). The guard
+returned ``turn_uuid`` values against the session's HUMAN-turn header uuids
+before they land in the parquet — the documented invariant is a user turn
+the human wrote, so an assistant uuid, a Stop hook's uuid (or a
+hallucinated one) is dropped at the source (logged, reason 'non-user
+turn_uuid'). The guard
 FAILS CLOSED: a session that rendered no user-turn header uuids at all has
 no universe to validate against, so its rows are dropped rather than
 admitted unverified. Refusals land in the ``analytics/refusals`` sidecar (a
@@ -75,7 +78,7 @@ from atif_analytics.application.use_cases._shared import (
 )
 from atif_analytics.domain.costs import estimate_cost_tokens, tokens_for_chars
 from atif_analytics.domain.models import PerceivedErrorsResult
-from atif_analytics.domain.transcript import human_ai_pair_count
+from atif_analytics.domain.transcript import human_ai_pair_count, is_human_turn
 from atif_analytics.infrastructure.corpus_reader import CorpusReader
 from atif_analytics.infrastructure.sqlite_state import checkpointer
 
@@ -121,17 +124,14 @@ def _eligible(reader: CorpusReader, session_id: str) -> bool:
 
 
 def _user_turn_uuids(reader: CorpusReader, session_id: str) -> set[str]:
-    """The USER-role main-chain text-step header uuids the model actually saw.
+    """The human-turn header uuids the model actually saw.
 
     Exactly the ``[uuid=... user ...]`` headers :func:`render_session_text`
-    emits under ``include_uuids``, so this is the validity universe for a
-    returned ``turn_uuid``.
+    emits under ``include_uuids`` (machine-written user-role steps render
+    under their author label instead), so this is the validity universe for
+    a returned ``turn_uuid``.
     """
-    return {
-        s.uuid
-        for s in reader.load_steps(session_id)
-        if s.role == "user" and s.text and not s.is_sidechain and s.uuid
-    }
+    return {s.uuid for s in reader.load_steps(session_id) if is_human_turn(s) and s.text and s.uuid}
 
 
 async def _perceived_async(

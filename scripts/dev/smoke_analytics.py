@@ -2,10 +2,10 @@
 
 """LIVE smoke: the four LLM pipelines over the /tmp/atif-e2e corpus.
 
-Runs classify + friction + trajectory + conflicts with ``--no-dry-run
+Runs classify + friction + conflicts + perceived with ``--no-dry-run
 --limit 3`` against the real materialized corpus at ``/tmp/atif-e2e``
-(terra for classify/trajectory, sol for conflicts, luna for friction — the
-CONTRACT-V2 size assignments through the atif-models registry).
+(luna for classify and friction, sol for conflicts, terra for perceived —
+the size assignments through the atif-models registry).
 
 Costs real money (a few dollars at most for three sessions) and needs
 ambient AWS creds with bedrock-runtime access in us-east-1. State +
@@ -29,7 +29,7 @@ from typing import Any
 from atif_analytics.application.use_cases.classify import classify_sessions
 from atif_analytics.application.use_cases.conflicts import detect_conflicts
 from atif_analytics.application.use_cases.friction import detect_user_friction
-from atif_analytics.application.use_cases.trajectory import trajectory_messages
+from atif_analytics.application.use_cases.perceived import detect_perceived_errors
 from atif_analytics.infrastructure.corpus_reader import CorpusReader
 from atif_analytics.infrastructure.parquet_cache import ParquetCache
 from atif_analytics.infrastructure.settings import AnalyticsSettings
@@ -56,8 +56,8 @@ def main() -> None:
     pipelines = [
         ("classify", classify_sessions, layout.classifications_dir),
         ("friction", detect_user_friction, layout.user_friction_dir),
-        ("trajectory", trajectory_messages, layout.trajectory_dir),
         ("conflicts", detect_conflicts, layout.conflicts_dir),
+        ("perceived", detect_perceived_errors, layout.perceived_errors_dir),
     ]
 
     llm = settings.llm()

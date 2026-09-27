@@ -32,6 +32,7 @@ from atif_duck.domain.catalog import (
     VIEW_NAMES,
     VIEW_SCHEMA,
 )
+from atif_duck.infrastructure.authorship import register_authorship
 from atif_duck.infrastructure.registry import register, register_macros
 
 
@@ -64,8 +65,12 @@ def test_view_names_match_schema_keys() -> None:
 
 
 def test_macro_signatures_match_ddl() -> None:
-    """``MACRO_SIGNATURES`` must equal the args parsed from the DDL strings."""
-    source = inspect.getsource(register_macros)
+    """``MACRO_SIGNATURES`` must equal the args parsed from the DDL strings.
+
+    The core macros live in two registration functions: ``register_macros``
+    and ``register_authorship`` (``step_author``, beside the views it feeds).
+    """
+    source = inspect.getsource(register_macros) + inspect.getsource(register_authorship)
     pattern = re.compile(
         r"CREATE\s+OR\s+REPLACE\s+MACRO\s+(\w+)\s*\(([^)]*)\)",
         re.IGNORECASE,

@@ -119,55 +119,47 @@ the audit never read the session separately.
 - `packages/atif-converter/src/atif_converter/domain/fidelity.py:44`
 - `packages/atif-cli/src/atif_cli/errors.py:25`
 
-## analyze — orchestrate the eight analytics stages
+## analyze — orchestrate the analytics stages
 
-Entry point: `packages/atif-cli/src/atif_cli/app.py:659`
+Entry point: `packages/atif-cli/src/atif_cli/app.py:1240`
 
 1. Resolve `AnalyticsSettings`, reusing the corpus-root resolution the other
    commands share, then let `--max-sessions` and `--max-cost-usd` override the
-   env ceilings so a crontab line carries its spend cap visibly — `:691`.
-2. Reject `--structural-only` together with `--llm-only` and derive the two
-   lane booleans —
-   `packages/atif-analytics/src/atif_analytics/application/analyze.py:61`.
-3. Build one `CorpusReader` shared by every stage: the parsed-steps memo is the
-   expensive part and all five LLM stages walk the same sessions — `:72`,
-   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:138`.
-4. Structural lane, zero LLM cost — cluster the Lance store with UMAP plus
-   HDBSCAN, skipping when the mtime sidecar says the input is unchanged and
-   `--force-cluster` is absent —
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py:50`.
-5. Label those clusters with c-TF-IDF terms, then detect communities over
-   session centroids with Leiden and CPM —
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/terms.py:54`,
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/community.py:94`.
-6. Construct the run-wide `RunBudget` from `llm_max_cost_usd_per_run`, priced
+   env ceilings so a crontab line carries its spend cap visibly — `:1307`.
+   `--llm-only` is accepted and dropped, since every stage is an LLM stage.
+2. Build one `CorpusReader` shared by every stage: the parsed-steps memo is the
+   expensive part and every stage walks the same sessions —
+   `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`,
+   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`.
+3. Construct the run-wide `RunBudget` from `llm_max_cost_usd_per_run`, priced
    from the providers' running actual usage rather than estimates —
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:90`.
-7. Walk the five LLM stages in declaration order. A stage entered with the
-   budget already exhausted is skipped with nothing stamped, its
-   consecutive-skip streak persisted, and the log escalates to ERROR at three
-   consecutive runs —
-   `packages/atif-analytics/src/atif_analytics/application/analyze.py:161`,
-   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:217`.
-8. Emit the per-stage summary carrying `budget_exhausted` and, on a real run,
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:94`.
+4. Walk the stages (classify, conflicts, friction, perceived) in
+   declaration order. A stage entered with the budget already exhausted is
+   skipped with nothing stamped, its consecutive-skip streak persisted, and the
+   log escalates to ERROR at three consecutive runs —
+   `packages/atif-analytics/src/atif_analytics/application/analyze.py:97`,
+   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:218`.
+5. Emit the per-stage summary carrying `budget_exhausted` and, on a real run,
    `llm_spent_usd` —
-   `packages/atif-analytics/src/atif_analytics/application/analyze.py:202`,
-   `packages/atif-cli/src/atif_cli/app.py:757`.
+   `packages/atif-analytics/src/atif_analytics/application/analyze.py:144`,
+   `packages/atif-cli/src/atif_cli/app.py:1322`.
 
 ### Related
 
-- `packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:68`
+- `packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:60`
 - `packages/atif-analytics/src/atif_analytics/domain/layout.py:45`
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:32`
-- `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:253`
-- `packages/atif-analytics/src/atif_analytics/infrastructure/freshness.py:77`
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36`
+- `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`
 
 ## classify — the LLM analytics stage shape
 
-Entry point: `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:342`
+Entry point: `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`
 
-`trajectory`, `conflicts`, `friction`, and `perceived` are entered the same way
-from the stages table and share this shape through `_shared.py`.
+`conflicts`, `friction`, and `perceived` are entered the same way from the
+stages table and share this shape through `_shared.py`. classify and conflicts
+admit only `interactive` sessions; friction and perceived read only human
+turns, the main-chain user steps whose author is `human`.
 
 1. Resolve the layout, the reader, and the sharded parquet cache, then resolve
    the model through the atif-models registry by pipeline size — no pipeline
@@ -188,9 +180,10 @@ from the stages table and share this shape through `_shared.py`.
    `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:145`,
    `:159`.
 5. Walk newest-first and stop admitting at `llm_max_sessions_per_run` so a
-   deferred session is never rendered; a session that renders to nothing is
-   checkpointed at current bounds instead of re-rendered every tick —
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:135`.
+   deferred session is never rendered; a session that renders to nothing, or
+   whose kind isn't `interactive`, is checkpointed at current bounds instead of
+   re-rendered every tick —
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:146`.
 6. Dispatch each write chunk in budget-checked sub-batches of
    `BUDGET_CHECK_BATCH`, advancing the cursor by what was actually sent so a
    mid-chunk budget stop leaves the remainder unstamped rather than silently
@@ -208,7 +201,6 @@ from the stages table and share this shape through `_shared.py`.
 
 ### Related
 
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py:421`
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:337`
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:531`
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:357`
@@ -350,7 +342,8 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
    before Bedrock is reached — `:84`, `:96`.
 2. Normalize the lane argument before it names a lock file, so two spellings of
    one lane cannot take two locks; an unknown mode exits 64 rather than
-   defaulting to a plane — `:109`.
+   defaulting to a plane. The removed `structural` lane (and `struct`) still
+   parses: it logs one "lane removed" line and exits 0 — `:138`, `:143`.
 3. Read the rotated Bedrock bearer token at run time and export it only when
    non-empty, because botocore treats an empty value as a real broken
    credential and skips the default chain — `:122`.
@@ -361,13 +354,14 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
 5. Resolve the CLI through the override, then a user install, then the
    workspace venv script, and take a nonblocking per-lane `flock`: a busy lane
    skips this tick rather than queueing behind it — `:151`, `:166`.
-6. On the two analytics lanes, probe `atif-sql --help` for `analyze` and exit 0
-   when it is absent, so an armed crontab line against an older CLI is a no-op
-   instead of an hourly error — `:181`.
+6. On the `llm` lane, probe `atif-sql --help` for `analyze` and exit 0 when it
+   is absent, so an armed crontab line against an older CLI is a no-op instead
+   of a nightly error — `:260`.
 7. Run the lane per corpus: `materialize` plus a bounded `embed --limit 500`
-   piggyback, `analyze --structural-only`, or
-   `analyze --no-dry-run --llm-only --max-sessions 50 --max-cost-usd 25.0` —
-   the only spending line in the file — `:255`, `:274`, `:286`.
+   piggyback, or
+   `analyze --no-dry-run --llm-only --max-sessions 1000000 --max-cost-usd 1000000`
+   — the only spending line in the file, with both caps set out of reach on
+   purpose — `:334`, `:371`.
 8. On embed exit 78, write a terminal marker keyed on the store path and its
    mtime and suppress further embeds for that corpus until the mtime changes;
    every other nonzero exit stays transient and retries next tick — `:217`,
@@ -390,12 +384,13 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
 - examples — entry at `packages/atif-cli/src/atif_cli/app.py:995`. Derives one
   runnable example per view and macro from the static catalog and filters by
   `--category` and `--requires`; an unknown value exits 64
-  (`packages/atif-duck/src/atif_duck/domain/examples.py:178`).
-- schema — entry at `packages/atif-cli/src/atif_cli/app.py:1087`. Dumps the
-  view schemas and macro signatures from the static catalog with no DuckDB
-  import and no connection (`packages/atif-duck/src/atif_duck/domain/catalog.py:51`).
-- cron install — entry at `packages/atif-cli/src/atif_cli/cron.py:179`. Renders
-  the three-lane crontab block for a human to paste and never writes the
+  (`packages/atif-duck/src/atif_duck/domain/examples.py:191`).
+- schema — entry at `packages/atif-cli/src/atif_cli/app.py:1727`. Dumps the
+  core and analytics view schemas and macro signatures, each with its
+  `requires` value, from the static catalog with no DuckDB import and no
+  connection (`packages/atif-duck/src/atif_duck/domain/catalog.py:56`).
+- cron install — entry at `packages/atif-cli/src/atif_cli/cron.py:185`. Renders
+  the crontab block, plus one comment per removed lane, for a human to paste and never writes the
   crontab itself (`:79`).
 - cron status — entry at `packages/atif-cli/src/atif_cli/cron.py:198`. Probes
   each lane's flock nonblocking, so the probe perturbs nothing, and parses the

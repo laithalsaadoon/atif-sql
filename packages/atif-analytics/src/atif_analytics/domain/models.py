@@ -20,24 +20,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SessionClassification(BaseModel):
-    """Classify an entire Claude Code session.
+    """Classify an entire Claude Code session: what kind of work, toward what goal.
 
     One row per session, written to the ``session_classifications`` parquet
     cache. Used to build the ``session_classifications`` DuckDB view.
+
+    ``autonomy_tier`` and ``success`` were removed on 2026-09-27: neither was
+    reproducible, and what a session achieved is now computed from its steps
+    (atif-duck's ``session_outcomes``).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    autonomy_tier: Literal["manual", "assisted", "autonomous"] = Field(
-        ...,
-        description=(
-            "How much the agent drove the work.  "
-            "'manual': the user typed every instruction and confirmed each step. "
-            "'assisted': the agent took initiative but the user course-corrected often. "
-            "'autonomous': the agent ran multi-step work end-to-end with minimal user "
-            "intervention -- tier-3 work."
-        ),
-    )
     work_category: Literal[
         "sde",
         "admin",
@@ -59,16 +53,6 @@ class SessionClassification(BaseModel):
             "'other': use only when nothing else fits."
         ),
     )
-    success: Literal["success", "partial", "failure", "unknown"] = Field(
-        ...,
-        description=(
-            "Did the session complete its stated goal? "
-            "'success': the user's goal was clearly met. "
-            "'partial': the goal was reached with caveats or leftover TODOs. "
-            "'failure': the session ended without achieving the goal. "
-            "'unknown': insufficient signal to judge."
-        ),
-    )
     goal: str = Field(
         ...,
         min_length=1,
@@ -86,119 +70,6 @@ class SessionClassification(BaseModel):
         description=(
             "Classifier self-assessed confidence 0.0-1.0. Use <0.5 for genuinely "
             "ambiguous sessions."
-        ),
-    )
-
-
-class TrajectoryWindow(BaseModel):
-    """One windowed turn-pair classification.
-
-    A *window* binds two adjacent text turns from one session — the
-    previous turn (``prev_uuid``) and the current turn (``curr_uuid``).
-    The very first window of a session has ``prev_uuid is None`` plus a
-    synthetic ``prev_sentiment``: this lets the parquet hold one row per
-    text-turn instead of one fewer than the turn count.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    prev_uuid: str | None = Field(
-        ...,
-        description=(
-            "UUID of the prior text turn in this session, or null for the "
-            "session-first window. The host pipeline echoes (prev_uuid, "
-            "curr_uuid) back to verify per-window completeness."
-        ),
-    )
-    curr_uuid: str = Field(
-        ...,
-        min_length=1,
-        description=(
-            "UUID of the current text turn — the window's anchor. Must "
-            "match exactly one of the curr_uuid values supplied in the "
-            "<window> XML payload."
-        ),
-    )
-    prev_sentiment: Literal["negative", "neutral", "positive"] | None = Field(
-        ...,
-        description=(
-            "Polarity of the prior turn (or null on session-first). "
-            "'negative' = frustration / pushback / blocked. 'neutral' = "
-            "factual / procedural / acknowledgement (majority class). "
-            "'positive' = excitement / approval / momentum."
-        ),
-    )
-    curr_sentiment: Literal["negative", "neutral", "positive"] = Field(
-        ...,
-        description="Polarity of the current turn — same three labels as prev_sentiment.",
-    )
-    delta: float | None = Field(
-        ...,
-        description=(
-            "curr_sentiment - prev_sentiment encoded as integer in "
-            "{-2,-1,0,1,2} (negative=-1, neutral=0, positive=1, then "
-            "subtract). null when prev is null. The ``delta`` field is the "
-            "primary signal for downstream sentiment-arc analytics."
-        ),
-    )
-    is_transition: bool = Field(
-        ...,
-        description=(
-            "True when the *current* turn is pure filler / acknowledgement "
-            "with no substantive content (e.g. 'ok let me check', "
-            "'running...', 'done.'). Independent of prev_sentiment."
-        ),
-    )
-    transition_kind: Literal[
-        "frustration_spike",
-        "resolution",
-        "reset",
-        "drift",
-        "clarification",
-        "none",
-    ] = Field(
-        ...,
-        description=(
-            "Categorical label for the shape of the prev→curr transition. "
-            "'frustration_spike' = neutral/positive → negative. "
-            "'resolution' = negative → neutral/positive (problem fixed). "
-            "'reset' = abrupt topic change unrelated to prev. "
-            "'drift' = same polarity but new sub-topic. "
-            "'clarification' = curr restates / refines prev's substance. "
-            "'none' = no salient transition (the majority class — use it)."
-        ),
-    )
-    confidence: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Classifier self-confidence 0.0-1.0. Use <0.5 when the cue is "
-            "ambiguous or the prev/curr polarities are both neutral with "
-            "no visible salience."
-        ),
-    )
-
-
-class TrajectoryArrayResult(BaseModel):
-    """The model returns this — the array of windows for one chunk.
-
-    The host pipeline verifies completeness by echoing the
-    (prev_uuid, curr_uuid) tuples in the request payload back against
-    the returned ``windows``. Missing windows trigger one bounded retry;
-    persistent misses are stamped with neutral placeholders so the
-    pipeline never wedges on a single refused chunk.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    windows: list[TrajectoryWindow] = Field(
-        ...,
-        description=(
-            "One TrajectoryWindow per (prev_uuid, curr_uuid) supplied in "
-            "the request. Order should match the input window order; the "
-            "host pipeline does not rely on order but ordered output is "
-            "easier for an auditor to skim."
         ),
     )
 
@@ -510,7 +381,5 @@ __all__ = [
     "PerceivedError",
     "PerceivedErrorsResult",
     "SessionClassification",
-    "TrajectoryArrayResult",
-    "TrajectoryWindow",
     "UserFrictionSignal",
 ]

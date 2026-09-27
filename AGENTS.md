@@ -35,8 +35,13 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   written); atif-duck carries the twin. Layered: `application` >
   `infrastructure` > `domain`.
 - `packages/atif-duck` — DuckDB views + macros over the materialized corpus:
-  16 core views and 9 macros, plus 12 analytics views and 13 analytics
-  macros, all declared in a static drift-tested catalog. Also the
+  core views and macros plus the analytics views and macros, all declared in
+  a static drift-tested catalog. Who wrote a user
+  step is decided ONCE, in `domain.authorship` (a prefix rule table rendered
+  into the `step_author` macro and the `user_steps` / `human_turns` /
+  `session_outcomes` views); atif-analytics carries an AST-pinned twin of the
+  table, and every reader treats only `author = 'human'` as the user
+  speaking. Also the
   `ColumnarArtifactProducer` that writes each session's typed parquet
   artifacts at materialize time, and the registry that reads them instead of
   `trajectory.json` when they're current (falling back per session). Layered:
@@ -44,11 +49,14 @@ uv WORKSPACE (virtual root, members under `packages/*`):
 - `packages/atif-models` — model alias registry + structured-output LLM
   client. No other package hardcodes a Bedrock model id. Layered:
   `infrastructure` > `domain`.
-- `packages/atif-analytics` — the eight v2 pipelines: five LLM pipelines
-  that spend money at Bedrock and are checkpointed per session (classify,
-  trajectory, conflicts, friction, perceived — see `PIPELINE_NAMES` in
-  `infrastructure/sqlite_state/checkpointer.py`) plus three structural ones
-  with no checkpoint (cluster, terms, community). Layered: `application` >
+- `packages/atif-analytics` — the LLM pipelines that spend money at
+  Bedrock and are checkpointed per session (classify, conflicts, friction,
+  perceived — see `PIPELINE_NAMES` in
+  `infrastructure/sqlite_state/checkpointer.py`). They read human turns only
+  (`domain.authorship`), and classify and conflicts skip automated review
+  (`turn_audit`) and one-shot-job sessions. The trajectory pipeline and the structural
+  cluster/terms/community pipelines were cut on 2026-09-27; outcome is the
+  deterministic `session_outcomes` view now. Layered: `application` >
   `infrastructure` > `domain`.
 - `packages/atif-embed` — Cohere Embed v4 on Bedrock + LanceDB store + the
   backfill use case. Layered: `application` > `infrastructure` > `domain`.
@@ -105,8 +113,8 @@ Rules of the road:
   carries `# noqa: S608  # nosec B608 - <what it interpolates>` (ruff reads
   the first marker, Bandit only the second; never blanket-skip B608 in
   `[tool.bandit]`), and `packages/atif-duck/tests/test_sql_text_boundaries.py`
-  runs an AST audit over `registry.py`, `columnar.py`, `analytics.py` and
-  atif-embed's `corpus_text_rows.py` that fails on any placeholder that isn't
+  runs an AST audit over `registry.py`, `columnar.py`, `analytics.py`,
+  `authorship.py` (both layers) and atif-embed's `corpus_text_rows.py` that fails on any placeholder that isn't
   a constant, a projection call, or `sql_literal(...)`. Session ids are the
   one outside text that becomes a path; they're validated at the boundary
   (`domain.session_id` in atif-corpus and atif-duck, twinned) rather than
@@ -169,8 +177,9 @@ Rules of the road:
 
 For an LLM agent driving `atif-sql`, the discovery loop is three commands:
 
-1. `atif-sql schema` — every view (with columns) and macro signature, from
-   the static catalog in <50 ms. Its output ends with an `examples_hint`.
+1. `atif-sql schema` — every view (with columns) and macro signature, core
+   and analytics, each with what it `requires`, from the static catalog in
+   <50 ms. Its output ends with an `examples_hint`.
 2. `atif-sql examples` (alias: `atif-sql query --examples`) — runnable
    example queries for every view and macro, DERIVED from the catalog (never
    hardcoded per object) and each one EXECUTED by

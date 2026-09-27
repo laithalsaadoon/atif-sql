@@ -26,7 +26,9 @@ Semantic notes (mirrors atif-duck's ``steps`` view):
   parts' ``text`` fields with blank lines.
 * the step uuid is ``extra.source_uuids[0]`` — the FIRST source uuid, the
   documented primary raw-record key (same choice the VSS branch embeds on).
-* ATIF ``source`` maps ``agent`` → ``assistant`` for the prompt surface.
+* ATIF ``source`` maps ``agent`` → ``assistant`` for the prompt surface, and
+  every user step carries its ``author``
+  (:mod:`atif_analytics.domain.authorship`).
 * error tool_results are recovered from
   ``observation.results[].extra.tool_result_metadata.is_error`` (harbor
   preserves the raw flag only there — same fidelity-gap recovery as
@@ -39,7 +41,7 @@ import json
 from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -47,8 +49,11 @@ from atif_analytics.domain.config import TranscriptCaps
 from atif_analytics.domain.transcript import (
     StepEvent,
     render_session_text,
-    text_windows,
+    session_kind,
 )
+
+if TYPE_CHECKING:
+    from atif_analytics.domain.authorship import SessionKind
 
 TRAJECTORY_FILENAME = "trajectory.json"
 EDGES_FILENAME = "edges.jsonl"
@@ -290,11 +295,9 @@ class CorpusReader:
             include_uuids=include_uuids,
         )
 
-    def text_windows(
-        self, session_id: str
-    ) -> list[tuple[str, str | None, str, str | None, str, str | None, str]]:
-        """Adjacent text-step pairs (the turn_window analogue) for one session."""
-        return text_windows(self.load_steps(session_id), session_id)
+    def session_kind(self, session_id: str) -> SessionKind:
+        """``interactive`` | ``one_shot_job`` | ``turn_audit`` (atif-duck's ``session_outcomes.kind``)."""
+        return session_kind(self.load_steps(session_id))
 
     def edges_uuids(self, session_id: str) -> set[str] | None:
         """Non-null raw-record uuids from ``edges.jsonl``, or ``None`` if unreadable.

@@ -5,13 +5,17 @@
 Handwritten ATIF-v1.7 trajectory dicts + edges lines per docs/CONTRACT.md —
 NO dependency on atif-corpus/atif-converter (independence). Two sessions:
 
-* ``SESSION_IDS[0]`` — rich: five main-chain text steps (user/assistant
-  alternating, uuids via ``extra.source_uuids``), a tool call + result on
-  one assistant step, an ERROR tool result step followed by a trailing-?
-  user step (friction rule 3), a repeated user message (rule 1), a short
-  imperative (rule 2), one sidechain step and one compact-summary step
-  (both excluded from windows), plus a friction system marker.
-* ``SESSION_IDS[1]`` — small: two text steps.
+* ``SESSION_IDS[0]`` — rich and ``interactive``: main-chain text steps
+  (uuids via ``extra.source_uuids``), a tool call + result on one assistant
+  step, an ERROR tool result step followed by a trailing-? user step
+  (friction rule 3), a repeated user message (rule 1), a short imperative
+  (rule 2), one sidechain step and one compact-summary step, and the
+  machine-written user-role text the live corpora carry: a Stop hook block,
+  a retry nudge twice and a screenshot's ``[Image: original ...]`` line
+  twice (each pair a rule-1 "repeat" if it were read as the user), plus a
+  continuation marker.
+* ``SESSION_IDS[1]`` — small and ``interactive``: two human turns, one
+  reply (one human-AI pair, below perceived's floor).
 
 ``FakeProvider`` implements the LlmStructuredProvider protocol with
 deterministic canned outputs per schema and scriptable failures.
@@ -29,8 +33,6 @@ from atif_analytics.domain.models import (
     PerceivedError,
     PerceivedErrorsResult,
     SessionClassification,
-    TrajectoryArrayResult,
-    TrajectoryWindow,
     UserFrictionSignal,
 )
 from atif_models.domain.ports import ProviderUnavailable, RefusalError, UsageAccumulator
@@ -40,8 +42,16 @@ SESSION_IDS = [
     "bbbbbbbb-2222-2222-2222-222222222222",
 ]
 
-#: The main-chain text-step uuids of session one, in order (window keys).
-S1_TEXT_UUIDS = ["u-01", "u-02", "u-03", "u-04", "u-05", "u-06", "u-07"]
+#: Session one's HUMAN turns, in order: the only user steps a reader treats
+#: as the user speaking.
+S1_HUMAN_UUIDS = ["u-01", "u-04", "u-05", "u-06"]
+
+#: Session one's machine-written user-role steps (never friction candidates,
+#: never perceived anchors, never rendered as ``[user ...]``).
+S1_MACHINE_UUIDS = ["u-hook", "u-retry-1", "u-img-1", "u-retry-2", "u-img-2", "u-marker"]
+
+RETRY_NUDGE = "Your previous attempt hit a transient error. Try that again."
+IMAGE_META = "[Image: original 1000x500, displayed at 800x400.]"
 
 
 def _step(
@@ -148,6 +158,20 @@ def _session_one() -> dict[str, Any]:
             ),
             # Short imperative (rule 2).
             _step(7, "2026-08-20T10:01:00.000Z", "user", "undo that", uuid="u-06"),
+            # Machine-written user-role text. Each of the two pairs repeats
+            # within ten user turns, which rule 1 stamped as unmet_expectation
+            # before readers saw only human turns.
+            _step(
+                11,
+                "2026-08-20T10:01:01.000Z",
+                "user",
+                "Stop hook feedback: the claim has no evidence. undo that?",
+                uuid="u-hook",
+            ),
+            _step(12, "2026-08-20T10:01:02.000Z", "user", RETRY_NUDGE, uuid="u-retry-1"),
+            _step(13, "2026-08-20T10:01:02.500Z", "user", IMAGE_META, uuid="u-img-1"),
+            _step(14, "2026-08-20T10:01:03.000Z", "user", RETRY_NUDGE, uuid="u-retry-2"),
+            _step(15, "2026-08-20T10:01:03.500Z", "user", IMAGE_META, uuid="u-img-2"),
             # Friction system marker — excluded from candidates.
             _step(
                 8,
@@ -190,6 +214,11 @@ def _session_two() -> dict[str, Any]:
         "steps": [
             _step(1, "2026-08-21T09:00:00.000Z", "user", "draft the launch memo", uuid="v-01"),
             _step(2, "2026-08-21T09:00:30.000Z", "agent", "Here is a first draft.", uuid="v-02"),
+            # A second human turn the session ended on, unanswered: two human
+            # turns make the session interactive (classify and conflicts read
+            # it), one completed human-AI pair keeps it below perceived's
+            # two-pair floor.
+            _step(3, "2026-08-21T09:01:00.000Z", "user", "tighten the intro", uuid="v-03"),
         ],
         "final_metrics": None,
         "extra": None,
@@ -213,6 +242,41 @@ def _edges_for(doc: dict[str, Any]) -> list[dict[str, Any]]:
         for step in doc["steps"]
         for uuid in step.get("extra", {}).get("source_uuids", [])
     ]
+
+
+def write_session(root: Path, session_id: str, turns: list[tuple[str, str]], day: int) -> None:
+    """Write one extra ``(source, message)`` session under ``root/sessions/``.
+
+    Steps get uuids ``<session_id[:4]>-<n>`` and timestamps on 2026-08-``day``,
+    so a caller controls where the session sorts among the fixture ones.
+    """
+    doc = {
+        "schema_version": "ATIF-v1.7",
+        "session_id": session_id,
+        "agent": {"name": "claude-code", "version": "2.1.218", "model_name": "claude-opus-4-6"},
+        "steps": [
+            _step(
+                i + 1,
+                f"2026-08-{day:02d}T08:{i:02d}:00.000Z",
+                source,
+                message,
+                uuid=f"{session_id[:4]}-{i + 1}",
+            )
+            for i, (source, message) in enumerate(turns)
+        ],
+        "final_metrics": None,
+        "extra": None,
+    }
+    session_dir = root / "sessions" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "trajectory.json").write_text(json.dumps(doc))
+    (session_dir / "edges.jsonl").write_text(
+        "".join(json.dumps(line) + "\n" for line in _edges_for(doc))
+    )
+    (session_dir / "loss_report.json").write_text("{}")
+    (session_dir / "meta.json").write_text(
+        json.dumps({"session_id": session_id, "source_mtime_ns": 1, "materialized_at": "t"})
+    )
 
 
 def build_fixture_corpus(root: Path) -> Path:
@@ -266,14 +330,10 @@ class FakeProvider:
             raise RefusalError(msg)
         if schema is SessionClassification:
             return SessionClassification(
-                autonomy_tier="assisted",
                 work_category="sde",
-                success="success",
                 goal="Fix the flaky auth test.",
                 confidence=0.9,
             )
-        if schema is TrajectoryArrayResult:
-            return TrajectoryArrayResult(windows=self._windows_from_prompt(prompt))
         if schema is ConflictsResult:
             return ConflictsResult(
                 conflicts=[
@@ -326,30 +386,3 @@ class FakeProvider:
             )
         msg = f"unexpected schema {schema!r}"
         raise AssertionError(msg)
-
-    @staticmethod
-    def _windows_from_prompt(prompt: str) -> list[TrajectoryWindow]:
-        """Echo back every (prev_uuid, curr_uuid) pair in the XML payload."""
-        import re
-
-        windows: list[TrajectoryWindow] = []
-        for match in re.finditer(
-            r'<prev role="[^"]*" uuid="([^"]*)">.*?<curr role="[^"]*" uuid="([^"]*)">',
-            prompt,
-            flags=re.DOTALL,
-        ):
-            prev_uuid = match.group(1) or None
-            curr_uuid = match.group(2)
-            windows.append(
-                TrajectoryWindow(
-                    prev_uuid=prev_uuid,
-                    curr_uuid=curr_uuid,
-                    prev_sentiment=None if prev_uuid is None else "neutral",
-                    curr_sentiment="neutral",
-                    delta=None if prev_uuid is None else 0.0,
-                    is_transition=False,
-                    transition_kind="none",
-                    confidence=0.7,
-                )
-            )
-        return windows
