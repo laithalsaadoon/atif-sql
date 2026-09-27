@@ -206,7 +206,7 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   `scripts/atif-sql-refresh.sh:187-194`
 - **Destroy-and-rebuild on a missing column:** raising a rebuild-demanding
   error for a store that merely predates the `text_hash` stamp rebuilt both
-  fleet corpora, roughly 3.4M vectors of Cohere spend. Signal: a full
+  production corpora, roughly 3.4M vectors of Cohere spend. Signal: a full
   re-embed triggered by a schema read rather than by a provider change.
   Mitigation: additive drift now migrates online via `Table.add_columns` and a
   sentinel that re-embeds incrementally through the ordinary staleness path,
@@ -216,7 +216,7 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
 - **Corpus-slug collapse:** setting only `ATIF_SQL_SOURCE_ROOT` points one
   corpus's source at another root's transcripts while the corpus root still
   slugs from `CLAUDE_CONFIG_DIR`, so two corpora collapse onto one slug
-  (`projects-73b00a87`, verified live 2026-08-23). Signal: two config roots,
+  (verified live 2026-08-23). Signal: two config roots,
   one corpus directory, and sessions from both interleaved. Mitigation: every
   tick exports both `CLAUDE_CONFIG_DIR` and `ATIF_SQL_SOURCE_ROOT` per corpus.
   `scripts/atif-sql-refresh.sh:52-59`, `scripts/atif-sql-refresh.sh:312-313`

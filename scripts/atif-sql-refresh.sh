@@ -46,7 +46,7 @@
 # ONE OR MORE CORPORA PER TICK. The primary Claude config root is
 # ${CLAUDE_CONFIG_DIR:-$HOME/.claude}. Extra roots come from
 # ATIF_SQL_EXTRA_CONFIG_DIRS, a colon-separated list of config-dir paths: an
-# agent fleet gets its own isolated config root so a run cannot mutate the
+# group of automated agents gets its own isolated config root so a run cannot mutate the
 # operator's live session state, and each such root is its own corpus.
 #
 # THE CODEX PASS (materialize lane only). Codex CLI keeps its own transcripts
@@ -81,7 +81,7 @@
 # CLAUDE_CONFIG_DIR — setting only ATIF_SQL_SOURCE_ROOT points one corpus's
 # source at another root's transcripts while the corpus root still slugs the
 # primary default (verified live 2026-08-23: two corpora collapse onto one
-# slug, projects-73b00a87). So each tick exports BOTH
+# slug). So each tick exports BOTH
 # CLAUDE_CONFIG_DIR=<config-dir> and ATIF_SQL_SOURCE_ROOT=<config-dir>/projects,
 # keeping source_root and the corpus slug coherent per corpus.
 #
@@ -145,8 +145,8 @@ esac
 # outgrows its budget is ended inside its own cgroup instead of pushing the
 # shared user slice to its limit. On 2026-09-25 01:43Z user-1001.slice hit
 # its 110 GiB MemoryMax with the structural lane holding 6.5 GB and a
-# materialize tick running; the kernel's OOM choice landed in the bonk fleet
-# and took hex-bonk down. The re-exec happens BEFORE the lane lock is taken,
+# materialize tick running; the kernel's OOM choice landed in an unrelated
+# service on the same host and took it down. The re-exec happens BEFORE the lane lock is taken,
 # so the capped copy owns the lock and the single-flight rules below are
 # unchanged. ATIF_SQL_REFRESH_MEMORY_MAX_<LANE> overrides a lane's budget
 # (any systemd size, e.g. 16G); `off` runs uncapped. With no reachable user
@@ -367,7 +367,7 @@ run_llm() {
   # THE BUDGET CEILING IS VISIBLE IN THIS LINE on purpose: --max-sessions and
   # --max-cost-usd are hard per-run caps enforced inside run_analyze (session
   # cap per pipeline newest-first; dollar cap against running actual usage).
-  # OPERATOR DIRECTIVE 2026-09-04 (Laith, #bonk-place): NO cap and NO skipped
+  # Policy since 2026-09-04: no cap and no skipped
   # lanes. Both flags stay on the line because the selftest asserts them, set
   # to values the corpus cannot reach; the previous 50 / 25.0 skipped the
   # friction and perceived lanes on five consecutive nights.
