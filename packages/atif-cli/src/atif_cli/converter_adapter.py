@@ -34,6 +34,13 @@ Mapping decisions (ConversionResult -> ConversionOutput):
 * ``edges_lines``      <- ``ConversionResult.edges_lines`` (already-serialized
   JSON lines derived from the RAW records, per the contract; the writer owns
   line termination).
+* ``source_archive``   <- the files a
+  :class:`~atif_converter.infrastructure.source_archive.SourceArchiveWriter`
+  wrote into ``archive_dir`` while the use case re-verified its input, so the
+  archive holds the parsed bytes and costs no extra open of a transcript.
+* ``EmptySessionError`` -> :class:`atif_corpus.domain.ports.EmptySourceError`:
+  the port's "nothing to convert" verdict, which materialize records instead
+  of retrying every pass.
 
 Validation posture: a trajectory that fails post-enrichment validation
 raises rather than materializing — the materialize use case records the
@@ -53,8 +60,9 @@ from typing import TYPE_CHECKING
 from atif_converter.application.convert_and_audit import convert_and_audit
 from atif_converter.application.convert_codex import convert_codex_and_audit
 from atif_converter.domain.agents import DEFAULT_AGENT, AgentSource
-from atif_converter.domain.errors import TrajectoryValidationError
-from atif_corpus.domain.ports import ConversionOutput
+from atif_converter.domain.errors import EmptySessionError, TrajectoryValidationError
+from atif_converter.infrastructure.source_archive import SourceArchiveWriter
+from atif_corpus.domain.ports import ArchivedSource, ConversionOutput, EmptySourceError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -78,29 +86,51 @@ class RealConverter:
         #: module docstring.
         self.agent = AgentSource(str(agent))
 
-    def convert(self, session_jsonl: Path) -> ConversionOutput:
+    def convert(self, session_jsonl: Path, *, archive_dir: Path | None = None) -> ConversionOutput:
         """Convert one session through its agent's use case; raise on invalid output.
+
+        With ``archive_dir``, the session's source files are archived there as
+        a by-product of the use case's verifying re-read.
 
         Raises
         ------
+        EmptySourceError
+            The session holds no convertible record (the converter's
+            ``EmptySessionError``, translated to the port's type).
         TrajectoryValidationError
             When the enriched trajectory fails harbor's validator — the
             materialize use case records this against the session.
         atif_converter.domain.errors.DomainError
-            For empty/invalid sessions or adapter failures (same handling).
+            For invalid sessions or adapter failures (same handling).
         """
-        if self.agent is AgentSource.CODEX:
-            result, report = convert_codex_and_audit(session_jsonl)
-        else:
-            result, report = convert_and_audit(
-                session_jsonl, include_subagents=self.include_subagents
-            )
+        archive = (
+            None
+            if archive_dir is None
+            else SourceArchiveWriter(archive_dir, base=session_jsonl.parent)
+        )
+        try:
+            if self.agent is AgentSource.CODEX:
+                result, report = convert_codex_and_audit(session_jsonl, archive=archive)
+            else:
+                result, report = convert_and_audit(
+                    session_jsonl, include_subagents=self.include_subagents, archive=archive
+                )
+        except EmptySessionError as error:
+            raise EmptySourceError(str(error)) from error
         if result.validation_errors:
             raise TrajectoryValidationError(list(result.validation_errors))
         return ConversionOutput(
             trajectory_dict=result.trajectory,
             loss_report_dict=report.to_json(),
             edges_lines=list(result.edges_lines),
+            source_archive=(
+                ()
+                if archive is None
+                else tuple(
+                    ArchivedSource(relative_path=f.relative_path, size=f.size, sha256=f.sha256)
+                    for f in archive.files
+                )
+            ),
         )
 
 

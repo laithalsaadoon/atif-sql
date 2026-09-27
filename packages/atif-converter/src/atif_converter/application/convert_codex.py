@@ -43,6 +43,7 @@ from atif_converter.infrastructure.harbor_adapter import (
     validate_trajectory,
 )
 from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
+from atif_converter.infrastructure.source_archive import SourceArchiveWriter
 
 #: Response-item payload types whose presence in a rollout means a specific
 #: content-shaped gap was actually exercised, rather than merely being possible.
@@ -109,9 +110,13 @@ def _developer_message_count(records: list[tuple[dict[str, object], str]]) -> in
     return count
 
 
-def _refuse_if_mutated(snapshot: SessionSnapshot) -> None:
-    mutated = mutated_files(snapshot)
+def _refuse_if_mutated(
+    snapshot: SessionSnapshot, archive: SourceArchiveWriter | None = None
+) -> None:
+    mutated = mutated_files(snapshot, archive=archive)
     if not mutated:
+        if archive is not None:
+            archive.archive_side_files(snapshot.session_jsonl, already=snapshot.files)
         return
     logger.warning(
         "convert_codex: {} source file(s) changed while converting {}; refusing",
@@ -121,7 +126,11 @@ def _refuse_if_mutated(snapshot: SessionSnapshot) -> None:
     raise SourceMutatedDuringConversion(snapshot.session_jsonl, mutated)
 
 
-def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, LossReport]:
+def convert_codex_and_audit(
+    rollout_jsonl: Path,
+    *,
+    archive: SourceArchiveWriter | None = None,
+) -> tuple[ConversionResult, LossReport]:
     """Convert ``rollout_jsonl`` to ATIF and produce its loss accounting.
 
     The returned :class:`ConversionResult` carries the ENRICHED trajectory
@@ -130,6 +139,13 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
     :func:`~atif_converter.domain.codex_enrichment.enrich_codex_trajectory`)
     plus the ready-to-write ``edges.jsonl`` lines derived from the RAW records.
     Validation is re-run post-enrichment.
+
+    With ``archive``, the verifying re-read also streams every source file
+    into that writer (see
+    :mod:`atif_converter.infrastructure.source_archive`): the archive costs
+    no extra open of a transcript and holds exactly the bytes that were
+    parsed. It is complete only when this function returns; on any raise the
+    caller must discard it.
 
     Raises
     ------
@@ -150,7 +166,7 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
     # than deep-copying a whole rollout's worth of steps.
     enriched = enrich_codex_trajectory(result.trajectory, records, copy_input=False)
     del records, loaded
-    _refuse_if_mutated(snapshot)
+    _refuse_if_mutated(snapshot, archive)
 
     return (
         ConversionResult(

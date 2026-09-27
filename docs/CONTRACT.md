@@ -27,13 +27,19 @@ proofs are out of scope for the workspace.
                                    #  message_id, type, ts, is_sidechain,
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
     meta.json                      # {session_id, source_mtime_ns, source_files: [...],
-                                   #  harbor_version, converter_version, materialized_at,
-                                   #  agent, columnar_schema}
+                                   #  harbor_version, converter_version, converter_schema,
+                                   #  materialized_at,
+                                   #  agent, source_present, source_removed_at?,
+                                   #  source_archive?, columnar_schema}
+    source/<path>.zst              # raw source archive: one zstd file per source file,
+                                   #  <path> relative to the main transcript's parent
     session.parquet                # typed columnar artifacts (optional, see below):
     steps.parquet                  #  the trajectory header and the steps, tool_calls,
     tool_calls.parquet             #  tool_results views' rows for this one session,
     tool_results.parquet           #  written 0444, claimed by meta.columnar_schema
   watermark.json                   # {path: mtime_ns} across source corpus
+  empty_sessions.json              # {session_id: {converter_schema, ...}} for
+                                   #  transcripts with nothing to convert
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
   One key is reserved and not hashed: `codex` names the Codex CLI corpus.
@@ -43,7 +49,7 @@ proofs are out of scope for the workspace.
   Claude Code and Codex produce does). The scanner skips a transcript whose
   id fails, logs the reason, and reports it under `rejected` /
   `rejected_session_ids`; nothing from it is written, and a corpus dir an
-  older version wrote under such a name is left alone, never ghosted.
+  older version wrote under such a name is left alone, never marked.
   atif-duck applies the SAME rule before it builds any path: a session dir
   whose name fails registers nothing and is reported in
   `RawSources.rejected_session_ids`. The pattern lives once per package
@@ -53,20 +59,59 @@ proofs are out of scope for the workspace.
   materialized from. A corpus written before this key existed reads as NULL in
   SQL and is still valid; nothing may require it to be present.
 - One corpus holds ONE agent, and meta.agent is the DISCRIMINATOR that enforces
-  it: materialize reads it before ghost removal and before any write, and a
-  disagreement fails the pass (exit 78) with nothing removed. A meta.json with
+  it: materialize reads it before marking any session and before any write, and
+  a disagreement fails the pass (exit 78) with nothing touched. A meta.json with
   no agent key answers claude-code, because no corpus predating Codex support
   can hold Codex sessions. Per-agent default roots keep the two apart without
   anyone thinking about it; an explicit corpus_root is what this guard covers.
 - Source discovery MUST include subagents/agent-*.jsonl AND
   subagents/workflows/wf_*/agent-*.jsonl (and any deeper future nesting: use
-  rglob over the session dir filtered to *.jsonl, excluding *.meta.json).
+  rglob over the session dir filtered to *.jsonl). The watermark also watches
+  every *.meta.json under the session dir (the agent-*.meta.json sidecars the
+  converter reads), so a sidecar that changes on its own re-materializes the
+  session; meta.source_files lists them too.
+- Nothing outside sessions/<id>/ belongs to a session: materialize never
+  deletes, moves or writes anything under a shared corpus directory such as
+  blobs/, and the raw source archive lives only in sessions/<id>/source/.
 - Quiescence: a session is (re)materialized when newest source mtime is older
-  than quiesce_seconds (default 300) AND newer than its meta.source_mtime_ns.
-  --force overrides.
+  than quiesce_seconds (default 300) AND either its sources moved since the
+  watermark or its generation is stale (below). --force overrides the second
+  half. "Now" is read after the scan, and a source mtime up to 1 s in the future
+  is jitter, not a clock warning.
+- Generation: meta.converter_schema is the converter's CONVERTER_SCHEMA_VERSION
+  (atif_converter.domain.schema_version), and a session recording a different
+  one, or none, is stale even when no source byte moved. meta.converter_version
+  is the atif-sql release that converted it: provenance only. A columnar pass
+  also expects meta.columnar_schema to equal the reader's schema version, so a
+  schema bump or a --no-columnar session re-converts. Keys are compared only
+  when expected; a missing expected key is stale.
+- Retention: a session is NEVER deleted. When its main transcript vanishes from
+  the scan (a genuine FileNotFoundError, not a stat failure, and not during a
+  pass that couldn't list a source directory), its artifacts are kept and its
+  meta.json is rewritten once with source_present: false and source_removed_at
+  (that pass's materialized_at). meta.source_present is true on every session
+  converted from a live source; a meta.json without the key predates this
+  rule and reads as present. A reappearing source is converted again from the
+  live file. The report's `removed` / `removed_session_ids` are the sessions
+  newly marked that pass; `retained` counts every session kept without a
+  source.
+- Raw source archive: every live conversion writes source/<path>.zst for each
+  source file (main transcript, side-file transcripts, and every other regular
+  file under the session's side dir; symlinks are skipped), from the exact bytes
+  the converter parsed, staged and swapped with the other artifacts.
+  meta.source_archive = {codec: "zstd", source_dir, main, files: [{path, size,
+  sha256}]}, where source_dir is the main transcript's parent relative to the
+  source root. A source-removed session with a stale generation is re-converted
+  from its restored archive (reported as `from_archive`), keeping its original
+  source_* keys and its archive. A session retained before archives existed
+  keeps its artifacts and can't be re-converted.
+- Empty sessions: a transcript with no convertible record is recorded in
+  empty_sessions.json keyed by session id with the generation it was checked
+  under; its watermark advances and it's reported as `empty`, not `failed`.
+  A write to it or a new converter schema tries it again.
 - Parallel convert: the convert+write stage may run across a process pool
   (--workers N, default min(8, cpu_count)). The pool changes no artifact byte:
-  each worker writes the same four files through the same per-session
+  each worker writes the same files through the same per-session
   .staging/ dir and atomic rename, so a session is still the crash-safety
   unit, and the watermark still advances only for sessions that succeeded.
   --workers 1 is the single-process reference path.

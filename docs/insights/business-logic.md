@@ -284,13 +284,14 @@ the row-normalized TF times that IDF. Terms are ranked descending per cluster an
   `packages/atif-corpus/src/atif_corpus/domain/sessions.py:170-174`, `packages/atif-corpus/src/atif_corpus/domain/sessions.py:200-206`; tests
   `packages/atif-corpus/tests/test_domain.py:117`,
   `packages/atif-corpus/tests/test_materialize.py:148`.
-- **Ghost removal is all-or-nothing per pass:** when ANY source directory could not be
-  listed, ghost removal is skipped entirely for the pass, because absence is not evidence
-  of deletion without a complete picture of what exists.
+- **Nothing is deleted, and marking is all-or-nothing per pass:** a session whose source
+  vanished keeps its artifacts and is marked `source_present: false`; when ANY source
+  directory could not be listed, marking is skipped entirely for the pass, because absence
+  is not evidence of deletion without a complete picture of what exists.
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:560-577`; tests
   `packages/atif-corpus/tests/test_materialize.py:609` and `packages/atif-corpus/tests/test_materialize.py:647`.
-- **A `--sessions` filter never widens deletion:** ghost removal keys off the FULL scan,
-  so an unplanned session is never removed just because it was not planned.
+- **A `--sessions` filter never widens marking:** source-removal marking keys off the FULL
+  scan, so an unplanned session is never marked just because it was not planned.
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:511-519`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:573-577`; test `packages/atif-corpus/tests/test_materialize.py:280`.
 - **Staging sweep errs toward keeping:** a signal delivered, a `PermissionError`, or any
   unexpected `OSError` all answer "do not delete", and a recycled pid only means the sweep

@@ -136,7 +136,7 @@ class TestAdapterRouting:
         """Routing, asserted without harbor: the seam picks the use case, nothing else."""
         calls: list[Path] = []
 
-        def _stub(path: Path) -> tuple[ConversionResult, LossReport]:
+        def _stub(path: Path, *, archive: object = None) -> tuple[ConversionResult, LossReport]:
             calls.append(path)
             return (
                 ConversionResult(
@@ -178,7 +178,9 @@ class TestAdapterRouting:
     ) -> None:
         seen: dict[str, object] = {}
 
-        def _stub(path: Path, *, include_subagents: bool) -> tuple[ConversionResult, LossReport]:
+        def _stub(
+            path: Path, *, include_subagents: bool, archive: object = None
+        ) -> tuple[ConversionResult, LossReport]:
             seen["path"] = path
             seen["include_subagents"] = include_subagents
             return (
@@ -304,7 +306,13 @@ class TestCodexEndToEnd:
         assert reported["agent"] == "codex"
         assert reported["source_sessions"] == 1
         assert reported["materialized_sessions"] == 1
-        assert reported["staleness"] == {"stale": 0, "up_to_date": 1, "live": 0}
+        assert reported["staleness"] == {
+            "stale": 0,
+            "up_to_date": 1,
+            "live": 0,
+            "generation_stale": 0,
+            "from_archive": 0,
+        }
 
     def test_source_uuids_join_the_steps_to_the_edges(
         self,

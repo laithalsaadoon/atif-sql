@@ -8,7 +8,8 @@ Builds the CONTRACT.md source shape under a tmp dir:
 - flat subagent side-files at ``<stem>/subagents/agent-*.jsonl``,
 - workflow-nested side-files at
   ``<stem>/subagents/workflows/wf_*/agent-*.jsonl``,
-- a ``*.meta.json`` decoy that discovery must exclude.
+- an ``agent-*.meta.json`` sidecar, which the watermark watches because the
+  converter reads it.
 
 Mtimes are set explicitly with ``os.utime`` so quiescence and watermark
 decisions are pinned against a fixed ``NOW_NS``, never the wall clock.

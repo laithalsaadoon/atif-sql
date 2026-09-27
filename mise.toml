@@ -318,7 +318,7 @@ description = "Regenerate osv-scanner.toml from the OpenVEX ledger"
 # regenerating it as part of the scan would let a scan run against a suppression surface no gate
 # has ever seen — the scan would define its own exemptions and then pass. Editing
 # `security/atif-sql.openvex.json` means running this task and committing BOTH files.
-run = "python3 scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml"
+run = "uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml"
 
 [tasks."security:vex:check"]
 description = "Drift gate: osv-scanner.toml must match the ledger, and the renderer must work"
@@ -334,15 +334,20 @@ description = "Drift gate: osv-scanner.toml must match the ledger, and the rende
 #             empty-ledger branch and the suppression-emitting path could rot unnoticed.
 sources = ["security/**/*.json", "osv-scanner.toml", "scripts/vex_to_osv_config.py", "uv.lock"]
 #
+# `uv run python`, not bare `python3`: the renderer uses 3.12+ syntax (a `type` statement), and
+# on a host whose /usr/bin precedes the mise tool dir, `python3` is the system 3.9 and the task
+# dies on a SyntaxError before it checks anything. `uv run` resolves the project's 3.13 venv the
+# same way every other gate in `check` does.
+#
 # The example renders into `mktemp -d`, never into `.sarif/`: security.yml uploads that whole
 # directory to code scanning, and a `.toml` sitting in it would be handed to `upload-sarif` as a
 # report.
 run = """
 set -eu
-python3 scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml --check
+uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml --check
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
-python3 scripts/vex_to_osv_config.py \
+uv run python scripts/vex_to_osv_config.py \
   security/examples/atif-sql.openvex.example.json "$scratch/vex-example.toml"
 for id in GHSA-EXAMPLE-0000-0000 CVE-2026-00000; do
   grep -q "id = \\"$id\\"" "$scratch/vex-example.toml" || {

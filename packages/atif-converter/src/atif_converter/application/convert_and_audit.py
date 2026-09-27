@@ -47,6 +47,7 @@ from atif_converter.infrastructure.harbor_adapter import (
     validate_trajectory,
 )
 from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
+from atif_converter.infrastructure.source_archive import SourceArchiveWriter
 
 #: Gaps every harbor 0.22.0 conversion exhibits regardless of session content.
 _STRUCTURAL_GAPS: frozenset[FidelityGap] = frozenset(
@@ -90,9 +91,13 @@ def _loss_report(census: SessionCensus) -> LossReport:
     )
 
 
-def _refuse_if_mutated(snapshot: SessionSnapshot) -> None:
-    mutated = mutated_files(snapshot)
+def _refuse_if_mutated(
+    snapshot: SessionSnapshot, archive: SourceArchiveWriter | None = None
+) -> None:
+    mutated = mutated_files(snapshot, archive=archive)
     if not mutated:
+        if archive is not None:
+            archive.archive_side_files(snapshot.session_jsonl, already=snapshot.files)
         return
     logger.warning(
         "convert_and_audit: {} source file(s) changed while converting {}; refusing",
@@ -106,6 +111,7 @@ def convert_and_audit(
     session_jsonl: Path,
     *,
     include_subagents: bool = True,
+    archive: SourceArchiveWriter | None = None,
 ) -> tuple[ConversionResult, LossReport]:
     """Convert ``session_jsonl`` to ATIF and produce its loss accounting.
 
@@ -123,6 +129,13 @@ def convert_and_audit(
     steps. harbor legitimately bundles several assistant events (one
     ``message.id``) into a single agent step, so the two numbers differ by
     design.
+
+    With ``archive``, the verifying re-read also streams every source file
+    into that writer (see
+    :mod:`atif_converter.infrastructure.source_archive`): the archive costs
+    no extra open of a transcript and holds exactly the bytes that were
+    parsed. It is complete only when this function returns; on any raise the
+    caller must discard it.
 
     Raises
     ------
@@ -146,7 +159,7 @@ def convert_and_audit(
         copy_input=False,
     )
     del pairs, loaded
-    _refuse_if_mutated(snapshot)
+    _refuse_if_mutated(snapshot, archive)
 
     enriched_result = ConversionResult(
         trajectory=enriched,

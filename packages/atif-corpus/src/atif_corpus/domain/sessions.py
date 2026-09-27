@@ -82,6 +82,11 @@ class QuiescencePolicy:
 
     #: Seconds of source silence required before a session may materialize.
     quiesce_seconds: int = 300
+    #: How far in the future an mtime may sit before it earns the clock warning.
+    #: The decision never uses it (a future mtime is never quiescent); it only
+    #: keeps sub-second jitter, such as a coarse filesystem timestamp or a stat
+    #: racing the clock read, from reading as a misconfigured host.
+    future_warn_seconds: float = 1.0
 
     def is_quiescent(self, newest_mtime_ns: int, now_ns: int) -> bool:
         """True when the newest source write is at least ``quiesce_seconds`` old.
@@ -94,10 +99,12 @@ class QuiescencePolicy:
         copied file carrying a bogus stamp) never satisfies the threshold,
         so the session would starve in ``skipped_live`` silently. It stays
         skipped — converting is still the wrong call — but it warns every
-        pass so the starvation is visible instead of mute.
+        pass so the starvation is visible instead of mute. Only an mtime more
+        than ``future_warn_seconds`` ahead warns: the caller reads "now" after
+        the scan, so a smaller lead is jitter, not a clock problem.
         """
         age_ns = now_ns - newest_mtime_ns
-        if age_ns < 0:
+        if -age_ns > self.future_warn_seconds * NANOS_PER_SECOND:
             logger.warning(
                 "quiescence: newest source mtime is {:.1f}s in the FUTURE; "
                 "session stays skipped until the clock catches up "
@@ -167,6 +174,7 @@ def build_plan(
     now_ns: int,
     force: bool = False,
     unmaterialized_session_ids: Collection[str] = (),
+    generation_stale_session_ids: Collection[str] = (),
 ) -> MaterializationPlan:
     """Partition scanned sessions into the three plan buckets.
 
@@ -194,9 +202,15 @@ def build_plan(
         absent on disk (a pass killed mid-swap). Treated as stale so the
         artifacts come back; the watermark alone cannot express this, since
         it records SOURCE mtimes and knows nothing about the corpus dir.
+    generation_stale_session_ids
+        Sessions whose recorded provenance (``converter_schema``,
+        ``columnar_schema``) differs from what this pass would stamp, per
+        :func:`atif_corpus.domain.generation.generation_matches`. Treated as
+        stale: the source did not move, but the code that turns it into
+        artifacts did.
     """
     ordered = sorted(sessions, key=lambda s: s.session_id)
-    missing = set(unmaterialized_session_ids)
+    missing = set(unmaterialized_session_ids) | set(generation_stale_session_ids)
     to_materialize: list[SessionSource] = []
     up_to_date: list[SessionSource] = []
     skipped_live: list[SessionSource] = []
