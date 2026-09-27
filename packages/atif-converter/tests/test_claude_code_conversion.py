@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from harbor_oracle import diff_paths, harbor_claude_code_trajectory, harbor_has_private_api
+from harbor_oracle import harbor_claude_code_trajectory, harbor_has_private_api, parity_diffs
 
 from atif_converter.domain import claude_code_conversion, pricing
 from atif_converter.domain.claude_code_conversion import convert_claude_code_records
@@ -97,7 +97,7 @@ def _convert(
         if theirs is None or ours_dict is None:
             assert theirs is ours_dict
         else:
-            assert diff_paths(theirs, ours_dict) == []
+            assert parity_diffs(theirs, ours_dict) == []
     return ours_dict
 
 
@@ -683,7 +683,12 @@ class TestCost:
                     "a1", "02", "x", model=None, usage={"input_tokens": 0, "output_tokens": 0}
                 ),
                 _assistant(
-                    "a2", "03", "y", msg_id="m2", usage={"input_tokens": 5, "output_tokens": 1}
+                    "a2",
+                    "03",
+                    "y",
+                    msg_id="m2",
+                    model="claude-opus-5",
+                    usage={"input_tokens": 5, "output_tokens": 1},
                 ),
             ],
         )

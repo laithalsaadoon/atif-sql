@@ -36,14 +36,17 @@ from atif_converter.infrastructure.raw_records import LoadedSession, load_sessio
 class ConversionResult:
     """Output of one conversion: trajectory dict + validation verdict.
 
-    ``convert_session`` returns the raw harbor output (``edges_lines`` empty);
-    ``convert_and_audit`` returns the ENRICHED trajectory plus the ready-to-
-    write edges.jsonl lines derived from the raw records.
+    ``convert_session`` returns the raw harbor output (``edges_lines`` and
+    ``events_lines`` empty); ``convert_and_audit`` returns the ENRICHED
+    trajectory plus the ready-to-write edges.jsonl and session_events.jsonl
+    lines derived from the raw records.
     """
 
     trajectory: dict[str, Any]
     validation_errors: tuple[str, ...]
     edges_lines: tuple[str, ...] = ()
+    #: session_events.jsonl lines (:mod:`atif_converter.domain.session_events`).
+    events_lines: tuple[str, ...] = ()
 
     @property
     def is_valid(self) -> bool:

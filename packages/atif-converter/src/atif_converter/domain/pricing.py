@@ -21,8 +21,19 @@ WHAT IS COVERED. A model name with no ``/`` that is either
 - absent from the table but routed to Anthropic by the table's own
   ``fallback_generalizations`` rules (a bare ``claude-<family>-<n>`` id litellm
   does not know yet). litellm prices those from the capability rules' union,
-  which carries no rates, so the result is ``(0.0, 0.0)``; that is what the
-  frozen trajectories hold and it is kept.
+  which carries no rates, so the result is ``(0.0, 0.0)``.
+  :func:`fast_cost_per_token` keeps returning exactly that, because it's
+  litellm's answer and the identity test holds it to litellm. The converter
+  prices through :func:`priced_cost_per_token` instead, which reads that
+  rate-less entry as "no price" and returns ``None``: a model nobody priced
+  costs an unknown amount, not $0.
+
+LOCAL OVERRIDES. :data:`LOCAL_PRICE_OVERRIDES` prices a few bare model ids
+the bundled table doesn't hold yet, from the vendor's own published rates
+(cited per entry). An override applies ONLY while the bundled table lacks the
+key, so a litellm bump that ships the model takes over on its own, and
+``tests/test_pricing_policy.py`` fails once that happens so the stale override
+gets deleted. Overrides run the same arithmetic as the fast path.
 
 Everything else (a ``provider/model`` string, a fine-tune ``ft:`` id, a
 ``tiered_pricing`` table, a provider with its own cost calculator, a model
@@ -71,9 +82,12 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 #: litellm's switch between the bundled table and the remote one.
 LOCAL_TABLE_ENV: Final = "LITELLM_LOCAL_MODEL_COST_MAP"
@@ -609,6 +623,26 @@ def fast_cost_per_token(
     if any(type(count) is not int for count in counts):
         _decline("non-int token counts")
     entry = _resolve(table, model)
+    return _price_entry(
+        entry,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        service_tier=service_tier,
+    )
+
+
+def _price_entry(
+    entry: dict[str, Any],
+    *,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cache_creation_input_tokens: int,
+    cache_read_input_tokens: int,
+    service_tier: str | None,
+) -> tuple[float, float]:
+    """``generic_cost_per_token`` over one resolved entry (litellm's float order)."""
     rates = _base_rates(entry, prompt_tokens, service_tier)
 
     # generic_cost_per_token: the cache counts arrive on prompt_tokens_details, text
@@ -661,6 +695,135 @@ def cost_per_token(
         service_tier=service_tier,
     )
     return cast("tuple[float, float]", priced)
+
+
+#: Per-token USD rates for bare model ids litellm's bundled table (1.100.1)
+#: doesn't price yet. Keys use litellm's own field names, so an entry is priced
+#: by the same :func:`_price_entry` arithmetic as a table entry. Only models
+#: whose rates were checked live against the vendor's pricing page belong
+#: here; an unchecked model stays unpriced (``None``), never guessed.
+#:
+#: Sources, fetched 2026-09-27:
+#:
+#: * claude-opus-5-5: https://platform.claude.com/docs/en/models/opus-5-5/overview
+#:   ("$4 / MTok" input, "$20 / MTok" output, "$5 / MTok" 5m cache write,
+#:   "$8 / MTok" 1h cache write, "$0.20 / MTok" cache read), and
+#:   https://platform.claude.com/docs/en/about-claude/pricing ("0.05x on Claude
+#:   Opus 5.5" for a cache hit).
+#: * claude-fable-5-1: https://platform.claude.com/docs/en/models/fable-5-1/overview
+#:   ("$10 / MTok" input, "$50 / MTok" output, "$12.50 / MTok" 5m cache write,
+#:   "$20 / MTok" 1h cache write, "$0.25 / MTok" cache read).
+#:
+#: Both match the entries litellm's main branch carries for the same keys
+#: (model_prices_and_context_window.json, 2026-09-27), and litellm 1.101.0+
+#: already bundles claude-fable-5-1, so these retire with the next litellm bump.
+LOCAL_PRICE_OVERRIDES: Final[dict[str, dict[str, Any]]] = {
+    "claude-opus-5-5": {
+        "litellm_provider": "anthropic",
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "cache_creation_input_token_cost": 5e-06,
+        "cache_creation_input_token_cost_above_1hr": 8e-06,
+        "cache_read_input_token_cost": 2e-07,
+    },
+    "claude-fable-5-1": {
+        "litellm_provider": "anthropic",
+        "input_cost_per_token": 1e-05,
+        "output_cost_per_token": 5e-05,
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_1hr": 2e-05,
+        "cache_read_input_token_cost": 2.5e-07,
+    },
+}
+
+#: The rate keys whose absence makes an entry "unpriced". A capability-rule
+#: generalization (litellm's entry for an unmapped ``claude-*`` id) carries
+#: neither.
+_RATE_KEYS: Final = ("input_cost_per_token", "output_cost_per_token")
+
+
+def local_override(model: str) -> dict[str, Any] | None:
+    """The override entry for ``model``, only while the bundled table lacks the key."""
+    entry = LOCAL_PRICE_OVERRIDES.get(model)
+    if entry is None:
+        return None
+    table = _active_table()
+    if table is not None and model in table.entries:
+        return None
+    return entry
+
+
+def _rate_less(entry: dict[str, Any]) -> bool:
+    return all(_coerce_rate(entry.get(key)) is None for key in _RATE_KEYS)
+
+
+def priced_cost_per_token(
+    *,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    cache_creation_input_tokens: int,
+    cache_read_input_tokens: int,
+    service_tier: str | None = None,
+) -> tuple[float, float] | None:
+    """The converter's pricing policy: a real price, or ``None`` when no one priced the model.
+
+    Three outcomes, in order:
+
+    1. ``model`` has a :data:`LOCAL_PRICE_OVERRIDES` entry the bundled table
+       doesn't shadow: priced from it with the fast path's arithmetic.
+    2. The fast path resolves ``model`` to an entry with no rates at all (an
+       unmapped ``claude-*`` id litellm prices from its capability rules):
+       ``None``, where :func:`cost_per_token` would say ``(0.0, 0.0)``.
+    3. Anything else: :func:`cost_per_token`, unchanged, including raising
+       for a model litellm can't price.
+    """
+    override = local_override(model)
+    counts = (
+        prompt_tokens,
+        completion_tokens,
+        cache_creation_input_tokens,
+        cache_read_input_tokens,
+    )
+    if override is not None and all(type(count) is int for count in counts):
+        return _price_entry(
+            override,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            service_tier=service_tier,
+        )
+    table = _active_table()
+    if table is not None and model and "/" not in model:
+        try:
+            entry: dict[str, Any] | None = _resolve(table, model)
+        except (FastPathUnsupported, UnpriceableModelError):
+            entry = None
+        if entry is not None and _rate_less(entry):
+            logger.debug("No rates for model '{}'; leaving its cost unpriced", model)
+            return None
+    return cost_per_token(
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        service_tier=service_tier,
+    )
+
+
+#: ``final_metrics.extra["cost_source"]`` for an estimate priced from the bundled table alone.
+COST_SOURCE_LITELLM: Final = "litellm_estimate"
+#: ... and for one where at least one step was priced from :data:`LOCAL_PRICE_OVERRIDES`.
+COST_SOURCE_WITH_OVERRIDES: Final = "litellm_estimate+local_overrides"
+
+
+def cost_source_label(models: Iterable[str | None]) -> str:
+    """Which table priced an estimate over steps of ``models``."""
+    if any(model is not None and local_override(model) is not None for model in models):
+        return COST_SOURCE_WITH_OVERRIDES
+    return COST_SOURCE_LITELLM
 
 
 def has_pricing_entry(key: str) -> bool:

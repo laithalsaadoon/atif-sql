@@ -27,6 +27,7 @@ beyond the parse.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -39,6 +40,11 @@ from atif_converter.domain.fidelity import (
     FidelityGap,
     LossReport,
 )
+from atif_converter.domain.session_events import (
+    claude_reported_cost,
+    claude_session_events,
+    session_events_jsonl_lines,
+)
 from atif_converter.infrastructure.census import SessionCensus, census_from_snapshot
 from atif_converter.infrastructure.harbor_adapter import (
     ConversionResult,
@@ -49,27 +55,83 @@ from atif_converter.infrastructure.harbor_adapter import (
 from atif_converter.infrastructure.raw_records import SessionSnapshot, mutated_files
 from atif_converter.infrastructure.source_archive import SourceArchiveWriter
 
-#: Gaps every harbor 0.22.0 conversion exhibits regardless of session content.
-_STRUCTURAL_GAPS: frozenset[FidelityGap] = frozenset(
-    {
-        FidelityGap.PARENT_CHAIN_FLATTENED,
-        FidelityGap.CACHE_SPLIT_PARTIAL,
-        FidelityGap.UUID_NOT_PRESERVED,
-        FidelityGap.COMPACT_SUMMARY_UNHANDLED,
-    }
+#: Gaps every conversion exhibits regardless of session content. The parent
+#: chain is flattened into a timestamp-sorted step list, and nothing after
+#: conversion rebuilds it inside the trajectory (``edges.jsonl`` keeps it).
+_STRUCTURAL_GAPS: frozenset[FidelityGap] = frozenset({FidelityGap.PARENT_CHAIN_FLATTENED})
+
+_ENRICHMENT_REFUSAL_KEYS: tuple[str, ...] = (
+    "enrichment_unattributed_steps",
+    "enrichment_truncated_at_step",
 )
 
 
-def _loss_report(census: SessionCensus) -> LossReport:
+def _attributed_uuids(trajectory: dict[str, Any]) -> set[str]:
+    uuids: set[str] = set()
+    for step in trajectory.get("steps") or []:
+        extra = step.get("extra") if isinstance(step, dict) else None
+        source_uuids = extra.get("source_uuids") if isinstance(extra, dict) else None
+        if isinstance(source_uuids, list):
+            uuids.update(uuid for uuid in source_uuids if isinstance(uuid, str))
+    return uuids
+
+
+def _has_cache_creation_usage(records: list[dict[str, Any]]) -> bool:
+    for record in records:
+        if record.get("type") != "assistant":
+            continue
+        message = record.get("message")
+        usage = message.get("usage") if isinstance(message, dict) else None
+        if isinstance(usage, dict) and isinstance(usage.get("cache_creation_input_tokens"), int):
+            return True
+    return False
+
+
+def _unrepaired_gaps(enriched: dict[str, Any], records: list[dict[str, Any]]) -> set[FidelityGap]:
+    """The three gaps enrichment repairs, reported only where it DIDN'T.
+
+    * ``uuid_not_preserved``: enrichment refused to attribute some step
+      (an unattributed-steps count or a truncation marker on the trajectory).
+    * ``compact_summary_unhandled``: a compaction-summary record exists and
+      its uuid landed in no step's ``source_uuids``, so no step carries the
+      ``is_compact_summary`` flag for it.
+    * ``cache_split_partial``: assistant usage carries
+      ``cache_creation_input_tokens`` but the trajectory has no
+      ``cache_creation_total``.
+    """
+    gaps: set[FidelityGap] = set()
+    extra = enriched.get("extra")
+    extra = extra if isinstance(extra, dict) else {}
+    if any(extra.get(key) is not None for key in _ENRICHMENT_REFUSAL_KEYS):
+        gaps.add(FidelityGap.UUID_NOT_PRESERVED)
+    compact_uuids = {
+        record["uuid"]
+        for record in records
+        if record.get("isCompactSummary") and isinstance(record.get("uuid"), str)
+    }
+    if compact_uuids and not compact_uuids <= _attributed_uuids(enriched):
+        gaps.add(FidelityGap.COMPACT_SUMMARY_UNHANDLED)
+    if _has_cache_creation_usage(records) and "cache_creation_total" not in extra:
+        gaps.add(FidelityGap.CACHE_SPLIT_PARTIAL)
+    return gaps
+
+
+def _loss_report(
+    census: SessionCensus,
+    *,
+    captured: int,
+    unrepaired: set[FidelityGap],
+) -> LossReport:
     converted = sum(
         count
         for record_type, count in census.record_counts.items()
         if record_type in CONVERTIBLE_RECORD_TYPES
     )
     total = sum(census.record_counts.values())
+    dropped = total - converted - captured
 
-    gaps = set(_STRUCTURAL_GAPS)
-    if total != converted:
+    gaps = set(_STRUCTURAL_GAPS) | unrepaired
+    if dropped:
         gaps.add(FidelityGap.NON_MESSAGE_RECORDS_DROPPED)
     if census.subagent_files:
         gaps.add(FidelityGap.SUBAGENTS_INLINED)
@@ -81,7 +143,8 @@ def _loss_report(census: SessionCensus) -> LossReport:
     return LossReport(
         record_counts=record_counts,
         records_converted=converted,
-        records_dropped=total - converted,
+        records_captured=captured,
+        records_dropped=dropped,
         gaps_observed=frozenset(gaps),
         subagent_files_found=len(census.subagent_files) + len(census.workflow_subagent_files),
         # Our converter discovers every side file itself, workflow-nested ones
@@ -89,6 +152,18 @@ def _loss_report(census: SessionCensus) -> LossReport:
         subagent_files_convertible=len(census.subagent_files) + len(census.workflow_subagent_files),
         workflow_subagent_files_found=len(census.workflow_subagent_files),
     )
+
+
+def _stamp_reported_cost(enriched: dict[str, Any], reported: dict[str, Any]) -> None:
+    """Put Claude Code's own cost figure beside the computed estimate."""
+    if not reported:
+        return
+    final_metrics = enriched.setdefault("final_metrics", {})
+    extra = final_metrics.get("extra")
+    if not isinstance(extra, dict):
+        extra = {}
+        final_metrics["extra"] = extra
+    extra.update(reported)
 
 
 def _refuse_if_mutated(
@@ -149,21 +224,27 @@ def convert_and_audit(
     result = convert_loaded_session(loaded, include_subagents=include_subagents)
 
     pairs = loaded.record_pairs()
-    report = _loss_report(census_from_snapshot(snapshot, pairs))
+    census = census_from_snapshot(snapshot, pairs)
     edges_lines = tuple(edges_jsonl_lines(pairs))
+    events = claude_session_events(pairs)
+    events_lines = tuple(session_events_jsonl_lines(events))
+    records = [record for record, _src in pairs]
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole large transcript's worth of steps.
-    enriched = enrich_trajectory(
-        result.trajectory,
-        [record for record, _src in pairs],
-        copy_input=False,
+    enriched = enrich_trajectory(result.trajectory, records, copy_input=False)
+    _stamp_reported_cost(enriched, claude_reported_cost(pairs))
+    report = _loss_report(
+        census,
+        captured=len(events),
+        unrepaired=_unrepaired_gaps(enriched, records),
     )
-    del pairs, loaded
+    del pairs, loaded, records, events
     _refuse_if_mutated(snapshot, archive)
 
     enriched_result = ConversionResult(
         trajectory=enriched,
         validation_errors=validate_trajectory(enriched),
         edges_lines=edges_lines,
+        events_lines=events_lines,
     )
     return enriched_result, report

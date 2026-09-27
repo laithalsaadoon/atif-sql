@@ -125,6 +125,7 @@ from atif_corpus.domain.layout import (
     EDGES_FILENAME,
     LOSS_REPORT_FILENAME,
     META_FILENAME,
+    SESSION_EVENTS_FILENAME,
     SOURCE_ARCHIVE_DIRNAME,
     TRAJECTORY_FILENAME,
     CorpusLayout,
@@ -476,7 +477,7 @@ def _write_session(
     and :func:`_unmaterialized_session_ids` replans it next pass. Within
     staging the write order stays source archive (written by the converter
     while it verifies its input) → trajectory → loss_report → edges →
-    (producer's extra artifacts) → meta, ``meta.json`` last as
+    session_events → (producer's extra artifacts) → meta, ``meta.json`` last as
     belt-and-braces (atif-duck gates its readers on meta presence), and each
     artifact is fsynced before its rename so the ordering holds across power
     loss too. The producer sees the staged ``trajectory.json`` already on
@@ -528,6 +529,10 @@ def _write_session(
         write_text_atomic(
             staging / EDGES_FILENAME,
             "".join(f"{line}\n" for line in output.edges_lines),
+        )
+        write_text_atomic(
+            staging / SESSION_EVENTS_FILENAME,
+            "".join(f"{line}\n" for line in output.events_lines),
         )
         extras, artifact_elapsed = _produce_extra_artifacts(
             artifact_producer, staging, job.session_id, output.trajectory_dict

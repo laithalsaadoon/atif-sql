@@ -457,7 +457,7 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
             service_tier = None
 
         try:
-            prompt_cost, completion_cost = pricing.cost_per_token(
+            priced = pricing.priced_cost_per_token(
                 model=step.model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -472,7 +472,14 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
                 exc,
             )
             return None
+        if priced is None:
+            # DELIBERATE DIVERGENCE from harbor, which sums litellm's (0.0, 0.0)
+            # for a model with no rates and reports a $0 session. One unpriced
+            # step makes the whole estimate unknown, as a litellm error does.
+            logger.debug("No price for Claude model '{}'; no estimate", step.model_name)
+            return None
 
+        prompt_cost, completion_cost = priced
         total_cost += prompt_cost + completion_cost
         priced_any_step = True
 
@@ -925,7 +932,9 @@ def _build_final_metrics(steps: list[Step]) -> FinalMetrics:
     # estimate is the only cost source.
     total_cost_usd = _estimate_total_cost_from_steps(steps)
     if total_cost_usd is not None:
-        final_extra["cost_source"] = "litellm_estimate"
+        final_extra["cost_source"] = pricing.cost_source_label(
+            step.model_name for step in steps if step.metrics is not None
+        )
 
     return FinalMetrics(
         total_prompt_tokens=total_prompt_tokens,
