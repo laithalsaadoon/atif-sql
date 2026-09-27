@@ -165,3 +165,69 @@ def diff_paths(expected: Any, actual: Any, path: str = "$") -> list[str]:
     if expected != actual:
         return [f"{path}: harbor={expected!r} ours={actual!r}"]
     return []
+
+
+#: JSON paths where our converter departs from harbor ON PURPOSE when a
+#: session holds a model harbor prices at a fabricated $0 (a rate-less litellm
+#: entry) or one we price from ``pricing.LOCAL_PRICE_OVERRIDES``. harbor sums
+#: litellm's ``(0.0, 0.0)``; we report no estimate, or the override's price.
+PRICING_DIVERGENCE_PATHS: frozenset[str] = frozenset(
+    {"$.final_metrics.total_cost_usd", "$.final_metrics.extra.cost_source"}
+)
+
+
+def _diff_path(diff: str) -> str:
+    return diff.split(":", 1)[0]
+
+
+def _pricing_divergence_expected(ours: dict[str, Any]) -> bool:
+    """Whether ``ours`` is a trajectory the pricing policy SHOULD price differently from harbor.
+
+    Two cases, each checked against the policy itself so a priced session that
+    regressed to ``None`` still fails parity: an estimate labeled as using the
+    local overrides, or no estimate while some agent step's model has no price.
+    """
+    from atif_converter.domain import pricing
+
+    final_metrics = ours.get("final_metrics") or {}
+    extra = final_metrics.get("extra") or {}
+    if extra.get("cost_source") == pricing.COST_SOURCE_WITH_OVERRIDES:
+        return True
+    if final_metrics.get("total_cost_usd") is not None:
+        return False
+    models = {
+        step.get("model_name")
+        for step in ours.get("steps") or []
+        if step.get("source") == "agent" and isinstance(step.get("model_name"), str)
+    }
+    for model in models:
+        try:
+            priced = pricing.priced_cost_per_token(
+                model=model,
+                prompt_tokens=1,
+                completion_tokens=1,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            )
+        except Exception:  # noqa: BLE001, S112 - a model litellm refuses is not a policy divergence
+            continue
+        if priced is None:
+            return True
+    return False
+
+
+def parity_diffs(expected: dict[str, Any], ours: dict[str, Any]) -> list[str]:
+    """:func:`diff_paths` minus the documented deliberate divergences.
+
+    Only :data:`PRICING_DIVERGENCE_PATHS` are forgiven, and only when
+    :func:`_pricing_divergence_expected` says the pricing policy explains them.
+    """
+    diffs = diff_paths(expected, ours)
+    if not _pricing_divergence_expected(ours):
+        return diffs
+    # When the label was harbor's only final_metrics.extra key, ours has no
+    # extra at all, and the diff names the parent path instead.
+    harbor_extra = (expected.get("final_metrics") or {}).get("extra")
+    label_only = isinstance(harbor_extra, dict) and set(harbor_extra) == {"cost_source"}
+    forgiven = PRICING_DIVERGENCE_PATHS | ({"$.final_metrics.extra"} if label_only else frozenset())
+    return [diff for diff in diffs if _diff_path(diff) not in forgiven]
