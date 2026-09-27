@@ -134,7 +134,7 @@ places with no import edge between them.
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:14`).
 - **`.staging` sits outside `sessions/` for a reader-visibility reason, not tidiness.** DuckDB's
   `read_json` glob matches dot-dirs, so moving staging under `sessions/` exposes half-written session
-  dirs to every reader and to the ghost-removal walk
+  dirs to every reader and to the source-removal walk
   (`packages/atif-corpus/src/atif_corpus/domain/layout.py:47-55`).
 - **`LossReport.to_json()`'s keys are wire contract, not an internal shape.** atif-duck reads them
   back through `_LOSS_REPORT_COLUMNS`, so renaming a key breaks the `loss_reports` view with no type

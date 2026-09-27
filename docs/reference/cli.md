@@ -35,7 +35,9 @@ atif-sql materialize [OPTIONS]
 Sync the materialized corpus with the raw transcript corpus in one scan-plan-convert-write pass.
 `packages/atif-cli/src/atif_cli/app.py:448`
 
-A transcript whose session id fails the boundary in `packages/atif-corpus/src/atif_corpus/domain/session_id.py` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, at most 255 characters) is skipped with a logged reason and counted: the report carries `rejected` and `rejected_session_ids` beside `unreadable` and `unreadable_session_ids`, and the table form prints one `REJECTED` line per name on stderr. Nothing from such a session is written, and a corpus directory an older version wrote under that name is kept rather than removed as a ghost.
+A transcript whose session id fails the boundary in `packages/atif-corpus/src/atif_corpus/domain/session_id.py` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, at most 255 characters) is skipped with a logged reason and counted: the report carries `rejected` and `rejected_session_ids` beside `unreadable` and `unreadable_session_ids`, and the table form prints one `REJECTED` line per name on stderr. Nothing from such a session is written, and a corpus directory an older version wrote under that name is kept and never marked.
+
+Nothing is ever deleted. A session whose source transcript vanished keeps its artifacts, and its `meta.json` gets `source_present: false` and `source_removed_at` once; the report's `removed` / `removed_session_ids` are the sessions newly marked this pass and `retained` counts every session kept without a source. Every live conversion also writes a zstd archive of the session's raw source files to `sessions/<id>/source/` (listed in `meta.source_archive`), from the bytes the converter parsed. A session is stale when its sources moved OR when its recorded `converter_schema` (the converter's `CONVERTER_SCHEMA_VERSION`; and, on a columnar pass, `columnar_schema`) differs from the running one, and `meta.converter_version` is now the real `atif-sql` release instead of `"unknown"`; a stale source-removed session with an archive is re-converted from it and counted in `from_archive` / `from_archive_session_ids`. A transcript with nothing to convert is counted in `empty` / `empty_session_ids`, recorded in `empty_sessions.json`, and not retried until it's written to or the converter schema changes, so `failed` only counts real failures. See `docs/CONTRACT.md`.
 
 The convert-write stage runs across a process pool by default. Each worker builds its own converter once and writes through the same per-session staging directory and atomic swap the single-process path uses, so the artifacts are byte-identical either way and a crash still costs at most the session in flight. `--workers 1` is the single-process reference path. The report's `convert_seconds` is the per-session sum, so with several workers it can exceed `total_seconds`, which stays the wall clock; `workers` in the report is the pool size the pass actually used, which is never more than the number of sessions planned (`packages/atif-corpus/src/atif_corpus/application/materialize.py:385`).
 
@@ -50,15 +52,15 @@ Flags:
 - `--workers` — processes for the convert-write stage; default `ATIF_SQL_MATERIALIZE_WORKERS`, else `min(8, cpu_count)`. `1` is the single-process path. `:455`
 - `--format` — report format. `:346`
 
-Exit codes: `0` ok, `64` `--workers` below `1`; `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
-- `--columnar` / `--no-columnar` — write the typed columnar artifacts (`session.parquet`, `steps.parquet`, `tool_calls.parquet`, `tool_results.parquet`) beside the four JSON artifacts, staged and swapped with them; default `True`. `--no-columnar` writes exactly the contract's JSON artifacts and `query` reads those sessions from `trajectory.json`. `packages/atif-cli/src/atif_cli/app.py:452`
+Exit codes: `0` ok, `64` `--workers` below `1`; `78` the corpus at this root holds the other agent's sessions, refused with nothing touched; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so the pass refused to mark them source-removed and touched nothing. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
+- `--columnar` / `--no-columnar` — write the typed columnar artifacts (`session.parquet`, `steps.parquet`, `tool_calls.parquet`, `tool_results.parquet`) beside the four JSON artifacts, staged and swapped with them; default `True`. `--no-columnar` writes only the contract's JSON artifacts and the source archive, and `query` reads those sessions from `trajectory.json`. `packages/atif-cli/src/atif_cli/app.py:452`
 - `--format` — report format. `:346`
 
 The report carries `convert_seconds` and `artifact_seconds` (the time spent writing the columnar files; `0.0` under `--no-columnar`), printed as `columnar: N.NNs` in the table form.
 
 What the artifacts cost, measured on a 300-session, 1.6 GB Claude Code corpus (frozen snapshot, one machine, `/usr/bin/time`): a full `--force` pass took 91 s at a 797 MB peak with them and 55 s at a 670 MB peak without, and they add 455 MB on disk. Most of the extra memory is the producer's DuckDB and pyarrow imports (about 90 MB) plus a bounded working set; most of the extra time is the typed conversion of tool results. Every `query` after that reads typed columns: the three panel statements dropped from 2.5 to 8 s and 4.5 to 8.6 GB peak to about 0.9 s and 490 MB each. `--no-columnar` is the right call for a corpus that's written far more often than it's queried.
 
-Exit codes: `0` ok, `78` the corpus at this root holds the other agent's sessions, refused with nothing removed; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so ghost removal was refused and nothing was deleted. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
+Exit codes: `0` ok, `78` the corpus at this root holds the other agent's sessions, refused with nothing touched; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so the pass refused to mark them source-removed and touched nothing. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
 
 ## status
 
@@ -68,6 +70,8 @@ atif-sql status [OPTIONS]
 
 Report corpus freshness: watermark age, counts, bytes, staleness.
 `packages/atif-cli/src/atif_cli/app.py:444`
+
+It replays the planning a default `materialize` would do, so `staleness.stale` includes sessions a converter or columnar-schema change made stale (`staleness.generation_stale` counts those alone) and `staleness.from_archive` counts source-removed sessions the next pass would re-convert from their archive. `retained_sessions` counts sessions kept without a source, `empty_sessions` the transcripts recorded as empty, and `converter_schema` / `columnar_schema` are the running versions a current session must carry.
 
 Flags:
 

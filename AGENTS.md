@@ -92,8 +92,9 @@ Rules of the road:
   of records; the fingerprints are re-checked (stat and digest) after the
   artifacts are built. Per file that's two opens, one parse and two hash
   passes, pinned by `test_snapshot_and_drift.py::TestSinglePass` for both
-  agents. Don't add a reader that opens the session again; take the records
-  from the `LoadedSession`.
+  agents, and by `test_source_archive.py::TestArchivingCostsNoRead` with the
+  source archive on. Don't add a reader that opens the session again; take the
+  records from the `LoadedSession`, and take raw bytes from the re-check pass.
 - loguru only, never stdlib logging (ruff banned-api enforces it).
 - SQL text is constants only. No corpus path may be spliced into a statement:
   `read_json(?)` takes globs and file lists as bound parameters, parquet file
@@ -115,8 +116,46 @@ Rules of the road:
   it, and only roots absent from `model_fields_set` re-derive, so an explicit
   `ATIF_SQL_SOURCE_ROOT` or `ATIF_SQL_CORPUS_ROOT` still wins. That override is
   also the one way to aim a pass at the other agent's corpus, which
-  `meta.agent` catches: materialize refuses (exit 78) rather than deleting the
-  other agent's sessions as ghosts.
+  `meta.agent` catches: materialize refuses (exit 78) rather than marking the
+  other agent's sessions as source-removed.
+- The corpus never deletes a session. When a source transcript disappears
+  (Claude Code and Codex expire old ones), materialize keeps the session's
+  artifacts and rewrites its `meta.json` once with `source_present: false` and
+  `source_removed_at`. The report's `removed` counts sessions newly marked that
+  pass and `retained` counts every session kept without a source. A source that
+  comes back is re-converted from the live file, which clears the mark.
+- Every live conversion writes a raw source archive into the same staged swap:
+  `sessions/<id>/source/<path>.zst`, one zstd file per source file (the main
+  transcript, side-file transcripts, and every other file under the session's
+  side dir), listed in `meta.source_archive` with sizes and sha256s. The
+  transcript bytes come from the converter's verifying re-read (a
+  `SourceArchiveWriter` handed to `mutated_files`), so archiving adds no open
+  and the archive is exactly what was parsed. `restore_session_sources` in
+  `atif_corpus.infrastructure.source_archive` rebuilds the tree, and a
+  source-removed session whose generation is stale re-converts from it.
+- Staleness has two halves. The watermark says whether the SOURCE moved; the
+  generation says whether the CODE did: a session whose `meta.converter_schema`
+  (or `meta.columnar_schema`, on a columnar pass) differs from the running value
+  is stale, and one from before the key existed is stale too. `converter_schema`
+  is `atif_converter.domain.schema_version.CONVERTER_SCHEMA_VERSION`;
+  `meta.converter_version` is the `atif-sql` release and is provenance only
+  (the bundled wheel has no `atif-converter` distribution, so the old lookup
+  answered `"unknown"`). THE RULE: bump `CONVERTER_SCHEMA_VERSION` in the same
+  commit as any change that can alter a byte of any artifact for any input, and
+  a bump re-converts the whole corpus (source-removed sessions from their
+  archive). `packages/atif-converter/tests/test_converter_schema_version.py`
+  pins a digest of the converter's code (docstrings and comments excluded)
+  beside the version, so any converter code change fails until you decide: bump
+  if output can change, then re-pin the digest either way. A harbor or litellm
+  bump can change output with no converter code change, so it needs the same
+  decision by hand. The columnar schema works the same way from atif-duck's
+  `COLUMNAR_SCHEMA_VERSION`: a bump re-converts rather than leaving sessions on
+  the `trajectory.json` fallback.
+- A transcript with nothing to convert (the converter's `EmptySessionError`,
+  translated to the port's `EmptySourceError`) is recorded in
+  `<corpus>/empty_sessions.json` with the generation it was checked under, its
+  watermark advances, and it's reported under `empty`, never `failed`. A write to
+  it or a `CONVERTER_SCHEMA_VERSION` bump tries it again.
 - `materialize` runs its convert+write stage on a spawn-context process pool
   (`--workers N` / `ATIF_SQL_MATERIALIZE_WORKERS`, default `min(8, cpu_count)`).
   `--workers 1` is the single-process reference path and must stay

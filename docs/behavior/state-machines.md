@@ -33,7 +33,7 @@ stateDiagram-v2
     up_to_date --> skipped_live: newest_mtime_ns
     up_to_date --> to_materialize: _is_stale
     up_to_date --> to_materialize: _unmaterialized_session_ids
-    up_to_date --> removed_session_ids: _remove_ghost_sessions
+    up_to_date --> removed_session_ids: _retain_sourceless_sessions (kept, marked)
     unreadable_session_ids --> skipped_live: scan_sources
     removed_session_ids --> [*]
 ```
@@ -53,15 +53,15 @@ stateDiagram-v2
   express a missing artifact directory, so the directory check is what force-replans it (`:302-328`).
 - `unreadable_session_ids` is a parking state, and the only state a session can starve in. A transient
   stat failure clears next pass; a permanent one (a side-file left at mode 000) leaves the session
-  never materialized, never `up_to_date`, never `skipped_live`, and deliberately never ghosted, which
+  never materialized, never `up_to_date`, never `skipped_live`, and deliberately never marked source-removed, which
   is why the report carries the ids at all (`:135-142`).
 - `removed_session_ids` is the sole terminal state: `shutil.rmtree` deletes the corpus session
   directory (`:411`) and `_advance_watermark` drops its entries, because the raw source is
   authoritative and there are no tombstones (`:386-392`). A session whose sources merely could not be
-  read is never ghosted (`:404-410`), and a scan that found zero sessions over a non-empty corpus
+  read is never marked source-removed (`:404-410`), and a scan that found zero sessions over a non-empty corpus
   raises `SuspiciousEmptyScanError` instead of removing everything (`:542-548`).
 - Transition sites: `scan_sources` at `:522`; `QuiescencePolicy` at `:575`; `_write_session` at `:588`;
-  `MaterializationFailure` at `:599`; `_remove_ghost_sessions` at `:562`; `_advance_watermark` at
+  `MaterializationFailure` at `:599`; `_retain_sourceless_sessions` (it keeps and marks, never deletes); `_advance_watermark` at
   `:610`.
 
 Defined at: `packages/atif-corpus/src/atif_corpus/application/materialize.py:476`

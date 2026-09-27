@@ -31,10 +31,12 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
    set using the watermark as the only record of what lived there —
    `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:143`,
    `packages/atif-corpus/src/atif_corpus/application/materialize.py:342`.
-5. Guard, then collect ghosts: zero scanned sessions over a non-empty corpus
-   raises `SuspiciousEmptyScanError` instead of deleting everything as ghosts,
-   and ghost removal is skipped entirely when any source directory failed to
-   list, because absence is then not evidence of deletion — `:542`, `:379`.
+5. Guard, then retain sourceless sessions: zero scanned sessions over a
+   non-empty corpus raises `SuspiciousEmptyScanError` instead of marking
+   everything source-removed. Otherwise every corpus session with no source in
+   the scan is KEPT and marked `source_present: false` once; marking is skipped
+   entirely when any source directory failed to list, because absence is then
+   not evidence of deletion (`_retain_sourceless_sessions`).
 6. Build the pure `MaterializationPlan` from quiescence and the watermark,
    force-replanning sessions the watermark calls current whose artifact
    directory is missing — the one state reachable by a kill inside the swap
