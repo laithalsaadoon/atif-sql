@@ -32,6 +32,10 @@ from atif_converter.domain.codex_fidelity import (
 )
 from atif_converter.domain.errors import SourceMutatedDuringConversion
 from atif_converter.domain.fidelity import AnyRecordType, LossReport
+from atif_converter.domain.session_events import (
+    codex_session_events,
+    session_events_jsonl_lines,
+)
 from atif_converter.infrastructure.codex_adapter import convert_loaded_codex_session
 from atif_converter.infrastructure.codex_census import (
     CodexSessionCensus,
@@ -53,7 +57,9 @@ _ITEM_TYPE_GAPS: dict[str, CodexFidelityGap] = {
 }
 
 
-def _loss_report(census: CodexSessionCensus, *, developer_messages: int) -> LossReport:
+def _loss_report(
+    census: CodexSessionCensus, *, developer_messages: int, captured: int = 0
+) -> LossReport:
     """Loss accounting for one rollout: total records vs items that convert.
 
     ``records_converted`` counts the CONVERTIBLE RESPONSE ITEMS, not every
@@ -64,9 +70,10 @@ def _loss_report(census: CodexSessionCensus, *, developer_messages: int) -> Loss
     """
     total = sum(census.record_counts.values())
     converted = census.convertible_items
+    dropped = total - converted - captured
 
     gaps = set(CODEX_STRUCTURAL_GAPS)
-    if total != converted:
+    if dropped:
         gaps.add(CodexFidelityGap.NON_ITEM_RECORDS_DROPPED)
     if census.record_counts.get(CodexRecordType.COMPACTED):
         gaps.add(CodexFidelityGap.COMPACTION_UNHANDLED)
@@ -84,7 +91,8 @@ def _loss_report(census: CodexSessionCensus, *, developer_messages: int) -> Loss
     return LossReport(
         record_counts=record_counts,
         records_converted=converted,
-        records_dropped=total - converted,
+        records_captured=captured,
+        records_dropped=dropped,
         gaps_observed=frozenset(gaps),
         # A Codex sub-agent writes its OWN rollout under its own session id, so
         # a rollout never carries a subagent side-file. Zero here is a fact
@@ -144,12 +152,18 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
 
     records = loaded.record_pairs()
     census = codex_census_from_records(rollout_jsonl, records)
-    report = _loss_report(census, developer_messages=_developer_message_count(records))
+    events = codex_session_events(records)
+    report = _loss_report(
+        census,
+        developer_messages=_developer_message_count(records),
+        captured=len(events),
+    )
     edges_lines = tuple(codex_edges_jsonl_lines(records))
+    events_lines = tuple(session_events_jsonl_lines(events))
     # The harbor trajectory has no other consumer, so enrich in place rather
     # than deep-copying a whole rollout's worth of steps.
     enriched = enrich_codex_trajectory(result.trajectory, records, copy_input=False)
-    del records, loaded
+    del records, loaded, events
     _refuse_if_mutated(snapshot)
 
     return (
@@ -157,6 +171,7 @@ def convert_codex_and_audit(rollout_jsonl: Path) -> tuple[ConversionResult, Loss
             trajectory=enriched,
             validation_errors=validate_trajectory(enriched),
             edges_lines=edges_lines,
+            events_lines=events_lines,
         ),
         report,
     )

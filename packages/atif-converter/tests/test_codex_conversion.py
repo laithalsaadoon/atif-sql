@@ -176,7 +176,9 @@ class TestLossReport:
         # + function_call + its output. reasoning and the two tool_search items
         # are response items that convert to nothing.
         assert report.records_converted == 6
-        assert report.records_dropped == report.records_total - 6
+        # The one `compacted` record becomes a session_events row.
+        assert report.records_captured == 1
+        assert report.records_dropped == report.records_total - 6 - 1
 
     def test_json_shape_matches_the_claude_code_one(self, converted_codex: Converted) -> None:
         """One ``loss_report.json`` projection serves both agents."""
@@ -186,6 +188,7 @@ class TestLossReport:
             "record_counts",
             "records_total",
             "records_converted",
+            "records_captured",
             "records_dropped",
             "gaps_observed",
             "subagent_files_found",
