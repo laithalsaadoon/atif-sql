@@ -121,14 +121,14 @@ class ConverterPort(Protocol):
 
 
 class ArtifactProducer(Protocol):
-    """Anything that writes EXTRA per-session artifacts beside the four contract ones.
+    """Anything that writes EXTRA per-session artifacts beside the contract ones.
 
     The materialize use case calls :meth:`produce` once per session, inside
     the staged session directory, after ``trajectory.json`` /
     ``loss_report.json`` / ``edges.jsonl`` / ``session_events.jsonl`` are
     written (so a producer may read those staged files) and before
     ``meta.json`` is. Whatever the producer writes therefore publishes
-    atomically with the four contract artifacts (the whole directory is
+    atomically with the contract artifacts (the whole directory is
     swapped into place) and is covered by the same completeness marker.
 
     The producer returns extra keys for ``meta.json``. They must not collide

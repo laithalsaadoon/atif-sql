@@ -26,7 +26,7 @@ Design notes
   column so views unnest it lazily at query time. ``edges.jsonl`` is
   ``format='newline_delimited'``.
 * Two sources per session, chosen per session. A session whose
-  ``meta.json`` names the current ``columnar_schema`` and whose four parquet
+  ``meta.json`` names the current ``columnar_schema`` and whose parquet
   artifacts are present (:mod:`atif_duck.domain.columnar`) is read through
   lazy views over ``read_parquet``, so no JSON is parsed for it at query
   time; every other session is read from ``trajectory.json`` exactly as
