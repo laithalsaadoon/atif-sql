@@ -30,7 +30,7 @@ from atif_converter.infrastructure.harbor_adapter import (
 from atif_converter.infrastructure.raw_records import LoadedSession
 
 if TYPE_CHECKING:
-    from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
+    from atif_converter.domain.atif import Trajectory
 
 #: A Codex rollout's filename shape. harbor's own
 #: ``Codex._ROLLOUT_FILENAME_RE`` requires the same prefix for its upload path,

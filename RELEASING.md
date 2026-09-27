@@ -189,42 +189,46 @@ lock` must land in ONE commit, or CI fails on a lockfile instead of on the renam
 ## Install weight is a property of the release
 
 One install carries every capability. There are no capability-gating extras, no
-`atif-sql[embed]`, and nothing to install afterwards to make a command work — so the weight
-below is what every user pays, and it belongs in the release record rather than in a
-surprise. Measured 2026-08-28 against `uv.lock`, CPython 3.13, linux x86_64:
+`atif-sql[embed]`, and nothing to install afterwards to make a command work, so the weight
+is what every user pays, and it belongs in the release record rather than in a surprise.
+Measure it against `uv.lock` on CPython 3.13, linux x86_64, into a fresh venv (never the
+workspace one):
 
-| | |
-| --- | --- |
-| Third-party runtime packages | **113** (linux and macOS). 115 counting `colorama` and `win32-setctime`, which are gated `sys_platform == 'win32'`; 120 including the seven members. |
-| Wheels downloaded | **381 MiB** |
-| Installed on disk | **1.15 GiB** (1.29 GiB once bytecode is compiled) |
-| Heaviest five | `polars-runtime-32` 206 MiB, `llvmlite` 171, `lancedb` 155, `pyarrow` 150, `scipy` 107 — 67% of the install |
+```bash
+unset VIRTUAL_ENV
+uv export --frozen --no-dev --no-hashes --no-emit-workspace --no-emit-project \
+  --no-header --no-annotate > /tmp/runtime.txt          # the third-party runtime closure
+uv venv -p 3.13 /tmp/weight && \
+  uv pip install --no-compile --python /tmp/weight/bin/python -r /tmp/runtime.txt
+du -sk /tmp/weight/lib/python3.13/site-packages          # installed on disk, no bytecode
+```
 
-**Prebuilt wheel coverage is complete except for one combination.** 31 of the closure ship
-native code; all 31 have cp313 wheels for manylinux x86_64, macOS arm64, and Windows x86_64.
-The gap is `hdbscan==0.8.44` on **manylinux aarch64**: no hdbscan release has ever published
-an aarch64 wheel, so there is no version to move to, and its sdist compiles five Cython
-extensions. A first `uvx atif-sql` on Graviton, an ARM CI runner, or a `linux/arm64` container
-needs a C toolchain and pays that build. macOS arm64 is unaffected — hdbscan's
+Count the requirement lines for the dependency roster (the `sys_platform == 'win32'` lines
+don't install on linux or macOS), and record both numbers in the release PR rather than
+here, where they would go stale. The weight sits in the analytics and vector paths:
+`polars-runtime-32`, `llvmlite` (through `numba` and `umap-learn`), `lancedb`, `pyarrow`, and
+`scipy` are most of it.
+
+**Prebuilt wheel coverage is complete except for one combination.** Every package in the
+closure that ships native code has cp313 wheels for manylinux x86_64, macOS arm64, and
+Windows x86_64. The gap is `hdbscan==0.8.44` on **manylinux aarch64**: no hdbscan release has
+ever published an aarch64 wheel, so there is no version to move to, and its sdist compiles
+Cython extensions. A first `uvx atif-sql` on Graviton, an ARM CI runner, or a `linux/arm64`
+container needs a C toolchain and pays that build. macOS arm64 is unaffected — hdbscan's
 `macosx_*_universal2` wheels cover it.
 
 Alpine and other musl targets are worse and are not supported: `duckdb`, `hdbscan`,
 `lancedb`, `llvmlite`, `numba`, and `scikit-learn` publish no musllinux wheels, and
 `lancedb==0.37.1` publishes **no sdist at all**, so there is nothing to build from.
 
-**The harbor subtree is the standing follow-up.** 63 of the 113 runtime packages reach this
-project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client
-stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`,
-`aiohttp` — while `atif-converter` uses harbor for its public ATIF data classes and validator
-only (the conversion itself is ours since the port away from harbor's private methods). That
-is 57% of the dependency roster and 13% of the bytes (155 MiB): a CLI that converts JSONL
-ships a web server and a database client to do it. It is a supply-chain and install-weight
-question, not a release blocker, and it does not change the shape of a release. `litellm` in
-particular is no longer imported on the conversion hot path (`atif_converter.domain.pricing`
-reads its bundled price table directly and matches `cost_per_token` bit for bit; the import is
-now a fallback), which removed about four seconds from every convert process. The port
-makes the next step tractable: the eleven pydantic models and the validator are small enough
-to vendor or to depend on a slimmer distribution, should upstream publish one.
+**harbor and litellm are not in the closure.** harbor's agent runtime carried a web server
+(`fastapi`, `uvicorn`, `starlette`), the whole `supabase` client stack, `litellm` and through
+it `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, and `aiohttp`, all for the ATIF data
+classes, the validator, and one price lookup per step. The data classes and the validator are
+now vendored in `atif_converter.domain.atif` and the prices in
+`atif_converter/domain/model_prices.json` (see CONTRIBUTING), so both distributions are dev
+dependencies only. `uv tree --frozen --no-dev --invert --package harbor` (and `--package
+litellm`) prints nothing, and `test_dev_only_imports_guard.py` fails if `src/` imports either.
 
 ## The normal path
 

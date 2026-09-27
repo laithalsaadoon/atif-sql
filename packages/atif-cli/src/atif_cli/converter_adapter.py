@@ -43,8 +43,8 @@ failure against the session and continues (its documented port contract),
 so one invalid trajectory degrades to a per-session failure line instead of
 a silently-wrong artifact.
 
-NOTE: importing this module drags harbor (via atif_converter.application),
-so it must only be imported inside command bodies — never at
+NOTE: importing this module builds the ATIF pydantic models (via
+atif_converter.application), so it must only be imported inside command bodies — never at
 ``atif_cli.app`` module top (pinned by the lean-import test).
 """
 
@@ -86,7 +86,7 @@ class RealConverter:
         Raises
         ------
         TrajectoryValidationError
-            When the enriched trajectory fails harbor's validator — the
+            When the enriched trajectory fails the ATIF validator — the
             materialize use case records this against the session.
         atif_converter.domain.errors.DomainError
             For empty/invalid sessions or adapter failures (same handling).

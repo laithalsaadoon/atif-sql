@@ -44,8 +44,6 @@ dependencies = [
     "cyclopts>=4.10.2",
     "duckdb>=1.5.2,<2",
     "graspologic-native>=1.3.1,<2",
-    "harbor>=0.22.0,<1",
-    "litellm>=1.92.0",
     "hdbscan>=0.8.44",
     "lancedb>=0.30,<0.38",
     "loguru>=0.7.3",
@@ -148,6 +146,12 @@ wrapt = "2026-09-12T21:16:20Z"
 [dependency-groups]
 dev = [
     "commitizen>=4.13.10",
+    # harbor and litellm are test oracles, never runtime dependencies (see
+    # packages/atif-converter/tests/test_dev_only_imports_guard.py): harbor for
+    # the parity oracle and the vendored-ATIF conformance test, litellm for the
+    # pricing identity test.
+    "harbor>=0.22.0,<1",
+    "litellm>=1.92.0",
     "hypothesis>=6.157.0",
     "import-linter>=2.3",
     "lefthook>=2.1.6",
@@ -165,6 +169,13 @@ dev = [
 [tool.ruff]
 target-version = "py313"
 line-length = 100
+# Vendored third-party source, kept byte for byte so a harbor bump is a diff
+# (packages/atif-converter/tests/test_vendored_atif.py compares it to upstream).
+# Linting or formatting it would rewrite upstream's file into ours. `force-exclude`
+# makes the exclusion hold when a path is passed explicitly, which is how the
+# lefthook pre-commit jobs call ruff.
+extend-exclude = ["packages/atif-converter/src/atif_converter/domain/atif"]
+force-exclude = true
 src = [
     "packages/atif-converter/src",
     "packages/atif-corpus/src",
@@ -400,6 +411,10 @@ include = [
     "packages/atif-cli/src",
     "packages/atif-cli/tests",
 ]
+# Vendored harbor source, kept byte for byte (see `[tool.ruff] extend-exclude`).
+# Its own `ty: ignore` comments target an older ty, so checking it would mean
+# editing upstream's file.
+exclude = ["packages/atif-converter/src/atif_converter/domain/atif"]
 respect-ignore-files = true
 
 [tool.ty.terminal]

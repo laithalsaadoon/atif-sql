@@ -12,17 +12,17 @@ documents, and layers DuckDB views on top. One corpus holds one agent, and
 
 uv WORKSPACE (virtual root, members under `packages/*`):
 
-- `packages/atif-converter` — wraps harbor's `ClaudeCode` and `Codex`
-  adapters; owns the fidelity policy per agent (the seven known Claude Code
+- `packages/atif-converter` — converts Claude Code and Codex transcripts to
+  ATIF (ported from harbor's converters, on the ATIF models vendored in
+  `atif_converter.domain.atif`); owns the fidelity policy per agent (the seven known Claude Code
   gaps in `atif_converter.domain.fidelity`, the seven Codex ones in
   `atif_converter.domain.codex_fidelity`, whose values are namespaced
   `codex_*` so one `gaps_observed` array carries both). `domain.agents`
   holds the `AgentSource` enum, whose VALUES are the wire contract for the
   `--agent` flag, harbor's `Trajectory.agent.name`, and `meta.agent`.
   `domain.pricing` prices each step (`total_cost_usd`, Codex `cost_usd`) from
-  litellm's bundled price table without importing litellm, and hands any
-  shape it doesn't cover to litellm itself. Layered: `application` >
-  `infrastructure` > `domain`.
+  the vendored `domain/model_prices.json` with litellm's arithmetic; a model
+  it can't price is NULL. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
   quiescence, atomic artifact writes, and the `ArtifactProducer` port that
   lets the composition root add per-session files (atif-duck's columnar
@@ -65,27 +65,32 @@ Rules of the road:
   packages (a `forbidden` contract pins its other edges shut).
 - Inter-package deps: declare in the member's `[project.dependencies]` AND
   `[tool.uv.sources] <pkg> = { workspace = true }`.
-- harbor (`>=0.22.0,<1`) is used for its PUBLIC surface only: the ATIF data
-  classes in `harbor.models.trajectories` and `harbor.utils.trajectory_validator`.
-  The raw-JSONL → `Trajectory` conversion is ours
-  (`atif_converter.domain.claude_code_conversion`, `domain.codex_conversion`,
-  ported from 0.22.0 under Apache-2.0). Nothing under `harbor.agents` may be
-  imported from `src/`; the private converters survive only in
-  `packages/atif-converter/tests/harbor_oracle.py` as the parity oracle, with
-  frozen goldens under `tests/goldens/` and a live-corpus parity test.
-  A harbor bump is a lockfile edit plus reading the converter suite's failures
-  as upstream-behavior reports (see CONTRIBUTING).
-- litellm stays a declared dependency but is OFF the conversion hot path:
-  `import litellm` took about four of the five seconds a 76 MB session
-  needed, so `atif_converter.domain.pricing` reads litellm's own bundled
-  `model_prices_and_context_window_backup.json` (found through
-  `importlib.util.find_spec`, never `import litellm`) and repeats
-  `litellm.cost_per_token`'s arithmetic in the same float order. The output
-  is bit for bit identical; `packages/atif-converter/tests/test_pricing_identity.py`
-  proves it against litellm over every covered table key and the corpus
-  models. A shape the fast path doesn't replicate falls back to litellm, so a
-  litellm bump still means re-running that test and reading its failures as
-  upstream-pricing reports.
+- harbor and litellm are DEV dependencies only (`[dependency-groups] dev`);
+  `src/` imports nothing from either, and
+  `packages/atif-converter/tests/test_dev_only_imports_guard.py` fails on any
+  import, in any member. The ATIF data classes and the validator are harbor
+  0.22.0's, vendored under Apache-2.0 in `atif_converter.domain.atif` (each
+  file byte for byte upstream apart from its header and import path; ruff and
+  ty skip the directory so it stays that way). The raw-JSONL → `Trajectory`
+  conversion is ours (`atif_converter.domain.claude_code_conversion`,
+  `domain.codex_conversion`, ported from 0.22.0). harbor survives in the tests
+  as two oracles: its private converters in
+  `packages/atif-converter/tests/harbor_oracle.py` (frozen goldens under
+  `tests/goldens/`, plus a live-corpus parity test), and
+  `tests/test_vendored_atif.py`, which compares the vendored files to the
+  installed harbor's source and round-trips the goldens through both sets of
+  models and validators. A harbor bump is a lockfile edit plus reading those
+  failures as upstream-behavior reports (see CONTRIBUTING).
+- Pricing reads `atif_converter/domain/model_prices.json`, a filtered copy of
+  litellm's public price data (MIT, notice in its `meta` block) holding the
+  Claude and OpenAI text models our transcripts name, plus a few local
+  overrides with cited sources. `scripts/update_prices.py` regenerates it by
+  hand (`uv run scripts/update_prices.py --ref <litellm tag>`); never edit the
+  JSON directly. `domain.pricing` repeats `litellm.cost_per_token`'s arithmetic
+  in the same float order, and `tests/test_pricing_identity.py` proves it bit
+  for bit against the dev litellm over every vendored entry whose data the
+  installed litellm shares; `tests/test_pricing_policy.py` pins frozen values
+  that run without litellm. A model the table doesn't price is NULL, never $0.
 - The converter reads each transcript file ONCE. `raw_records.load_session`
   fingerprints and parses a file in the same pass, and the converter, the
   census, the edges emitter and the enrichment pass all consume that one list

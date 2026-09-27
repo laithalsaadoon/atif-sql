@@ -81,19 +81,20 @@ Four catalogs (`VIEW_NAMES` 16, `MACRO_NAMES` 9, `ANALYTICS_VIEW_NAMES` 12,
   `DESCRIBE`, so reordering a `SELECT` list in the DDL without reordering the catalog entry fails CI
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:47-50`).
 
-## harbor's public surface, and the parity oracle behind the ported converters
+## The vendored ATIF models, and the parity oracle behind the ported converters
 
 Defined at: `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75` (Claude Code) and `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781` (Codex)
 
-Production code depends on harbor for two public things — the ATIF data classes in
-`harbor.models.trajectories` and `harbor.utils.trajectory_validator` — pinned `harbor>=0.22.0,<1`
-(`packages/atif-converter/pyproject.toml:26`). The conversion is a parity port of harbor 0.22.0's
+Production code builds on harbor 0.22.0's ATIF data classes (`harbor.models.trajectories`) and
+`harbor.utils.trajectory_validator`, vendored in `packages/atif-converter/src/atif_converter/domain/atif/`; harbor itself is a dev
+dependency. `packages/atif-converter/tests/test_vendored_atif.py` compares the copy to the installed harbor. The conversion is a parity port of harbor 0.22.0's
 private converters, and those private methods are reachable from the tests only, as the oracle
 (`packages/atif-converter/tests/harbor_oracle.py:94`, `packages/atif-converter/tests/harbor_oracle.py:111`), frozen to goldens under `packages/atif-converter/tests/goldens/`.
 
 | Downstream | Type | Touch on change | Citation |
 | --- | --- | --- | --- |
-| `test_harbor_public_surface_guard.py` — `ast` allowlist of the two public modules | test | yes | `packages/atif-converter/tests/test_harbor_public_surface_guard.py:29` |
+| `test_dev_only_imports_guard.py` — `ast` guard: no `harbor` or `litellm` import in any `src/` | test | yes | `packages/atif-converter/tests/test_dev_only_imports_guard.py` |
+| `test_vendored_atif.py` — vendored files equal upstream's; both models and validators agree on the goldens | test | yes | `packages/atif-converter/tests/test_vendored_atif.py` |
 | `harbor_adapter.convert_session()` / `codex_adapter.convert_codex_session()` — the seams: converter in, validated dict out | direct import | yes | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`, `packages/atif-converter/src/atif_converter/infrastructure/codex_adapter.py:63` |
 | `FidelityGap` / `CodexFidelityGap` — the losses the port inherited on purpose; fixing one is a decision to diverge from the oracle | indirect | yes | `packages/atif-converter/src/atif_converter/domain/fidelity.py:52`, `packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:66` |
 | `test_harbor_oracle.py` — live oracle equals frozen goldens; a harbor bump that changes conversion fails here first | test | yes | `packages/atif-converter/tests/test_harbor_oracle.py:1` |

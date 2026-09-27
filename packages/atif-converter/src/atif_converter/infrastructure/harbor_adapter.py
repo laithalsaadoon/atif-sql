@@ -2,15 +2,12 @@
 
 """The Claude Code conversion seam: our converter in, a validated ATIF dict out.
 
-harbor is used here for its PUBLIC surface only — ``harbor.utils.trajectory_validator``
-(and, in the domain, the ``harbor.models.trajectories`` data classes the
-converter builds). The raw-JSONL -> ``Trajectory`` conversion is ours, in
-:mod:`atif_converter.domain.claude_code_conversion` via
+The ATIF validator and data classes are harbor's, vendored as
+:mod:`atif_converter.domain.atif` (the module keeps its historical name; harbor
+itself isn't a runtime dependency). The raw-JSONL -> ``Trajectory`` conversion
+is ours, in :mod:`atif_converter.domain.claude_code_conversion` via
 :mod:`atif_converter.infrastructure.claude_code_converter`, ported from harbor
 0.22.0 and held to parity with it by the oracle in this package's tests.
-
-harbor ships no ``py.typed`` marker, so every import from it is untyped; the
-import sites carry the ``import-untyped`` ignore for that reason.
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 if TYPE_CHECKING:
-    from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
+    from atif_converter.domain.atif import Trajectory
 
 from atif_converter.domain.errors import (
     ConversionError,
@@ -50,7 +47,7 @@ class ConversionResult:
 
     @property
     def is_valid(self) -> bool:
-        """True when harbor's ``TrajectoryValidator`` accepted the trajectory."""
+        """True when the ATIF ``TrajectoryValidator`` accepted the trajectory."""
         return not self.validation_errors
 
 
@@ -73,12 +70,12 @@ def require_transcript_file(path: Path) -> None:
 
 
 def validate_trajectory(trajectory: dict[str, Any]) -> tuple[str, ...]:
-    """Run harbor's ``TrajectoryValidator``; return its errors (empty = valid).
+    """Run the ATIF ``TrajectoryValidator``; return its errors (empty = valid).
 
     Used to re-validate after the enrichment pass mutates ``extra`` fields
     (contract: TrajectoryValidator MUST pass post-enrichment).
     """
-    from harbor.utils.trajectory_validator import (  # type: ignore[import-untyped]
+    from atif_converter.domain.atif.trajectory_validator import (
         TrajectoryValidator,
     )
 
@@ -161,7 +158,7 @@ def convert_session(
     """Convert one Claude Code session JSONL into a validated ATIF trajectory.
 
     Reads the session and its side files through our converter and validates
-    the result with harbor's ``TrajectoryValidator``. The use case goes through
+    the result with the ATIF ``TrajectoryValidator``. The use case goes through
     :func:`read_session` + :func:`convert_loaded_session` instead so the audit
     shares the read; this is the plain path for a caller that wants the
     trajectory alone.

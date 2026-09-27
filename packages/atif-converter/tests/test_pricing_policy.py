@@ -1,23 +1,139 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""The converter's pricing POLICY on top of the litellm-identical fast path.
+"""The converter's pricing POLICY and the vendored table, with no litellm installed.
 
 ``test_pricing_identity.py`` holds :func:`pricing.fast_cost_per_token` to
-litellm bit for bit, including litellm's ``(0.0, 0.0)`` for a Claude id it
-doesn't know. These tests pin what the converter does with that answer: an
-unpriced model makes the session estimate ``None`` instead of $0, and the local
-overrides price the two current models litellm 1.100.1 lacks.
+litellm bit for bit where litellm is available (a dev dependency), including
+litellm's ``(0.0, 0.0)`` for a Claude id it doesn't know. These tests run
+everywhere and pin what the converter does with that answer: an unpriced model
+makes the session estimate ``None`` instead of $0, the local overrides price the
+two current models litellm 1.100.1 lacks, frozen values pin the arithmetic, and
+pricing never imports litellm.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import subprocess
+import sys
+from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 
 from atif_converter.domain import pricing
 from atif_converter.domain.claude_code_conversion import convert_claude_code_records
+
+SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "update_prices.py"
+
+#: (model, (prompt, completion, cache_creation, cache_read), tier, expected), captured
+#: from ``litellm.cost_per_token`` 1.100.1 on 2026-09-27. They hold the arithmetic
+#: still when litellm isn't installed to compare against.
+FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, float]]] = [
+    ("claude-opus-5", (1234, 567, 8901, 23456), "standard", (0.06735925, 0.014175)),
+    ("claude-opus-5", (238085, 12582, 214679, 238085), "standard", (1.46078625, 0.31455)),
+    ("claude-sonnet-5", (1234, 567, 8901, 23456), "standard", (0.0269437, 0.0056700000000000006)),
+    (
+        "claude-sonnet-5",
+        (238085, 12582, 214679, 238085),
+        "standard",
+        (0.5843145000000001, 0.12582000000000002),
+    ),
+    (
+        "claude-haiku-4-5-20251001",
+        (1234, 567, 8901, 23456),
+        "standard",
+        (0.01347185, 0.0028350000000000003),
+    ),
+    (
+        "claude-haiku-4-5-20251001",
+        (238085, 12582, 214679, 238085),
+        "standard",
+        (0.29215725000000003, 0.06291000000000001),
+    ),
+    ("claude-opus-4-8", (1234, 567, 8901, 23456), "standard", (0.06735925, 0.014175)),
+    ("claude-opus-4-8", (238085, 12582, 214679, 238085), "standard", (1.46078625, 0.31455)),
+    (
+        "global.anthropic.claude-opus-4-7",
+        (1234, 567, 8901, 23456),
+        "standard",
+        (0.06735925, 0.014175),
+    ),
+    (
+        "global.anthropic.claude-opus-4-7",
+        (238085, 12582, 214679, 238085),
+        "standard",
+        (1.46078625, 0.31455),
+    ),
+    ("gpt-5.6-sol", (1234, 567, 8901, 23456), "standard", (0.0538874, 0.011340000000000001)),
+    ("gpt-5.6-sol", (1234, 567, 8901, 23456), "priority", (0.1077748, 0.022680000000000002)),
+    (
+        "gpt-5.6-sol",
+        (238085, 12582, 214679, 238085),
+        "standard",
+        (1.1686290000000001, 0.25164000000000003),
+    ),
+    (
+        "gpt-5.6-sol",
+        (238085, 12582, 214679, 238085),
+        "priority",
+        (2.3372580000000003, 0.5032800000000001),
+    ),
+    (
+        "global.openai.gpt-5.6-sol",
+        (1234, 567, 8901, 23456),
+        "standard",
+        (0.0538874, 0.011340000000000001),
+    ),
+    (
+        "global.openai.gpt-5.6-sol",
+        (1234, 567, 8901, 23456),
+        "priority",
+        (0.0538874, 0.011340000000000001),
+    ),
+    (
+        "global.openai.gpt-5.6-sol",
+        (238085, 12582, 214679, 238085),
+        "standard",
+        (1.1686290000000001, 0.25164000000000003),
+    ),
+    (
+        "global.openai.gpt-5.6-sol",
+        (238085, 12582, 214679, 238085),
+        "priority",
+        (1.1686290000000001, 0.25164000000000003),
+    ),
+    (
+        "gpt-5.1-codex",
+        (1234, 567, 8901, 23456),
+        "standard",
+        (0.0029319999999999997, 0.0056700000000000006),
+    ),
+    (
+        "gpt-5.1-codex",
+        (1234, 567, 8901, 23456),
+        "priority",
+        (0.005863999999999999, 0.011340000000000001),
+    ),
+    (
+        "gpt-5.1-codex",
+        (238085, 12582, 214679, 238085),
+        "standard",
+        (0.029760625, 0.12582000000000002),
+    ),
+    (
+        "gpt-5.1-codex",
+        (238085, 12582, 214679, 238085),
+        "priority",
+        (0.05952125, 0.25164000000000003),
+    ),
+    ("gpt-5.5", (1234, 567, 8901, 23456), "standard", (0.011727999999999999, 0.01701)),
+    ("gpt-5.5", (1234, 567, 8901, 23456), "priority", (0.023455999999999998, 0.03402)),
+    ("gpt-5.5", (238085, 12582, 214679, 238085), "standard", (0.1190425, 0.37746)),
+    ("gpt-5.5", (238085, 12582, 214679, 238085), "priority", (0.238085, 0.75492)),
+]
 
 UNKNOWN_CLAUDE = "claude-newfamily-7"
 
@@ -90,9 +206,17 @@ class TestUnpricedIsNone:
         )
         assert _price("claude-opus-5", shape) == expected
 
-    def test_a_model_litellm_refuses_still_raises(self) -> None:
-        with pytest.raises(Exception):  # noqa: B017 - whatever litellm raises
-            _price("totally-unknown-model")
+    def test_a_model_nobody_prices_is_none(self) -> None:
+        assert _price("totally-unknown-model") is None
+        assert _price("openai/gpt-5.1-codex") is None  # a provider prefix is not priced
+        with pytest.raises(pricing.UnpriceableModelError):
+            pricing.cost_per_token(
+                model="totally-unknown-model",
+                prompt_tokens=1,
+                completion_tokens=1,
+                cache_creation_input_tokens=0,
+                cache_read_input_tokens=0,
+            )
 
     def test_session_of_an_unpriced_model_has_no_total(self) -> None:
         final = _final([_user("u1", "01"), _assistant("a1", "02", UNKNOWN_CLAUDE, msg_id="m1")])
@@ -137,37 +261,12 @@ class TestLocalOverrides:
         final = _final([_user("u1", "01"), _assistant("a1", "02", "claude-opus-5", msg_id="m1")])
         assert final["extra"]["cost_source"] == pricing.COST_SOURCE_LITELLM
 
-    def test_the_bundled_table_wins_once_it_holds_the_key(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        table = pricing.load_table()
-        assert table is not None
-        shadowing = pricing.PricingTable(
-            path=table.path,
-            entries={**table.entries, "claude-opus-5-5": table.entries["claude-opus-5"]},
-            lowercase_keys={**table.lowercase_keys, "claude-opus-5-5": "claude-opus-5-5"},
-            routing_rules=table.routing_rules,
-            capability_rules=table.capability_rules,
-        )
-        monkeypatch.setattr(pricing, "_active_table", lambda: shadowing)
-        assert pricing.local_override("claude-opus-5-5") is None
-        # Priced from the (substituted) table entry now: claude-opus-5's $5 input.
-        assert _price("claude-opus-5-5", (1_000_000, 0, 0, 0))[0] == pytest.approx(5.0)
-
-    def test_overrides_are_absent_from_the_bundled_table(self) -> None:
-        """GUARD: fails the day a litellm bump ships an overridden model.
-
-        The bundled table then prices the key itself and the override is dead
-        code that can drift from it. Delete the override (and its citation)
-        when this fails.
-        """
-        table = pricing.load_table()
-        assert table is not None
-        shadowed = sorted(key for key in pricing.LOCAL_PRICE_OVERRIDES if key in table.entries)
-        assert shadowed == [], f"litellm now bundles {shadowed}; delete their overrides"
-
     def test_overrides_carry_every_rate_the_arithmetic_reads(self) -> None:
-        for model, entry in pricing.LOCAL_PRICE_OVERRIDES.items():
+        table = pricing.load_table()
+        assert table is not None
+        assert pricing.override_models() == {"claude-opus-5-5", "claude-fable-5-1"}
+        for model in pricing.override_models():
+            entry = table.entries[model]
             for key in (
                 "input_cost_per_token",
                 "output_cost_per_token",
@@ -177,5 +276,149 @@ class TestLocalOverrides:
                 assert isinstance(entry.get(key), float), (model, key)
             assert entry["output_cost_per_token"] > entry["input_cost_per_token"]
             assert entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
-        # JSON-serializable, like the table entries they stand in for.
-        json.dumps(pricing.LOCAL_PRICE_OVERRIDES)
+            sources = entry[pricing.OVERRIDE_MARKER]["sources"]
+            assert sources, model
+            assert all(url.startswith("https://") for url in sources), model
+
+
+class TestFrozenPrices:
+    @pytest.mark.parametrize(("model", "shape", "tier", "expected"), FROZEN_PRICES)
+    def test_frozen_value(
+        self,
+        model: str,
+        shape: tuple[int, int, int, int],
+        tier: str,
+        expected: tuple[float, float],
+    ) -> None:
+        prompt, completion, creation, read = shape
+        assert (
+            pricing.cost_per_token(
+                model=model,
+                prompt_tokens=prompt,
+                completion_tokens=completion,
+                cache_creation_input_tokens=creation,
+                cache_read_input_tokens=read,
+                service_tier=tier,
+            )
+            == expected
+        )
+
+
+class TestVendoredTable:
+    def test_the_table_ships_beside_the_module_with_its_license(self) -> None:
+        document = json.loads(pricing.TABLE_PATH.read_text(encoding="utf-8"))
+        meta = document["meta"]
+        assert meta["license"] == "MIT"
+        assert "Copyright (c) 2023 Berri AI" in meta["license_text"]
+        assert meta["source"].startswith("https://github.com/BerriAI/litellm/")
+        table = pricing.load_table()
+        assert table is not None
+        assert meta["ref"] == table.source_ref
+        assert len(meta["sha256"]) == 64
+
+    def test_every_entry_is_a_covered_text_model(self) -> None:
+        table = pricing.load_table()
+        assert table is not None
+        for key, entry in table.entries.items():
+            assert entry["litellm_provider"] in {
+                "anthropic",
+                "openai",
+                "bedrock",
+                "bedrock_converse",
+            }, key
+            assert entry["mode"] in {"chat", "responses", "completion"}, key
+
+    def test_pricing_never_imports_litellm(self) -> None:
+        """A fresh interpreter with litellm made unimportable prices a corpus model."""
+        code = (
+            "import sys\n"
+            "sys.modules['litellm'] = None\n"
+            "from atif_converter.domain import pricing\n"
+            "cost = pricing.cost_per_token(model='claude-opus-5', prompt_tokens=1234, "
+            "completion_tokens=567, cache_creation_input_tokens=8901, "
+            "cache_read_input_tokens=23456, service_tier='standard')\n"
+            "print(cost)\n"
+        )
+        out = subprocess.run(  # noqa: S603, fixed interpreter and code string
+            [sys.executable, "-c", code], check=True, capture_output=True, text=True
+        )
+        assert out.stdout.strip() == "(0.06735925, 0.014175)"
+
+    def test_an_unreadable_table_leaves_costs_unpriced(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        pricing.load_table.cache_clear()
+        monkeypatch.setattr(pricing, "TABLE_PATH", tmp_path / "missing.json")
+        try:
+            assert pricing.load_table() is None
+            assert _price("claude-opus-5") is None
+            assert pricing.has_pricing_entry("gpt-5.5") is False
+            assert pricing.cost_source_label(["claude-opus-5-5"]) == pricing.COST_SOURCE_LITELLM
+        finally:
+            pricing.load_table.cache_clear()
+
+
+def _load_script() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("update_prices", SCRIPT)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestUpdateScript:
+    """``scripts/update_prices.py``'s filter and override rules, offline."""
+
+    def test_keep_filters_to_covered_text_models(self) -> None:
+        script = _load_script()
+        chat = {"litellm_provider": "anthropic", "mode": "chat"}
+        assert script.keep("claude-opus-5", chat)
+        assert script.keep("anthropic/claude-opus-5", chat)
+        assert script.keep(
+            "us.anthropic.claude-opus-4-6-v1", {**chat, "litellm_provider": "bedrock"}
+        )
+        assert script.keep("gpt-5.1-codex", {"litellm_provider": "openai", "mode": "responses"})
+        assert script.keep(
+            "global.openai.gpt-5.6-sol", {"litellm_provider": "bedrock_converse", "mode": "chat"}
+        )
+        assert not script.keep(
+            "gpt-image-1", {"litellm_provider": "openai", "mode": "image_generation"}
+        )
+        assert not script.keep("gemini-3-pro", {"litellm_provider": "gemini", "mode": "chat"})
+        assert not script.keep("vertex_ai/claude-opus-5", {**chat, "litellm_provider": "vertex_ai"})
+        assert not script.keep(
+            "bedrock/us-east-1/anthropic.claude-x", {**chat, "litellm_provider": "bedrock"}
+        )
+        assert not script.keep(
+            "text-embedding-3-large", {"litellm_provider": "openai", "mode": "chat"}
+        )
+
+    def test_an_override_retires_once_upstream_prices_it(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        script = _load_script()
+        upstream = {
+            "fallback_generalizations": {"rules": []},
+            "sample_spec": {"litellm_provider": "openai", "mode": "chat"},
+            "claude-opus-5-5": {
+                "litellm_provider": "anthropic",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+            },
+        }
+        document = script.build(upstream, ref="test", digest="0" * 64, license_text="MIT License")
+        models = document["models"]
+        assert models["claude-opus-5-5"] == upstream["claude-opus-5-5"]
+        assert script.OVERRIDE_MARKER in models["claude-fable-5-1"]
+        assert "sample_spec" not in models
+        assert "claude-opus-5-5" in capsys.readouterr().err
+
+    def test_the_committed_table_is_what_the_script_builds(self) -> None:
+        """Every override in the committed table is the script's current one, verbatim."""
+        script = _load_script()
+        table = pricing.load_table()
+        assert table is not None
+        for model in pricing.override_models():
+            assert table.entries[model] == script.OVERRIDES[model], model
+        assert set(script.OVERRIDES) == pricing.override_models()
