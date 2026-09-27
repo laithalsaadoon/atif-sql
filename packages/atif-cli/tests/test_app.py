@@ -133,13 +133,40 @@ class TestConvert:
 
 class TestSchema:
     def test_schema_json_payload_matches_catalog(self, capsys: pytest.CaptureFixture[str]) -> None:
-        from atif_duck.domain.catalog import MACRO_SIGNATURES, VIEW_SCHEMA
+        from atif_duck.domain.catalog import (
+            ANALYTICS_MACRO_SIGNATURES,
+            ANALYTICS_VIEW_SCHEMA,
+            MACRO_SIGNATURES,
+            VIEW_SCHEMA,
+        )
 
         schema(fmt=OutputFormat.JSON)
         payload = json.loads(capsys.readouterr().out)
-        assert set(payload["views"]) == set(VIEW_SCHEMA)
+        assert set(payload["views"]) == set(VIEW_SCHEMA) | set(ANALYTICS_VIEW_SCHEMA)
         assert payload["views"]["sessions"][0] == {"column": "session_id", "type": "VARCHAR"}
-        assert {m["name"] for m in payload["macros"]} == set(MACRO_SIGNATURES)
+        assert {m["name"] for m in payload["macros"]} == set(MACRO_SIGNATURES) | set(
+            ANALYTICS_MACRO_SIGNATURES
+        )
+
+    def test_schema_marks_what_each_object_requires(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from atif_duck.domain.catalog import ANALYTICS_MACRO_SIGNATURES, ANALYTICS_VIEW_SCHEMA
+
+        schema(fmt=OutputFormat.JSON)
+        payload = json.loads(capsys.readouterr().out)
+        requires = payload["view_requires"]
+        assert set(requires) == set(payload["views"])
+        assert {v for v, r in requires.items() if r == "analytics"} == set(ANALYTICS_VIEW_SCHEMA)
+        assert requires["session_outcomes"] == "core"
+        assert requires["human_turns"] == "core"
+        assert requires["message_embeddings"] == "vss"
+        by_macro = {m["name"]: m["requires"] for m in payload["macros"]}
+        assert {m for m, r in by_macro.items() if r == "analytics"} == set(
+            ANALYTICS_MACRO_SIGNATURES
+        )
+        assert by_macro["semantic_search"] == "vss"
+        assert by_macro["step_author"] == "core"
 
     def test_schema_table_lists_views_and_macros(self, capsys: pytest.CaptureFixture[str]) -> None:
         schema(fmt=OutputFormat.TABLE)
@@ -147,6 +174,9 @@ class TestSchema:
         assert "sessions" in out
         assert "tool_calls" in out
         assert "ago(interval_text)" in out
+        assert "session_classifications (" in out
+        assert "requires: analytics)" in out
+        assert "session_outcomes (6 cols, requires: core)" in out
 
 
 class TestExamples:
@@ -570,7 +600,7 @@ class TestQuerySandbox:
         _run_query("SELECT count(*) AS n FROM steps", corpus)
         assert json.loads(capsys.readouterr().out) == [{"n": 1}]
 
-        _run_query("SELECT count(*) AS n FROM message_clusters", corpus)
+        _run_query("SELECT count(*) AS n FROM user_friction", corpus)
         assert json.loads(capsys.readouterr().out) == [{"n": 1}]
 
 
@@ -761,18 +791,17 @@ class TestQuerySandboxFileAllowlist:
         self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         for view, expected in (
-            ("message_clusters", 1),
-            ("cluster_terms", 1),
+            ("user_friction", 1),
             ("session_classifications", 1),
             ("session_goals", 1),
         ):
             _run_query(f"SELECT count(*) AS n FROM {view}", query_corpus)
             assert json.loads(capsys.readouterr().out) == [{"n": expected}], view
 
-        _run_query("SELECT term FROM cluster_top_terms(0, 5)", query_corpus)
-        assert json.loads(capsys.readouterr().out) == [{"term": "auth"}]
+        _run_query("SELECT label, n FROM friction_counts(NULL)", query_corpus)
+        assert json.loads(capsys.readouterr().out) == [{"label": "correction", "n": 1}]
 
-        _run_query("SELECT count(*) AS n FROM autonomy_trend(3650)", query_corpus)
+        _run_query("SELECT count(*) AS n FROM work_mix(3650)", query_corpus)
         assert json.loads(capsys.readouterr().out) == [{"n": 1}]
 
     def test_allowlist_names_every_analytics_parquet(self, query_corpus: Path) -> None:
@@ -865,7 +894,7 @@ class TestQuerySandboxWrites:
         file mode. Repeated as uid 0 with the escape hatch open: still
         refused, because the gate does not look at the uid.
         """
-        parquet = query_corpus / "analytics" / "clusters.parquet"
+        parquet = query_corpus / "analytics" / "user_friction" / "part-1.parquet"
         before = parquet.read_bytes()
         statement = f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET, USE_TMP_FILE false)"
 
@@ -936,7 +965,7 @@ class TestHardenedConnectionLayer:
 
         con, spill = layer
         trajectory = query_corpus / "sessions" / SESSION_ID / "trajectory.json"
-        parquet = query_corpus / "analytics" / "clusters.parquet"
+        parquet = query_corpus / "analytics" / "user_friction" / "part-1.parquet"
         for statement in (
             f"COPY (SELECT 1) TO '{tmp_path / 'out.csv'}'",
             f"COPY (SELECT 1) TO '{trajectory}'",
@@ -963,7 +992,7 @@ class TestHardenedConnectionLayer:
         con.execute(f"COPY (SELECT 1 AS x) TO '{spill}/probe.csv'")
         assert (spill / "probe.csv").is_file()
 
-        parquet = query_corpus / "analytics" / "clusters.parquet"
+        parquet = query_corpus / "analytics" / "user_friction" / "part-1.parquet"
         before = parquet.read_bytes()
         con.execute(
             f"COPY (SELECT 'x' AS uuid) TO '{parquet}' (FORMAT PARQUET, USE_TMP_FILE false)"

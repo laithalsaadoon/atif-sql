@@ -147,17 +147,16 @@ def synthetic_session(tmp_path: Path) -> Path:
     return write_synthetic_session(tmp_path / "projects", "11111111-1111-1111-1111-111111111111")
 
 
-#: analytics artifact -> the rows and column names atif-analytics writes.
+#: analytics shard -> the rows and column names atif-analytics writes.
 #: Layout pinned against ``atif_duck.infrastructure.analytics._ANALYTICS_SOURCES``
-#: (sharded dirs take ``part-*.parquet``; the structural three are single files).
+#: (every artifact is a sharded dir of ``part-*.parquet``).
 _ANALYTICS_PARQUETS: dict[str, tuple[str, str]] = {
-    "clusters.parquet": (
-        "('u-1', CAST(0 AS INT), CAST(NULL AS FLOAT), CAST(NULL AS FLOAT), false)",
-        "uuid, cluster_id, x, y, is_noise",
-    ),
-    "cluster_terms.parquet": (
-        "(CAST(0 AS INT), 'auth', CAST(0.9 AS FLOAT), CAST(1 AS INT))",
-        "cluster_id, term, weight, rank",
+    "user_friction/part-1.parquet": (
+        (
+            "('u-1', '{sid}', TIMESTAMPTZ '2026-08-22 00:30:00+00', 'undo that', 'correction', "
+            "'rule 2', 'regex', CAST(0.8 AS FLOAT), TIMESTAMPTZ '2026-08-22 01:00:00+00')"
+        ),
+        "uuid, session_id, ts, text_snippet, label, rationale, source, confidence, classified_at",
     ),
 }
 
@@ -186,7 +185,7 @@ def write_analytics_parquets(corpus_root: Path, session_id: str) -> list[Path]:
         targets = [
             classifications,
             *(
-                (analytics / name, values, columns)
+                (analytics / name, values.format(sid=session_id), columns)
                 for name, (values, columns) in _ANALYTICS_PARQUETS.items()
             ),
         ]
