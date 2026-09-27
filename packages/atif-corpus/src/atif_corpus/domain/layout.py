@@ -85,8 +85,9 @@ class CorpusLayout:
     def blobs_dir(self) -> Path:
         """The content-addressed attachment store shared by every session.
 
-        Outside ``sessions/`` on purpose: no reader glob and no ghost-removal
-        walk touches it, and a blob two sessions share is stored once.
+        Outside ``sessions/`` on purpose: no reader glob and no per-session
+        swap touches it, retention never deletes from it, and a blob two
+        sessions share is stored once.
         """
         return self.corpus_root / "blobs"
 
