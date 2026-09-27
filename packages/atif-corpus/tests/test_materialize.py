@@ -4,12 +4,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
-from typing import TypedDict, Unpack, override
+from typing import Any, TypedDict, Unpack, override
 
 import pytest
 from corpus_fixtures import LIVE_NS, NOW_NS, SESSION_A, SESSION_B, STALE_NS, write_session
@@ -21,7 +22,8 @@ from atif_corpus.application.materialize import (
     materialize,
     read_watermark,
 )
-from atif_corpus.domain.layout import CorpusLayout
+from atif_corpus.domain.layout import SESSION_EVENTS_FILENAME, CorpusLayout
+from atif_corpus.domain.ports import ConversionOutput
 from atif_corpus.infrastructure.fake_converter import FakeConverter
 from atif_corpus.infrastructure.scanner import scan_source_root
 
@@ -919,3 +921,63 @@ class TestReadWatermark:
         path = tmp_path / "watermark.json"
         path.write_text('{"/a/b.jsonl": "12345"}', encoding="utf-8")
         assert read_watermark(path) == {"/a/b.jsonl": 12345}
+
+
+class _EventsConverter(FakeConverter):
+    """A fake converter whose output carries two session_events lines."""
+
+    @override
+    def convert(self, session_jsonl: Path) -> ConversionOutput:
+        output = super().convert(session_jsonl)
+        return dataclasses.replace(
+            output,
+            events_lines=['{"seq":0,"event_type":"mode"}', '{"seq":1,"event_type":"cost-state"}'],
+        )
+
+
+class _StagedEventsReader:
+    """An artifact producer that records the staged session_events.jsonl it sees."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    def produce(
+        self, session_dir: Path, *, session_id: str, trajectory: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        del session_id, trajectory
+        self.seen.append(layout_events(session_dir).read_text())
+        return {}
+
+
+def layout_events(session_dir: Path) -> Path:
+    return session_dir / SESSION_EVENTS_FILENAME
+
+
+class TestSessionEventsArtifact:
+    def test_events_lines_are_written_one_per_line(
+        self, source_root: Path, corpus_root: Path
+    ) -> None:
+        write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
+        producer = _StagedEventsReader()
+        report = materialize(
+            source_root=source_root,
+            corpus_root=corpus_root,
+            converter=_EventsConverter(),
+            now_ns=NOW_NS,
+            artifact_producer=producer,
+            **VERSIONS,
+        )
+        assert report.materialized_count == 1
+        written = CorpusLayout(corpus_root=corpus_root).session_events_path(SESSION_A).read_text()
+        assert written == '{"seq":0,"event_type":"mode"}\n{"seq":1,"event_type":"cost-state"}\n'
+        # The producer runs after the file is staged, so it can build from it.
+        assert producer.seen == [written]
+
+    def test_a_converter_without_events_writes_an_empty_file(
+        self, source_root: Path, corpus_root: Path
+    ) -> None:
+        write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
+        run(source_root, corpus_root, FakeConverter())
+        path = CorpusLayout(corpus_root=corpus_root).session_events_path(SESSION_A)
+        assert path.is_file()
+        assert path.read_text() == ""

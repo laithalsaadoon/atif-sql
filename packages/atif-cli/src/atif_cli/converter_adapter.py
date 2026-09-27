@@ -34,6 +34,8 @@ Mapping decisions (ConversionResult -> ConversionOutput):
 * ``edges_lines``      <- ``ConversionResult.edges_lines`` (already-serialized
   JSON lines derived from the RAW records, per the contract; the writer owns
   line termination).
+* ``events_lines``     <- ``ConversionResult.events_lines`` (session_events.jsonl,
+  same serialization and termination rules as the edges).
 
 Validation posture: a trajectory that fails post-enrichment validation
 raises rather than materializing — the materialize use case records the
@@ -101,6 +103,7 @@ class RealConverter:
             trajectory_dict=result.trajectory,
             loss_report_dict=report.to_json(),
             edges_lines=list(result.edges_lines),
+            events_lines=list(result.events_lines),
         )
 
 

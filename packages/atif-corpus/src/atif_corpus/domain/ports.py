@@ -12,7 +12,7 @@ producer of their own.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -33,11 +33,17 @@ class ConversionOutput:
       (uuid, parent_uuid, message_id, type, ts, is_sidechain,
       is_compact_summary, source_file, tool_use_ids), WITHOUT trailing
       newlines; the writer owns line termination.
+    * ``events_lines`` — one already-serialized JSON line per kept
+      NON-MESSAGE record (``session_events.jsonl``: seq, ts, event_type,
+      subtype, uuid, parent_uuid, tool_use_id, is_sidechain, source_file,
+      payload, payload_bytes, payload_truncated), same termination rule.
+      Empty by default, so a converter that has none writes an empty file.
     """
 
     trajectory_dict: dict[str, Any]
     loss_report_dict: dict[str, Any]
     edges_lines: list[str]
+    events_lines: list[str] = field(default_factory=list)
 
 
 class ConverterPort(Protocol):
@@ -58,7 +64,8 @@ class ArtifactProducer(Protocol):
 
     The materialize use case calls :meth:`produce` once per session, inside
     the staged session directory, after ``trajectory.json`` /
-    ``loss_report.json`` / ``edges.jsonl`` are written and before
+    ``loss_report.json`` / ``edges.jsonl`` / ``session_events.jsonl`` are
+    written (so a producer may read those staged files) and before
     ``meta.json`` is. Whatever the producer writes therefore publishes
     atomically with the four contract artifacts (the whole directory is
     swapped into place) and is covered by the same completeness marker.
