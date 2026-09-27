@@ -1007,8 +1007,8 @@ class _EventsConverter(FakeConverter):
     """A fake converter whose output carries two session_events lines."""
 
     @override
-    def convert(self, session_jsonl: Path) -> ConversionOutput:
-        output = super().convert(session_jsonl)
+    def convert(self, session_jsonl: Path, *, archive_dir: Path | None = None) -> ConversionOutput:
+        output = super().convert(session_jsonl, archive_dir=archive_dir)
         return dataclasses.replace(
             output,
             events_lines=['{"seq":0,"event_type":"mode"}', '{"seq":1,"event_type":"cost-state"}'],
