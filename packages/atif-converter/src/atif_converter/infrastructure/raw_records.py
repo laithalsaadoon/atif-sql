@@ -40,7 +40,9 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, override
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Buffer, Iterable
+    from collections.abc import Buffer, Callable, Iterable
+
+    from atif_converter.infrastructure.source_archive import SourceArchiveWriter
 
 
 def discover_session_files(session_jsonl: Path) -> list[Path]:
@@ -135,20 +137,23 @@ class _DigestingReader(io.RawIOBase):
         super().close()
 
 
-def _content_hash(path: Path) -> bytes:
+def _content_hash(path: Path, tee: Callable[[bytes], object] | None = None) -> bytes:
+    """Digest of ``path``'s bytes; each chunk also goes to ``tee`` when one is given."""
     digest = _new_digest()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(_HASH_CHUNK_BYTES), b""):
             digest.update(chunk)
+            if tee is not None:
+                tee(chunk)
     return digest.digest()
 
 
-def _fingerprint(path: Path) -> FileFingerprint:
+def _fingerprint(path: Path, tee: Callable[[bytes], object] | None = None) -> FileFingerprint:
     stat = path.stat()
     return FileFingerprint(
         mtime_ns=stat.st_mtime_ns,
         size=stat.st_size,
-        content_hash=_content_hash(path),
+        content_hash=_content_hash(path, tee),
     )
 
 
@@ -307,18 +312,34 @@ def read_snapshot_records(snapshot: SessionSnapshot) -> list[tuple[dict[str, Any
     return pairs
 
 
-def mutated_files(snapshot: SessionSnapshot) -> tuple[Path, ...]:
+def mutated_files(
+    snapshot: SessionSnapshot,
+    *,
+    archive: SourceArchiveWriter | None = None,
+) -> tuple[Path, ...]:
     """Files that changed, vanished, or appeared since the snapshot was taken.
 
     Re-stats AND re-hashes every file: the digest is the half of the evidence
     that catches a same-length rewrite inside one mtime tick. A newly APPEARED
     side-file counts: it carries records the snapshot never saw, so artifacts
     derived from the snapshot are already incomplete.
+
+    With ``archive``, every byte this re-hash reads is also streamed into the
+    session's source archive, so archiving costs no extra open. The archive is
+    only meaningful when the result is empty: an unchanged digest is what proves
+    the archived bytes are the bytes that were parsed. A caller that gets a
+    non-empty result must discard it.
     """
     moved: list[Path] = []
     for path, fingerprint in snapshot.fingerprints.items():
         try:
-            if _fingerprint(path) != fingerprint:
+            if archive is None:
+                current = _fingerprint(path)
+            else:
+                with archive.member(path) as sink:
+                    current = _fingerprint(path, sink)
+                archive.record(path, size=current.size, sha256=current.content_hash)
+            if current != fingerprint:
                 moved.append(path)
         except OSError:
             moved.append(path)
