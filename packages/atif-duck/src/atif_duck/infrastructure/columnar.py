@@ -4,7 +4,7 @@ r"""Write and detect the typed columnar artifacts (see :mod:`atif_duck.domain.co
 
 Two jobs, both keyed on the contract in the domain module:
 
-* :class:`ColumnarArtifactProducer` writes the four parquet files for one
+* :class:`ColumnarArtifactProducer` writes the five parquet files for one
   session from the trajectory dict the corpus writer already holds. It is the
   adapter atif-cli plugs into atif-corpus's ``ArtifactProducer`` port.
 * :func:`session_has_columnar` and :func:`columnar_coverage` answer "may this
@@ -66,6 +66,8 @@ from atif_duck.domain.columnar import (
     META_COLUMNAR_KEY,
     MIN_PARQUET_BYTES,
     SESSION_COLUMNS,
+    SESSION_EVENTS_JSONL,
+    SESSION_EVENTS_PARQUET,
     SESSION_PARQUET,
     STEPS_PARQUET,
     TOOL_CALLS_PARQUET,
@@ -77,6 +79,7 @@ from atif_duck.domain.session_id import session_id_rejection
 from atif_duck.domain.sql_literal import SqlFragment, sql_literal
 from atif_duck.infrastructure.projections import (
     CALL_COLUMNS,
+    EVENT_COLUMNS,
     MEMBER_COLUMNS,
     RESULT_COLUMNS,
     STEP_MEMBERS,
@@ -110,7 +113,7 @@ def session_has_columnar(session_dir: Path, meta_columnar_schema: object) -> boo
     """True when ``session_dir`` may be read from its columnar artifacts.
 
     Two conditions, both required: ``meta.json``'s ``columnar_schema`` names
-    this build's schema version, and all four parquet files are present and
+    this build's schema version, and all five parquet files are present and
     longer than a parquet header. A session failing either is read from
     ``trajectory.json``, which is always correct and merely slower, so this
     predicate can only ever cost speed.
@@ -258,6 +261,24 @@ def _result_rows(session_id: str, steps: Iterable[Any]) -> Iterator[tuple[str | 
         step_id, ts = _member(step, "step_id"), _member(step, "timestamp")
         for result in results:
             yield (session_id, step_id, ts, _dumps(result))
+
+
+def _event_rows(session_id: str, events_jsonl: Path) -> Iterator[tuple[str | None, ...]]:
+    """One ``(session_id, line)`` row per non-blank line of the staged events file.
+
+    A missing file yields nothing, so the artifact is an empty parquet with the
+    right columns: the corpus writer always stages one, but a caller driving
+    the producer directly may not.
+    """
+    try:
+        handle = events_jsonl.open(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    with handle:
+        for line in handle:
+            text = line.strip()
+            if text:
+                yield (session_id, text)
 
 
 def _batches(rows: Iterable[tuple[str | None, ...]], schema: Any) -> Iterator[Any]:
@@ -458,7 +479,7 @@ class ColumnarArtifactProducer:
         session_id: str,
         trajectory: Mapping[str, Any],
     ) -> Mapping[str, Any]:
-        """Write the four parquet files into ``session_dir``; return the meta extras.
+        """Write the five parquet files into ``session_dir``; return the meta extras.
 
         Parameters
         ----------
@@ -545,6 +566,17 @@ class ColumnarArtifactProducer:
             ),
             COLUMNAR_SCHEMAS[TOOL_RESULTS_PARQUET],
             session_dir / TOOL_RESULTS_PARQUET,
+        )
+
+        events_schema = _string_schema(("session_id", "ev"))
+        ColumnarArtifactProducer._write(
+            con,
+            _batches(_event_rows(session_id, session_dir / SESSION_EVENTS_JSONL), events_schema),
+            SqlFragment(
+                f"SELECT session_id, {render(EVENT_COLUMNS)} FROM {_SOURCE}"  # noqa: S608  # nosec B608 - projections constants only
+            ),
+            COLUMNAR_SCHEMAS[SESSION_EVENTS_PARQUET],
+            session_dir / SESSION_EVENTS_PARQUET,
         )
 
     @staticmethod

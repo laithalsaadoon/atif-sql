@@ -26,6 +26,10 @@ proofs are out of scope for the workspace.
     edges.jsonl                    # one line per RAW record: {uuid, parent_uuid,
                                    #  message_id, type, ts, is_sidechain,
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
+    session_events.jsonl           # one line per KEPT non-message record: {seq, ts,
+                                   #  event_type, subtype, uuid, parent_uuid,
+                                   #  tool_use_id, is_sidechain, source_file, payload,
+                                   #  payload_bytes, payload_truncated}; may be empty
     meta.json                      # {session_id, source_mtime_ns, source_files: [...],
                                    #  harbor_version, converter_version, materialized_at,
                                    #  agent, columnar_schema}
@@ -33,6 +37,7 @@ proofs are out of scope for the workspace.
     steps.parquet                  #  the trajectory header and the steps, tool_calls,
     tool_calls.parquet             #  tool_results views' rows for this one session,
     tool_results.parquet           #  written 0444, claimed by meta.columnar_schema
+    session_events.parquet         #  (schema 2+: the session_events view's rows)
   watermark.json                   # {path: mtime_ns} across source corpus
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
@@ -70,14 +75,16 @@ proofs are out of scope for the workspace.
   .staging/ dir and atomic rename, so a session is still the crash-safety
   unit, and the watermark still advances only for sessions that succeeded.
   --workers 1 is the single-process reference path.
-- Columnar artifacts: the four parquet files are a query-time cache of what the
-  views compute from trajectory.json, never a source of truth. materialize
+- Columnar artifacts: the five parquet files are a query-time cache of what the
+  views compute from trajectory.json and session_events.jsonl, never a source
+  of truth. materialize
   writes them by default through the ArtifactProducer port (atif-corpus
   declares the port, atif-duck implements it, atif-cli plugs them together);
   they're staged and swapped with the JSON artifacts, so a session has all of
   them or none. meta.columnar_schema names the schema version they were
-  written against (currently 1). A reader takes the columnar path for a session
-  only when meta.columnar_schema equals its own version AND all four files are
+  written against (currently 2; 2 added session_events.parquet). A reader takes
+  the columnar path for a session only when meta.columnar_schema equals its own
+  version AND all five files are
   present and non-empty; otherwise it reads trajectory.json for that session.
   A corpus written before this key existed, or with --no-columnar, stays valid
   and answers every query from JSON. Whatever the path, every view and macro
@@ -120,7 +127,18 @@ proofs are out of scope for the workspace.
      assistant message can never be placed by matching. Tool records join on
      call_id; user and system steps are positional with a text cross-check that
      stops at the first mismatch and records enrichment_truncated_at_step.
-3. Census + edges are derived from RAW jsonl (never from the trajectory).
+3. Census + edges + session events are derived from RAW jsonl (never from the
+   trajectory). session_events keeps, as rows and NOT as steps: Claude Code
+   hook attachments (hook_*), queued_command, the system subtypes
+   stop_hook_summary / api_error / compact_boundary / model_refusal_fallback,
+   and cost-state / mode / permission-mode records; Codex compacted records
+   and event_msg turn_aborted / error / stream_error / context_compacted /
+   warning. Payloads are bounded to 8 KB (payload_bytes keeps the original
+   size). loss_report.records_captured counts them, and
+   records_converted + records_captured + records_dropped = records_total.
+   The last Claude Code cost-state's totalCostUSD lands in
+   final_metrics.extra.reported_cost_usd; total_cost_usd is NULL when any
+   priced step's model has no rates (never a fabricated $0).
 4. Validation: TrajectoryValidator MUST pass post-enrichment (extra is free-form).
 
 ## atif-duck (reads corpus_root; NEVER imports atif-corpus/atif-converter)
@@ -139,8 +157,8 @@ proofs are out of scope for the workspace.
   (ATTACH for the Lance store, the producer's one-row session projection)
   are the only places `sql_literal` still escapes a value.
 - ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
-  ArtifactProducer implementation: a pure function of the trajectory that
-  writes the four parquet files with the views' own projection expressions,
+  ArtifactProducer implementation: a pure function of the trajectory (and of
+  the staged session_events.jsonl beside it) that writes the five parquet files with the views' own projection expressions,
   so the JSON columns are normalized exactly as read_json would.
 - sessions view carries `agent` and `agent_version` from trajectory.agent, and
   coalesces the two shapes harbor emits for working directory and git branch

@@ -81,6 +81,8 @@ from atif_duck.domain.catalog import DEFAULT_PRICING, VIEW_SCHEMA
 from atif_duck.domain.columnar import (
     META_COLUMNAR_KEY,
     SESSION_COLUMNS,
+    SESSION_EVENTS_JSONL,
+    SESSION_EVENTS_PARQUET,
     SESSION_PARQUET,
     STEPS_PARQUET,
     TOOL_CALLS_PARQUET,
@@ -92,6 +94,7 @@ from atif_duck.domain.sql_literal import SqlFragment, sql_literal
 from atif_duck.infrastructure.columnar import ColumnarCoverage, session_has_columnar
 from atif_duck.infrastructure.projections import (
     CALL_COLUMNS,
+    EVENT_COLUMNS,
     RESULT_COLUMNS,
     WHOLE_STEP,
     render,
@@ -126,6 +129,10 @@ _RAW_TOOL_RESULTS_TABLE: str = "v_raw_tool_results"
 _RAW_EDGES_TABLE: str = "v_raw_edges"
 _RAW_LOSS_REPORTS_TABLE: str = "v_raw_loss_reports"
 _RAW_META_TABLE: str = "v_raw_meta"
+#: ``session_events`` rows from either source, in the view's column shape. The
+#: JSON path's TEMP TABLE is the parsed ``session_events.jsonl`` lines.
+_RAW_SESSION_EVENTS_TABLE: str = "v_raw_session_events"
+_RAW_SESSION_EVENTS_JSON_TABLE: str = "v_raw_session_events_json"
 
 #: The columnar branch's parquet readers: one parameterized ``read_parquet``
 #: relation per artifact kind, registered as a view under these names and
@@ -135,6 +142,7 @@ _RAW_SESSIONS_PARQUET_TABLE: str = "v_raw_sessions_parquet"
 _RAW_STEPS_PARQUET_TABLE: str = "v_raw_steps_parquet"
 _RAW_TOOL_CALLS_PARQUET_TABLE: str = "v_raw_tool_calls_parquet"
 _RAW_TOOL_RESULTS_PARQUET_TABLE: str = "v_raw_tool_results_parquet"
+_RAW_SESSION_EVENTS_PARQUET_TABLE: str = "v_raw_session_events_parquet"
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +265,10 @@ _LOSS_REPORT_COLUMNS: dict[str, str] = {
     "record_counts": "JSON",
     "records_total": "BIGINT",
     "records_converted": "BIGINT",
+    # Added with session_events (converter schema 2). A report written before
+    # then has no such key and reads as NULL, which the view keeps as NULL:
+    # "not measured" rather than "none captured".
+    "records_captured": "BIGINT",
     "records_dropped": "BIGINT",
     "gaps_observed": "JSON",
     "subagent_files_found": "BIGINT",
@@ -351,6 +363,47 @@ def _json_tool_results_select() -> SqlFragment:
         f"    FROM {_RAW_TRAJECTORIES_JSON_TABLE} t, UNNEST(t.steps) AS s(step)\n"
         f"    WHERE {WHOLE_STEP.json('observation', '.results')} IS NOT NULL\n"
         ") step_results, UNNEST(results) AS r(res)"
+    )
+
+
+def _events_json_select() -> SqlFragment:
+    """The JSON path's ``session_events`` rows over ``v_raw_session_events_json``."""
+    return SqlFragment(
+        f"SELECT {_catalog_columns('session_events')} FROM {_RAW_SESSION_EVENTS_JSON_TABLE}"  # noqa: S608  # nosec B608 - catalog columns over a module-constant table
+    )
+
+
+def _register_events_json(con: duckdb.DuckDBPyConnection, paths: Sequence[Path]) -> None:
+    """Parse the JSON-path sessions' ``session_events.jsonl`` into a TEMP TABLE.
+
+    ``read_json_objects`` hands each line over whole as the ``ev`` JSON value,
+    so the typed columns come from :data:`EVENT_COLUMNS`, the same expressions
+    the columnar producer applies, and the two sources agree byte for byte.
+    The file list is the statement's one parameter.
+    """
+    bound = _object_size_bound(paths)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE {_RAW_SESSION_EVENTS_JSON_TABLE} AS
+        SELECT regexp_extract(filename, '/sessions/([^/]+)/session_events\\.jsonl$', 1)
+                   AS session_id,
+               {render(EVENT_COLUMNS)}
+        FROM (
+            SELECT json AS ev, filename
+            FROM read_json_objects(
+                ?,
+                format='newline_delimited',
+                filename=true,
+                maximum_object_size={int(bound)}
+            )
+        );
+        """,  # noqa: S608  # nosec B608 - file list is a bound parameter; table and projections are constants; the bound is an int
+        [[str(path) for path in paths]],
+    )
+    logger.debug(
+        "Registered {} over {} session_events.jsonl file(s)",
+        _RAW_SESSION_EVENTS_JSON_TABLE,
+        len(paths),
     )
 
 
@@ -620,6 +673,7 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         steps_branches: list[SqlFragment] = []
         calls_branches: list[SqlFragment] = []
         results_branches: list[SqlFragment] = []
+        events_branches: list[SqlFragment] = []
         lazy_paths: list[Path] = []
 
         parquet_readers: tuple[tuple[str, str, bool], ...] = (
@@ -627,6 +681,7 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
             (_RAW_STEPS_PARQUET_TABLE, STEPS_PARQUET, False),
             (_RAW_TOOL_CALLS_PARQUET_TABLE, TOOL_CALLS_PARQUET, False),
             (_RAW_TOOL_RESULTS_PARQUET_TABLE, TOOL_RESULTS_PARQUET, False),
+            (_RAW_SESSION_EVENTS_PARQUET_TABLE, SESSION_EVENTS_PARQUET, False),
         )
         if columnar_ids:
             for reader, artifact, with_filename in parquet_readers:
@@ -642,6 +697,11 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
             )
             results_branches.append(
                 _typed_parquet_select(_RAW_TOOL_RESULTS_PARQUET_TABLE, VIEW_SCHEMA["tool_results"])
+            )
+            events_branches.append(
+                _typed_parquet_select(
+                    _RAW_SESSION_EVENTS_PARQUET_TABLE, VIEW_SCHEMA["session_events"]
+                )
             )
         else:
             # A connection re-registered after every columnar session lost
@@ -690,11 +750,27 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
             # artifacts must not keep the previous generation's parsed JSON.
             con.execute(f"DROP TABLE IF EXISTS {_RAW_TRAJECTORIES_JSON_TABLE};")
 
+        # A JSON-path session's events come from its session_events.jsonl. A
+        # session materialized before that artifact existed has none and
+        # contributes no rows; an empty file (no kept records) is skipped
+        # here rather than handed to the reader.
+        event_files = [
+            path
+            for path in (sessions_dir / sid / SESSION_EVENTS_JSONL for sid in json_ids)
+            if path.is_file() and path.stat().st_size > 0
+        ]
+        if event_files:
+            _register_events_json(con, event_files)
+            events_branches.append(_events_json_select())
+        else:
+            con.execute(f"DROP TABLE IF EXISTS {_RAW_SESSION_EVENTS_JSON_TABLE};")
+
         for table, branches, columns in (
             (_RAW_TRAJECTORIES_TABLE, trajectory_branches, _TRAJECTORY_RELATION_COLUMNS),
             (_RAW_STEPS_TABLE, steps_branches, VIEW_SCHEMA["steps"]),
             (_RAW_TOOL_CALLS_TABLE, calls_branches, VIEW_SCHEMA["tool_calls"]),
             (_RAW_TOOL_RESULTS_TABLE, results_branches, VIEW_SCHEMA["tool_results"]),
+            (_RAW_SESSION_EVENTS_TABLE, events_branches, VIEW_SCHEMA["session_events"]),
         ):
             # Table names are module constants; every branch is built above
             # from catalog constants over module-constant readers.
@@ -772,7 +848,7 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
     ``todo_events``, ``todo_state_current``, ``subagent_spawns``,
     ``task_creations``, ``task_updates``, ``tasks_state_current``,
     ``skill_invocations``, ``skill_usage``, ``subagent_steps``,
-    ``loss_reports``.
+    ``loss_reports``, ``session_events``.
 
     Parameters
     ----------
@@ -833,6 +909,8 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
                 s.step_count,
                 t.agent.model_name                                    AS model_name,
                 t.final_metrics.total_cost_usd                        AS total_cost_usd,
+                CAST(json_extract(t.final_metrics.extra, '$.reported_cost_usd') AS DOUBLE)
+                                                                      AS reported_cost_usd,
                 t.trajectory_path
             FROM v_raw_trajectories t
             LEFT JOIN (
@@ -1185,6 +1263,7 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
                 session_id_path AS session_id,
                 records_total,
                 records_converted,
+                records_captured,
                 records_dropped,
                 gaps_observed,
                 record_counts,
@@ -1196,6 +1275,18 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
             """
         )
         logger.debug("Registered view: loss_reports")
+
+        # One row per kept non-message record (hooks, injected context, API
+        # errors, compaction boundaries, cost-state, mode changes; Codex
+        # compactions and aborted turns), from session_events.jsonl or its
+        # parquet. Order within a session by ``seq``: cost-state and mode rows
+        # have no timestamp. ``parent_uuid`` is the raw record's parentUuid, so
+        # a row joins the step that owns that uuid in ``steps.source_uuids``.
+        con.execute(
+            f"CREATE OR REPLACE VIEW session_events AS SELECT {_catalog_columns('session_events')} "  # noqa: S608  # nosec B608 - catalog columns over a module-constant table
+            f"FROM {_RAW_SESSION_EVENTS_TABLE};"
+        )
+        logger.debug("Registered view: session_events")
     except Exception:
         # register-or-fail-loud — any DuckDB error must surface to the caller.
         logger.exception("Failed to register derived views")

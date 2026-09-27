@@ -2,8 +2,8 @@
 
 """The typed columnar artifact contract: names, schema version, column shapes.
 
-Beside the four JSON artifacts in ``<corpus_root>/sessions/<id>/``, a session
-may carry four Parquet files that hold what the transcript-derived views need,
+Beside the JSON artifacts in ``<corpus_root>/sessions/<id>/``, a session
+may carry five Parquet files that hold what the transcript-derived views need,
 already typed, so a query never parses ``trajectory.json``:
 
 * ``session.parquet``      one row: the trajectory's top-level members minus
@@ -14,13 +14,16 @@ already typed, so a query never parses ``trajectory.json``:
   view's columns.
 * ``tool_results.parquet`` one row per observation result, exactly the
   ``tool_results`` view's columns.
+* ``session_events.parquet`` one row per kept non-message record, exactly the
+  ``session_events`` view's columns (schema 2 onward). Built from the staged
+  ``session_events.jsonl``, not from the trajectory.
 
 atif-duck owns this shape (the views define what the columns mean) and writes
 it through :class:`atif_duck.infrastructure.columnar.ColumnarArtifactProducer`;
 atif-corpus calls that producer through its ``ArtifactProducer`` port without
 knowing these names. The registry reads a session from these files only when
 ``meta.json`` carries ``columnar_schema`` equal to
-:data:`COLUMNAR_SCHEMA_VERSION` and all four files are present; otherwise it
+:data:`COLUMNAR_SCHEMA_VERSION` and all five files are present; otherwise it
 reads the session's ``trajectory.json`` as before, so a corpus materialized
 before this contract existed (or by a build with a different schema version)
 still queries correctly.
@@ -39,7 +42,7 @@ if TYPE_CHECKING:
 
 #: Bump when any column, type, or filename below changes. A session whose
 #: ``meta.json`` names another version is read from ``trajectory.json``.
-COLUMNAR_SCHEMA_VERSION: int = 1
+COLUMNAR_SCHEMA_VERSION: int = 2
 
 #: The ``meta.json`` key that records which columnar schema a session's
 #: parquet files were written against. Absent on sessions materialized
@@ -50,6 +53,9 @@ SESSION_PARQUET: str = "session.parquet"
 STEPS_PARQUET: str = "steps.parquet"
 TOOL_CALLS_PARQUET: str = "tool_calls.parquet"
 TOOL_RESULTS_PARQUET: str = "tool_results.parquet"
+#: Added in schema 2: the ``session_events`` view's rows, built from the staged
+#: ``session_events.jsonl`` the corpus writer puts beside ``edges.jsonl``.
+SESSION_EVENTS_PARQUET: str = "session_events.parquet"
 
 #: Every columnar filename, in the order the producer writes them.
 COLUMNAR_FILENAMES: tuple[str, ...] = (
@@ -57,7 +63,11 @@ COLUMNAR_FILENAMES: tuple[str, ...] = (
     STEPS_PARQUET,
     TOOL_CALLS_PARQUET,
     TOOL_RESULTS_PARQUET,
+    SESSION_EVENTS_PARQUET,
 )
+
+#: The JSON artifact the ``session_events`` rows come from (atif-corpus writes it).
+SESSION_EVENTS_JSONL: str = "session_events.jsonl"
 
 #: ``session.parquet`` columns. ``session_id_path`` is the session directory
 #: name, the canonical key every view uses as ``session_id``; the rest are the
@@ -88,6 +98,7 @@ COLUMNAR_SCHEMAS: dict[str, tuple[tuple[str, str], ...]] = {
     STEPS_PARQUET: VIEW_SCHEMA["steps"],
     TOOL_CALLS_PARQUET: VIEW_SCHEMA["tool_calls"],
     TOOL_RESULTS_PARQUET: VIEW_SCHEMA["tool_results"],
+    SESSION_EVENTS_PARQUET: VIEW_SCHEMA["session_events"],
 }
 
 #: Smallest byte count a readable parquet file can have (``PAR1`` + footer +
@@ -97,7 +108,7 @@ MIN_PARQUET_BYTES: int = 16
 
 
 def columnar_paths(session_dir: Path) -> tuple[Path, ...]:
-    """The four columnar artifact paths inside one session directory."""
+    """The five columnar artifact paths inside one session directory."""
     return tuple(session_dir / name for name in COLUMNAR_FILENAMES)
 
 
@@ -119,6 +130,8 @@ __all__ = [
     "META_COLUMNAR_KEY",
     "MIN_PARQUET_BYTES",
     "SESSION_COLUMNS",
+    "SESSION_EVENTS_JSONL",
+    "SESSION_EVENTS_PARQUET",
     "SESSION_PARQUET",
     "STEPS_PARQUET",
     "TOOL_CALLS_PARQUET",

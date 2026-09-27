@@ -307,7 +307,11 @@ def _session_one() -> dict[str, Any]:
             "total_cached_tokens": 123118,
             "total_cost_usd": 1.79,
             "total_steps": 7,
-            "extra": {"total_cache_creation_input_tokens": 97847},
+            "extra": {
+                "total_cache_creation_input_tokens": 97847,
+                "reported_cost_usd": 0.4125,
+                "reported_cost_source": "claude_code_cost_state",
+            },
         },
         "extra": {"cache_creation_total": 97847},
     }
@@ -454,6 +458,61 @@ def _edges_two() -> list[dict[str, Any]]:
     ]
 
 
+def _session_events_one() -> list[dict[str, Any]]:
+    """session_events.jsonl rows for session 1, in atif-converter's row shape.
+
+    Three kinds on purpose: a hook attachment tied to a step's record and a
+    tool call, an API error, and a cost-state record with no timestamp (the
+    reason ``seq`` exists). The payloads carry non-ASCII text and nesting so
+    the JSON and columnar paths are compared on bytes that re-serialize.
+    """
+    base = {"is_sidechain": False, "source_file": f"{SESSION_IDS[0]}.jsonl"}
+    return [
+        {
+            **base,
+            "seq": 0,
+            "ts": "2026-08-22T10:00:01Z",
+            "event_type": "attachment",
+            "subtype": "hook_success",
+            "uuid": "ev-hook-1",
+            "parent_uuid": "u-1",
+            "tool_use_id": "toolu_1",
+            "payload": {"hookName": "PreToolUse:Bash", "content": "ok — ünïcode", "exitCode": 0},
+            "payload_bytes": 72,
+            "payload_truncated": False,
+        },
+        {
+            **base,
+            "seq": 1,
+            "ts": "2026-08-22T10:00:03.250Z",
+            "event_type": "system",
+            "subtype": "api_error",
+            "uuid": "ev-err-1",
+            "parent_uuid": "a-1",
+            "tool_use_id": None,
+            "payload": {"level": "error", "error": {"message": "overloaded"}, "retryAttempt": 1},
+            "payload_bytes": 20000,
+            "payload_truncated": True,
+        },
+        {
+            **base,
+            "seq": 2,
+            "ts": None,
+            "event_type": "cost-state",
+            "subtype": None,
+            "uuid": None,
+            "parent_uuid": None,
+            "tool_use_id": None,
+            "payload": {
+                "totalCostUSD": 0.4125,
+                "modelUsage": {"claude-opus-5": {"costUSD": 0.4125}},
+            },
+            "payload_bytes": 80,
+            "payload_truncated": False,
+        },
+    ]
+
+
 def _loss_report(counts: dict[str, int], converted: int) -> dict[str, Any]:
     total = sum(counts.values())
     return {
@@ -509,6 +568,15 @@ def build_corpus(root: Path) -> Path:
         (sdir / "edges.jsonl").write_text("\n".join(json.dumps(edge) for edge in edges) + "\n")
         (sdir / "loss_report.json").write_text(json.dumps(loss, separators=(",", ":")))
         (sdir / "meta.json").write_text(json.dumps(_meta(session_id), separators=(",", ":")))
+    # Session 1 carries session events; session 2 is a session materialized
+    # before session_events.jsonl existed, so it contributes no rows.
+    (root / "sessions" / SESSION_IDS[0] / "session_events.jsonl").write_text(
+        "".join(
+            json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for row in _session_events_one()
+        ),
+        encoding="utf-8",
+    )
     return root
 
 

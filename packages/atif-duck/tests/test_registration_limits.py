@@ -94,7 +94,7 @@ class TestObjectSizeBound:
     def test_a_vanished_path_counts_as_zero(self, tmp_path: Path) -> None:
         assert _object_size_bound([tmp_path / "gone.json"]) == _OBJECT_SIZE_FLOOR
 
-    def test_the_bound_reaches_both_readers(
+    def test_the_bound_reaches_every_eager_reader(
         self, corpus_root: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The DDL carries the sized bound, not the old constant."""
@@ -112,7 +112,9 @@ class TestObjectSizeBound:
             register(con, corpus_root)
         finally:
             con.close()
-        assert len(seen) == 2, "one bound per eager JSON reader (trajectories, edges)"
+        assert len(seen) == 3, (
+            "one bound per eager JSON reader (trajectories, edges, session events)"
+        )
         assert all(bound == _OBJECT_SIZE_FLOOR for bound in seen)
 
 
