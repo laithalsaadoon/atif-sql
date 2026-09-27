@@ -20,6 +20,10 @@ LOSS_REPORT_FILENAME = "loss_report.json"
 EDGES_FILENAME = "edges.jsonl"
 META_FILENAME = "meta.json"
 WATERMARK_FILENAME = "watermark.json"
+#: Corpus-level record of sessions whose source converted to nothing.
+EMPTY_SESSIONS_FILENAME = "empty_sessions.json"
+#: Per-session directory holding the zstd copy of the raw source files.
+SOURCE_ARCHIVE_DIRNAME = "source"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,11 +52,22 @@ class CorpusLayout:
         """Scratch area for whole-session-dir atomic swaps.
 
         Deliberately OUTSIDE ``sessions/`` so no reader glob (DuckDB's
-        ``read_json`` matches dot-dirs) and no ghost-removal walk can ever
+        ``read_json`` matches dot-dirs) and no source-removal walk can ever
         observe a half-written session dir; same filesystem as
         ``sessions/`` so ``os.replace`` of the staged dir stays atomic.
         """
         return self.corpus_root / ".staging"
+
+    @property
+    def empty_sessions_path(self) -> Path:
+        """``{session_id: generation}`` for sessions whose source held nothing to convert.
+
+        Kept apart from ``watermark.json`` on purpose: that file's shape is
+        ``{path: mtime_ns}`` and every reader coerces its values to ``int``, so
+        a structured entry there would read as corruption and cost a full
+        re-materialization on any version that predates this file.
+        """
+        return self.corpus_root / EMPTY_SESSIONS_FILENAME
 
     def session_dir(self, session_id: str) -> Path:
         """``<corpus_root>/sessions/<session_id>/``."""
@@ -73,3 +88,7 @@ class CorpusLayout:
     def meta_path(self, session_id: str) -> Path:
         """Provenance record: source files, mtimes, versions, materialized_at."""
         return self.session_dir(session_id) / META_FILENAME
+
+    def source_archive_dir(self, session_id: str) -> Path:
+        """The raw source archive: one zstd ``<relative path>.zst`` per source file."""
+        return self.session_dir(session_id) / SOURCE_ARCHIVE_DIRNAME

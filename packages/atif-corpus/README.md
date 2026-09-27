@@ -11,6 +11,16 @@ staged session directory after the JSON artifacts and before `meta.json`,
 so anything it writes (atif-duck's columnar parquets, in practice) publishes
 in the same directory swap and the keys it returns land in `meta.json`.
 
+Sessions are never deleted: one whose source transcript vanished keeps its
+artifacts and is marked `source_present: false`. Each live conversion also
+writes a zstd archive of the raw source files to `source/` in the same swap,
+and `atif_corpus.infrastructure.source_archive.restore_session_sources`
+rebuilds the tree from it. A session is re-converted when its sources move or
+when its recorded `converter_schema` (or expected `columnar_schema`) differs
+from the running one, from its archive if the source is gone. Transcripts with
+nothing to convert are recorded in `empty_sessions.json` instead of failing
+every pass. `docs/CONTRACT.md` has the rules.
+
 Hexagonal: `domain/` (pure decisions: plan, quiescence, watermark diff,
 layout, `corpus_slug`) < `infrastructure/`
 (scanner, settings, atomic writes, `FakeConverter`) < `application/`

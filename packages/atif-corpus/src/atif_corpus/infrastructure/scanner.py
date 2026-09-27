@@ -18,20 +18,23 @@ shape. Discovery follows CONTRACT.md exactly:
   skipped this pass, logged with the reason, and reported in
   :attr:`SourceScan.rejected_session_ids` so the skip is visible;
 * side-files are found by ``rglob`` over the session dir (the directory
-  named after the session stem) filtered to ``*.jsonl`` — the rglob
-  deliberately does NOT hardcode ``subagents/`` vs
+  named after the session stem) filtered to ``*.jsonl`` and ``*.meta.json``
+  — the rglob deliberately does NOT hardcode ``subagents/`` vs
   ``subagents/workflows/wf_*/`` so any deeper future nesting is still
-  watermarked. Only layouts that HAVE side-files are walked for them: a Codex
+  watermarked. The ``agent-*.meta.json`` sidecars are watched because the
+  converter reads them (subagent type and description), so a sidecar that
+  changes on its own has to make the session stale; the other files under the
+  side dir (``tool-results/`` spills) are archived but not watched. Only layouts that HAVE side-files are walked for them: a Codex
   sub-agent writes its own rollout under its own session id, so a rollout is
   always alone and looking for siblings would be a stat per session for a
   directory that cannot exist.
 
 A scan reports two kinds of absence and they must never be conflated. A
-session whose main transcript is genuinely GONE is ghost-eligible: its
-corpus dir gets deleted. A session whose ``stat`` merely FAILED (EIO,
-ESTALE, an NFS or permission blip) is only unreadable this pass and its
-source may well still be there — deleting its artifacts would destroy a live
-session over a transient error. :class:`SourceScan` keeps the two in
+session whose main transcript is genuinely GONE is marked source-removed:
+its corpus dir is kept and its meta says the source is gone. A session whose
+``stat`` merely FAILED (EIO, ESTALE, an NFS or permission blip) is only
+unreadable this pass and its source may well still be there — marking it
+would record a live session as deleted over a transient error. :class:`SourceScan` keeps the two in
 separate fields so a caller cannot accidentally treat one as the other.
 """
 
@@ -51,6 +54,11 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from pathlib import Path
 
+#: The side-dir files whose mtimes are part of a session's watermark: the
+#: side-file transcripts, and the ``agent-*.meta.json`` sidecars the converter
+#: reads beside them.
+WATCHED_SIDE_FILE_GLOBS: tuple[str, ...] = ("*.jsonl", "*.meta.json")
+
 #: Shared empty default; a frozen dataclass must not hand out a mutable dict.
 _NO_UNREADABLE: Mapping[str, str] = MappingProxyType[str, str]({})
 
@@ -63,7 +71,7 @@ class SourceScan:
     sessions: tuple[SessionSource, ...] = ()
     #: ``{session_id: main_jsonl}`` for sessions whose sources raised a
     #: non-``FileNotFoundError`` ``OSError``. Absent from ``sessions`` (nothing
-    #: converts without an mtime), so callers MUST exclude them from ghost
+    #: converts without an mtime), so callers MUST exclude them from source-removal
     #: removal and retain their watermark entries — the main path is carried
     #: because retention scopes entries by it. Wrapped read-only so the frozen
     #: dataclass is actually frozen rather than frozen-except-this-field.
@@ -76,7 +84,7 @@ class SourceScan:
     unlistable_dirs: tuple[str, ...] = ()
     #: Transcript names whose derived session id failed the boundary check
     #: (:mod:`atif_corpus.domain.session_id`), sorted. Nothing from them is
-    #: materialized, they are never ghosted, and they are reported so an
+    #: materialized, they are never marked source-removed, and they are reported so an
     #: operator can see why a transcript is missing from the corpus.
     rejected_session_ids: tuple[str, ...] = ()
 
@@ -89,7 +97,7 @@ class SourceScan:
         """A copy of this scan carrying more unreadable ``{session_id: main_jsonl}``.
 
         Lets a caller that resolved :attr:`unlistable_dirs` to session ids
-        fold them in, so ghost removal, watermark retention and the pass
+        fold them in, so source-removal marking, watermark retention and the pass
         report all read one unreadable set instead of three.
         """
         if not extra:
@@ -120,8 +128,9 @@ def _mtime_ns(path: Path) -> int | None:
 def _session_mtimes(main_jsonl: Path, layout: SourceLayout) -> dict[str, int] | None:
     """``{path: mtime_ns}`` for one session, or ``None`` when its main file vanished.
 
-    A vanished SIDE-file is simply omitted: the session is still part of the
-    scan, and the missing entry is exactly the staleness signal that makes it
+    Side-files are the transcripts and ``*.meta.json`` sidecars under the
+    session dir (:data:`WATCHED_SIDE_FILE_GLOBS`). A vanished SIDE-file is
+    simply omitted: the session is still part of the scan, and the missing entry is exactly the staleness signal that makes it
     re-materialize. Raises ``OSError`` when any source could not be stat'd.
     """
     main_mtime = _mtime_ns(main_jsonl)
@@ -133,7 +142,8 @@ def _session_mtimes(main_jsonl: Path, layout: SourceLayout) -> dict[str, int] | 
         return mtimes
     side_dir = main_jsonl.parent / main_jsonl.stem
     if side_dir.is_dir():
-        for side_file in sorted(side_dir.rglob("*.jsonl")):
+        watched = {path for pattern in WATCHED_SIDE_FILE_GLOBS for path in side_dir.rglob(pattern)}
+        for side_file in sorted(watched):
             side_mtime = _mtime_ns(side_file)
             if side_mtime is not None:
                 mtimes[str(side_file)] = side_mtime
@@ -145,7 +155,7 @@ def _list_dir(directory: Path) -> list[Path] | None:
 
     ``Path.glob`` swallows a ``PermissionError`` on a directory it cannot
     open and simply yields nothing, which is indistinguishable from an empty
-    directory — and "empty" makes every session under it a ghost. Listing each
+    directory — and "empty" makes every session under it look deleted. Listing each
     level explicitly is what keeps the two apart.
     """
     try:
@@ -295,9 +305,9 @@ def scan_source_root(
 ) -> tuple[SessionSource, ...]:
     """The sessions found under ``source_root`` — :func:`scan_sources` without diagnostics.
 
-    For read-only callers (``atif-sql status``) that plan but never delete:
-    only ghost removal needs ``unreadable_session_ids``, and a caller that
-    deletes must reach for :func:`scan_sources` and handle it. Dropping the
+    For read-only callers that plan but never mark: only source-removal
+    marking needs ``unreadable_session_ids``, and a caller that marks must
+    reach for :func:`scan_sources` and handle it. Dropping the
     diagnostics loses no operator signal here — :func:`scan_sources` logs each
     unreadable session and unlistable directory at WARNING, and the CLI's sink
     is WARNING-and-up on stderr, so an unreadable source still announces
