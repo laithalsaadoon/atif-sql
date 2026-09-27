@@ -10,6 +10,7 @@ name that is not a hash.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import stat
 from pathlib import Path
@@ -36,17 +37,12 @@ class BlobConverter(FakeConverter):
     """The fake converter, plus attachments: both sessions share one image."""
 
     @override
-    def convert(self, session_jsonl: Path) -> ConversionOutput:
-        base = super().convert(session_jsonl)
+    def convert(self, session_jsonl: Path, *, archive_dir: Path | None = None) -> ConversionOutput:
+        base = super().convert(session_jsonl, archive_dir=archive_dir)
         blobs = (
             (_blob(SHARED),) if session_jsonl.stem == SESSION_A else (_blob(SHARED), _blob(ONLY_B))
         )
-        return ConversionOutput(
-            trajectory_dict=base.trajectory_dict,
-            loss_report_dict=base.loss_report_dict,
-            edges_lines=base.edges_lines,
-            blobs=blobs,
-        )
+        return dataclasses.replace(base, blobs=blobs)
 
 
 def _run(source_root: Path, corpus_root: Path) -> None:
@@ -78,7 +74,7 @@ def test_blobs_are_stored_once_per_hash_across_sessions(
     assert shared.read_bytes() == SHARED
     assert shared.parent.name == _blob(SHARED).sha256[:2]
     assert stat.S_IMODE(shared.stat().st_mode) == 0o444
-    # Outside sessions/: ghost removal and every reader glob skip it.
+    # Outside sessions/: the per-session swap and every reader glob skip it.
     assert layout.sessions_dir not in shared.parents
 
 
