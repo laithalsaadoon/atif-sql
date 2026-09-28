@@ -334,7 +334,7 @@ def _dry_run_plan(
             skipped_kind += 1
             continue
         capped.append(sid)
-    in_tokens = sum(tokens_for_chars(len(reader.session_text(sid))) for sid in capped)
+    in_tokens = sum(tokens_for_chars(len(text)) for text in reader.session_texts(capped))
     out_tokens = len(capped) * _AVG_OUT_TOKENS
     pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)
     cost = estimate_cost_tokens(in_tokens, out_tokens, pricing)

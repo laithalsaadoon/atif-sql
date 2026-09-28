@@ -398,7 +398,7 @@ def detect_perceived_errors(
         max_sessions = settings.llm_max_sessions_per_run
         capped = eligible[:max_sessions]
         in_tokens = sum(
-            tokens_for_chars(len(reader.session_text(sid, include_uuids=True))) for sid in capped
+            tokens_for_chars(len(text)) for text in reader.session_texts(capped, include_uuids=True)
         )
         out_tokens = len(capped) * _AVG_OUT_TOKENS
         pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)

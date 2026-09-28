@@ -56,7 +56,7 @@ from atif_duck.infrastructure.registry import register, register_raw
 #: LAKE_SCHEMA_VERSION bumped, then re-pin: a lake recording another digest is
 #: rebuilt by the next materialize, so the digest alone already forces the
 #: rebuild; the version is for a change the definitions do not show.
-PINNED_SCHEMA = (1, "0e0beccb2e63487387ccfc66d2bcc3f53b74b3b68ea1e498dc53710a67422039")
+PINNED_SCHEMA = (1, "c1daacdbdda78c113e4b8c027604f155722142f9382181756cc66df563321d0b")
 
 
 def _corpus(root: Path) -> LakeCorpus:
@@ -155,6 +155,18 @@ class TestSchema:
             "LAKE_TABLES",
             tuple(widened if t.name == "steps" else t for t in LAKE_TABLES),
         )
+        assert lake_schema_digest() != before
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [("LAKE_ROW_GROUP_SIZE", 122_880), ("SOURCE_ORDERED_TABLES", ("steps",))],
+    )
+    def test_a_file_layout_change_moves_the_digest(
+        self, monkeypatch: pytest.MonkeyPatch, name: str, value: object
+    ) -> None:
+        """A lake written in another layout reads back slow or misordered, so it must be stale."""
+        before = lake_schema_digest()
+        monkeypatch.setattr(lake_domain, name, value)
         assert lake_schema_digest() != before
 
     def test_a_lake_records_its_identity_and_partitions_by_agent_corpus_month(

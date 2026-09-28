@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 if TYPE_CHECKING:
+    from atif_analytics.domain.ports import SessionSource
     from atif_analytics.infrastructure.settings import AnalyticsSettings
 
 
@@ -43,10 +44,14 @@ def run_analyze(
     skip_conflicts: bool = False,
     skip_friction: bool = False,
     skip_perceived: bool = False,
+    source: SessionSource | None = None,
 ) -> dict[str, Any]:
     """Run the LLM analytics stages; return a per-stage summary dict.
 
-    ``skip_*`` flags subtract individual stages.
+    ``skip_*`` flags subtract individual stages. ``source`` is where session
+    data comes from (atif-cli passes the lake's when the lake holds the
+    corpus); the default reads the per-session files. The summary's
+    ``session_source`` names which one ran.
     """
     summary: dict[str, Any] = {"dry_run": dry_run}
 
@@ -54,7 +59,8 @@ def run_analyze(
     # the expensive part, and every LLM stage walks the same sessions.
     from atif_analytics.infrastructure.corpus_reader import CorpusReader
 
-    reader = CorpusReader(settings.corpus_root, caps=settings.transcript_caps())
+    reader = CorpusReader(settings.corpus_root, caps=settings.transcript_caps(), source=source)
+    summary["session_source"] = reader.source_name
 
     from atif_analytics.application.use_cases._shared import RunBudget
     from atif_analytics.application.use_cases.classify import classify_sessions

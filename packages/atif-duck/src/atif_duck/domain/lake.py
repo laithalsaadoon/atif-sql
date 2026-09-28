@@ -71,6 +71,24 @@ from atif_duck.domain.sql_literal import SqlFragment
 #: makes the author decide whether it also warrants a bump.
 LAKE_SCHEMA_VERSION: int = 1
 
+#: The lake tables whose rows keep their source order. A step's tool calls
+#: and results carry no ordinal, so their order within a step is the order the
+#: writer inserted them in, which DuckLake keeps as ``rowid``. A parallel
+#: partitioned insert interleaves rows from its threads (measured: results
+#: of one step out of order in a few sessions per hundred), so the writer
+#: inserts these tables on one thread. Part of :func:`lake_schema_digest`: a
+#: lake written without the guarantee reads back misordered, so it is stale.
+SOURCE_ORDERED_TABLES: tuple[str, ...] = ("steps", "tool_calls", "tool_results")
+
+#: Parquet row group size for every lake file. DuckDB's default (122,880 rows)
+#: puts a whole month of a corpus's tool results in one row group, so reading
+#: one session's results decompressed every other session's too (measured on
+#: the copied corpora: 0.7 s per session). The step-level tables' rows land
+#: in session order, so a small group holds a few sessions and a session read
+#: touches one or two. Part of :func:`lake_schema_digest`, so a lake written in
+#: another layout is rebuilt rather than left slow.
+LAKE_ROW_GROUP_SIZE: int = 4096
+
 #: The name the lake is attached under on every connection that reads or
 #: writes it. Not part of the queryable surface: the views are.
 LAKE_ALIAS: str = "atif_lake"
@@ -344,8 +362,10 @@ LAKE_HASH_SQL: dict[str, SqlFragment] = {
 
 
 def lake_schema_digest() -> str:
-    """sha256 over every table's name, columns and partition spec, bookkeeping included."""
+    """sha256 over every table's name, columns and partition spec, bookkeeping and file layout included."""
     spec = {
+        "row_group_size": LAKE_ROW_GROUP_SIZE,
+        "source_ordered_tables": SOURCE_ORDERED_TABLES,
         "tables": [
             {"name": t.name, "columns": t.columns, "partition_by": t.partition_by}
             for t in LAKE_TABLES
@@ -391,12 +411,14 @@ __all__ = [
     "LAKE_INFO_COLUMNS",
     "LAKE_INFO_TABLE",
     "LAKE_METADATA_ALIAS",
+    "LAKE_ROW_GROUP_SIZE",
     "LAKE_SCHEMA_VERSION",
     "LAKE_TABLES",
     "LAKE_TABLE_NAMES",
     "PARTITION_SQL",
     "READER_SELECT_SQL",
     "SESSION_KEY",
+    "SOURCE_ORDERED_TABLES",
     "LakeColumn",
     "LakeTable",
     "expected_lake_info",
