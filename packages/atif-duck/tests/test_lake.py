@@ -12,7 +12,9 @@ verify and compact.
 
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -504,3 +506,43 @@ class TestRebuildAndCompact:
         assert report.snapshots_after < report.snapshots_before
         assert verify_lake(layout).clean
         assert lake_status(layout).data_files == report.files_after
+
+
+class _ThreadsAtMaintenance:
+    """A writer connection that records DuckDB's thread count at every file merge or rewrite."""
+
+    def __init__(self, con: duckdb.DuckDBPyConnection, seen: list[int]) -> None:
+        self._con = con
+        self._seen = seen
+
+    def execute(self, sql: str, *args: Any) -> Any:
+        if "merge_adjacent_files" in sql or "rewrite_data_files" in sql:
+            row = self._con.execute("SELECT current_setting('threads')").fetchone()
+            assert row is not None
+            self._seen.append(int(row[0]))
+        return self._con.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._con, name)
+
+
+def test_file_merges_and_rewrites_run_on_one_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Merging ``tool_results`` at more than one thread outgrew the writer's memory cap."""
+    corpus = _corpus(tmp_path / "corpus")
+    layout = _lake(tmp_path, corpus)
+    seen: list[int] = []
+    real = lake_mod._writer_connection  # pyright: ignore[reportPrivateUsage]
+
+    @contextlib.contextmanager
+    def recording(memory_limit_bytes: int | None) -> Generator[Any]:
+        with real(memory_limit_bytes) as con:
+            yield _ThreadsAtMaintenance(con, seen)
+
+    monkeypatch.setattr(lake_mod, "_writer_connection", recording)
+    rebuild_lake(layout, [corpus])
+    compact_lake(layout)
+    # One merge in rebuild; merge, rewrite, merge in compact.
+    assert seen == [1, 1, 1, 1]
+    assert verify_lake(layout).clean
