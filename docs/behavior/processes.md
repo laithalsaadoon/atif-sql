@@ -127,10 +127,13 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1240`
    commands share, then let `--max-sessions` and `--max-cost-usd` override the
    env ceilings so a crontab line carries its spend cap visibly — `:1307`.
    `--llm-only` is accepted and dropped, since every stage is an LLM stage.
-2. Build one `CorpusReader` shared by every stage: the parsed-steps memo is the
-   expensive part and every stage walks the same sessions —
-   `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`,
-   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`.
+2. Open the lake's session source when the lake holds the corpus, else warn
+   once and read the files (`--no-lake` forces the files) —
+   `packages/atif-cli/src/atif_cli/app.py:1624`. Build one `CorpusReader` over
+   it, shared by every stage: the steps memo is the expensive part and every
+   stage walks the same sessions —
+   `packages/atif-analytics/src/atif_analytics/application/analyze.py:62`,
+   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:263`.
 3. Construct the run-wide `RunBudget` from `llm_max_cost_usd_per_run`, priced
    from the providers' running actual usage rather than estimates —
    `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:94`.

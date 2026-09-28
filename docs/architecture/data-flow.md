@@ -186,14 +186,21 @@ sequenceDiagram
 1. The `analyze` command loads `AnalyticsSettings`, reuses the same corpus-root resolution the
    other commands share, and stamps explicit `--max-sessions` / `--max-cost-usd` ceilings over the
    env defaults so a crontab line carries its spend cap visibly — `packages/atif-cli/src/atif_cli/app.py:1240`.
-2. The pipeline runner builds one shared `CorpusReader` for every stage and loops the LLM
-   stages (classify, conflicts, friction, perceived); the `skip_*` flags subtract stages —
-   `packages/atif-analytics/src/atif_analytics/application/analyze.py:36`.
-3. Corpus rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json`
-   behind a bounded memo — not through DuckDB, which the `forbidden` import contract puts out of
-   this package's reach — `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:274`.
-   The reader also labels each session's kind with the same rule `session_outcomes.kind` applies, so
-   classify and conflicts can skip `turn_audit` and `one_shot_job` sessions — `:298`.
+2. The command opens the lake's session source when the lake holds the corpus
+   (`packages/atif-cli/src/atif_cli/app.py:1624`, `packages/atif-cli/src/atif_cli/lake_sessions.py:83`),
+   and the pipeline runner builds one shared `CorpusReader` over it (or over the file source)
+   for every stage and loops the LLM stages (classify, conflicts, friction, perceived); the
+   `skip_*` flags subtract stages — `packages/atif-analytics/src/atif_analytics/application/analyze.py:62`.
+3. On the lake, a session whose lake rows match its current `meta.json` is read with batched
+   statements over the step-level tables (`packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:71`),
+   reading ahead in the newest-first walk order, and every other session from its files. Without
+   a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json` —
+   atif-analytics never imports DuckDB or atif-duck, which the `forbidden` import contract puts
+   out of its reach — `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:225`.
+   Either way the steps sit behind the reader's bounded memos
+   (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:263`), and the
+   reader labels each session's kind with the same rule `session_outcomes.kind` applies, so
+   classify and conflicts can skip `turn_audit` and `one_shot_job` sessions.
 4. Before the first stage starts, one `RunBudget` is constructed from the per-run dollar ceiling
    (`packages/atif-analytics/src/atif_analytics/application/analyze.py:83`); every stage then goes
    through one call site, each receiving the shared reader and that budget, and a stage that finds
@@ -216,7 +223,7 @@ sequenceDiagram
     participant Bedrock as Bedrock
 
     CLI->>Ana: run_analyze(settings, dry_run=false)
-    Ana->>Disk: CorpusReader.load_steps (json over trajectory.json)
+    Ana->>Disk: CorpusReader.load_steps (lake batch, or json over trajectory.json)
     Disk-->>Ana: StepEvent rows
     loop each LLM stage under one RunBudget
         Ana->>Disk: filter_unchanged against state.db
