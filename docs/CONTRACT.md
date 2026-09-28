@@ -291,6 +291,12 @@ atif-sql lake status                   # also folded into `atif-sql status`
 atif-sql lake compact [--expire-older-than-days N]  # default 30
 atif-sql embed --install-extension     # the ONE place the lance DuckDB extension
                                        # is downloaded (also done by a real embed run)
+atif-sql embed --dry-run               # plan; discovery reads the lake's steps changed
+                                       # since the last complete run (watermark in the
+                                       # store dir), --no-lake reads every trajectory
+atif-sql embed --prune-orphans [--no-dry-run]  # stored rows no lake step names;
+                                       # dry run by default, exit 78 without a lake
+atif-sql search 'text' [--all-corpora] [--no-lake]  # kNN joined to the lake's steps
 atif-sql schema                        # static, <50ms, no duckdb bind
 
 ## Parity oracle (satisfied and retired)

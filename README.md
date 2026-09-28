@@ -70,9 +70,12 @@ atif-sql query 'SELECT * FROM sessions LIMIT 5'
 After `lake rebuild`, every `materialize` keeps the lake current (it replaces the rows of the
 sessions it wrote), and `query` reads the lake instead of opening each session's files. Without a
 lake, or with one that's out of date, `query` prints a one-line warning and reads the per-session
-files as before. `atif-sql lake verify` checks the lake against the artifacts, and
-`atif-sql lake compact` merges small files and drops old snapshots. The lake lives at
-`~/.atif-sql/lake/` (`ATIF_SQL_LAKE_ROOT` moves it) and holds every corpus.
+files as before. `atif-sql embed` and `atif-sql search` read the lake the same way: embed reads
+only the steps that changed since its last complete run, and `search --all-corpora` searches every
+corpus's store at once. `atif-sql lake verify` checks the lake against the artifacts, and
+`atif-sql lake compact` merges small files and drops old snapshots (the refresh script's nightly
+`compact` lane runs it). The lake lives at `~/.atif-sql/lake/` (`ATIF_SQL_LAKE_ROOT` moves it)
+and holds every corpus.
 
 `materialize` also writes typed columnar artifacts (parquet files per session) beside the
 JSON ones, so `query` parses no JSON for those sessions; `--no-columnar` skips them, older corpora

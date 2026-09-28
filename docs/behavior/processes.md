@@ -220,8 +220,13 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:766`
 3. Read the store's uuid-to-text-hash map once, then stream candidates whose
    hash is absent or stale through `TextRowsPort`; the staleness comparison
    happens before the limit cap so `--limit N` always makes N rows of progress
-   — `packages/atif-embed/src/atif_embed/application/embed.py:43`,
-   `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:158`.
+   — `packages/atif-embed/src/atif_embed/domain/discovery.py`. With a lake
+   that holds the corpus, the rows come from its `steps` table
+   (`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py`,
+   over `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py`),
+   and only the uuids a lake snapshot touched since the watermark in the
+   store directory are read; otherwise every session's `trajectory.json` is
+   read — `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py`.
 4. Under `--dry-run`, count candidates and return the plan dict, returning
    before boto3 is ever imported —
    `packages/atif-embed/src/atif_embed/application/embed.py:120`.
@@ -242,6 +247,13 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:766`
    ensure the HNSW index on the way out so `search` pays no brute-force scan —
    `packages/atif-embed/src/atif_embed/application/embed.py:243`,
    `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:414`.
+9. When no row failed, hand the store's row count to `TextRowsPort.commit`:
+   the lake reader moves its watermark to the snapshot it read, unless the
+   run stopped at `--limit` — `packages/atif-embed/src/atif_embed/application/embed.py`.
+
+`embed --prune-orphans` is a separate path: it compares the store's uuids with
+every step's primary uuid in the lake and reports (or, with `--no-dry-run`,
+deletes) the ones no step names — `packages/atif-embed/src/atif_embed/application/prune.py`.
 
 ### Related
 
@@ -302,10 +314,14 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:860`
 1. Resolve the corpus root, the Lance URI, and the expected model and
    dimension from `EmbedSettings` — `:878`,
    `packages/atif-embed/src/atif_embed/infrastructure/settings.py:57`.
-2. Register the full catalog on a fresh in-memory connection; a registration
-   failure or a provider mismatch leaves through the classified-error path with
-   exit 65 — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`,
-   `packages/atif-cli/src/atif_cli/duck_errors.py:66`.
+2. Attach the lake as `query` does (or fall back to the per-session
+   artifacts with a warning), then register the full catalog on a fresh
+   in-memory connection; a registration failure or a provider mismatch leaves
+   through the classified-error path with exit 65 —
+   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`,
+   `packages/atif-cli/src/atif_cli/duck_errors.py:66`. `--all-corpora` scopes
+   the steps to every corpus the lake holds and binds `message_embeddings`
+   over each corpus's store (`register_vss_stores`).
 3. Count `message_embeddings` first: an empty or absent store exits 2 with the
    backfill hint instead of returning an empty result that reads like "no
    matches" — `packages/atif-cli/src/atif_cli/app.py:930`.
@@ -366,6 +382,10 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
    mtime and suppress further embeds for that corpus until the mtime changes;
    every other nonzero exit stays transient and retries next tick — `:217`,
    `:244`.
+9. The `compact` lane runs `atif-sql lake compact` once (not per corpus) under
+   a 4G scope, after taking the materialize lane's lock too (waiting up to
+   `ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS`), so no materialize tick writes the
+   lake while it runs; a CLI without `lake` skips with one line.
 
 ### Related
 

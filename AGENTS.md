@@ -63,7 +63,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   deterministic `session_outcomes` view now. Layered: `application` >
   `infrastructure` > `domain`.
 - `packages/atif-embed` — Cohere Embed v4 on Bedrock + LanceDB store + the
-  backfill use case. Layered: `application` > `infrastructure` > `domain`.
+  backfill and orphan-prune use cases. Discovery reads the lake's `steps`
+  through the `LakeStepsPort` port (atif-cli implements it over atif-duck's
+  `infrastructure.lake_steps`), and falls back to the per-session reader.
+  Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-cli` — cyclopts CLI composing the rest into commands
   (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`,
   `search`, `examples`, `schema`, `cron`, `lake`).
@@ -124,7 +127,7 @@ Rules of the road:
   the first marker, Bandit only the second; never blanket-skip B608 in
   `[tool.bandit]`), and `packages/atif-duck/tests/test_sql_text_boundaries.py`
   runs an AST audit over `registry.py`, `columnar.py`, `analytics.py`,
-  `authorship.py` and `lake.py` (both layers of each) and atif-embed's
+  `authorship.py`, `lake.py` (both layers of each), `lake_steps.py` and atif-embed's
   `corpus_text_rows.py` that fails on any placeholder that isn't a constant, a
   projection call, or `sql_literal(...)`. A statement built per table is a
   module-level constant (a dict comprehension over the table specs), which the
@@ -238,8 +241,25 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   the data directory: with the directory granted, a caller's
   `ducklake_cleanup_old_files` deletes files. With no lake, a stale one, or a
   corpus the lake doesn't hold, query prints one warning and reads the
-  per-session artifacts as before (`--no-lake` forces that). The embeddings
-  store and the analytics tables still read the corpus directory.
+  per-session artifacts as before (`--no-lake` forces that). `search` reads
+  the same way. Each corpus keeps its own embeddings store in its directory,
+  and under `--all-corpora` `message_embeddings` is the union of every
+  corpus's store (one store for all when `ATIF_SQL_LANCE_URI` pins it). The
+  analytics tables still read the corpus directory.
+- Embed discovery: `atif-sql embed` reads the steps to embed from the lake's
+  `steps` table (primary uuid = `source_uuids[0]`, text = `message`, the
+  store's existing key and text), in the per-session reader's order, so the
+  row set and every stored vector stay as they were. Only rows whose uuid a
+  lake snapshot inserted or deleted since the last complete run are read:
+  `lake_watermark.json` inside the store directory records that run's lake
+  position (the corpus's `registered_at` as the lineage, plus the snapshot
+  id), the text floor, and the store's row count. A rebuilt lake, expired
+  snapshots, a changed floor or a store count that moved outside a run all
+  force a full lake read; no usable lake falls back to the per-session
+  reader. The watermark only moves after a run that read to the end (not to
+  a `--limit`) and embedded every row. `embed --prune-orphans` counts stored
+  rows whose uuid is no lake step's (dry run unless `--no-dry-run`, refused
+  while sessions are pending a lake write).
 - Commands: `atif-sql lake rebuild` builds a fresh lake from every registered
   corpus plus every corpus under `ATIF_SQL_CORPUS_BASE` (or the
   `--corpus-root`s given) beside the old one and swaps the directory in.
@@ -250,7 +270,9 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   merges small files, rewrites delete-heavy ones, expires snapshots older than
   `--expire-older-than-days` (default 30) and removes unreferenced files once
   they're an hour old, so a reader on the previous catalog copy still finds
-  its files.
+  its files. The refresh script's nightly `compact` lane runs it under its
+  own lock and 4G cap, holding the materialize lane's lock too, so it never
+  overlaps the lake's writer.
 - Memory: the writer caps DuckDB at 2 GiB (lower when the host or cgroup is),
   and runs DuckLake's file merges and rewrites on one thread, because merging
   `tool_results` at more threads outgrew that cap. `query` sizes its own cap
