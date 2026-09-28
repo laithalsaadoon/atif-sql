@@ -14,6 +14,12 @@ re-enters flow 2's registration at `:886` and adds one kNN statement, `embed` (`
 vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), and `status`
 (`:412`) answer from static data or `stat` calls with no downstream participant.
 
+`materialize` also keeps the DuckLake beside the corpora current (flow 1, step 10), and `query`
+reads it when it can (flow 2, step 4). `lake rebuild` loads it from every corpus's artifacts and
+swaps the new directory in; `lake verify` reads both sides and compares them; `lake compact`
+merges and expires under the same writer lock materialize takes; `lake status` reads the published
+catalog copy.
+
 ## Flow 1: corpus materialization (`atif-sql materialize`)
 
 1. The `materialize` command resolves `CorpusSettings` (pydantic-settings, env prefix
@@ -51,6 +57,16 @@ vector store flows 2 and 3 read, and `schema` (`:1055`), `examples` (`:963`), an
    complete generation or the other
    (`packages/atif-corpus/src/atif_corpus/application/materialize.py:240`); the watermark advances
    only for sessions that succeeded — `:608`.
+10. Before the first swap, the pass records every session it may publish or mark in
+   `<corpus>/sink_pending.json`. After the swaps, still in the parent process, it hands the
+   `SessionSink` (atif-duck's `DuckLakeSessionSink`, plugged in by the CLI unless `--no-lake`) every
+   session it published or marked source-removed, plus any left pending by an earlier pass, in plan
+   order and in batches. Each batch is one lake transaction that deletes and re-inserts those
+   sessions' rows in every lake table, then the writer publishes a fresh read-only copy of the lake
+   catalog. What the sink took leaves the pending file; a failure keeps that batch and every later
+   one there for the next pass and never fails this one (`_SinkLedger` in
+   `packages/atif-corpus/src/atif_corpus/application/materialize.py`,
+   `packages/atif-duck/src/atif_duck/infrastructure/lake.py`).
 
 ```mermaid
 sequenceDiagram
@@ -60,6 +76,8 @@ sequenceDiagram
     participant Harbor as harbor
     participant Producer as atif-duck producer
     participant Disk as corpus disk
+    participant Sink as atif-duck lake sink
+    participant Lake as DuckLake
 
     CLI->>Corpus: materialize(source_root, corpus_root, ConverterPort, ArtifactProducer)
     Corpus->>Disk: read_watermark + scan_sources
@@ -75,6 +93,12 @@ sequenceDiagram
         Producer->>Disk: typed parquet files (0444)
         Corpus->>Disk: meta.json last (with columnar_schema), swap dir
     end
+    loop each batch of published sessions
+        Corpus->>Sink: SessionSink.sync_sessions(corpus_root, agent, ids)
+        Sink->>Lake: one transaction: DELETE + INSERT per table
+        Sink->>Lake: publish catalog.reader.duckdb
+    end
+    Corpus->>Disk: sink_pending.json (only what the sink didn't take)
     Corpus->>Disk: write watermark.json
     Corpus-->>CLI: MaterializationReport
 ```
@@ -89,29 +113,40 @@ sequenceDiagram
 3. Registration builds the whole catalog on that connection in a fixed order — raw TEMP tables,
    base views, VSS, macros, the authorship macro and views, analytics views, analytics macros —
    because each later stage binds against the earlier one at `CREATE` time — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1679`.
-4. The raw readers materialize `meta.json`, `edges.jsonl`, and `loss_report.json` as TEMP TABLEs
+4. When the DuckLake at `ATIF_SQL_LAKE_ROOT` exists, its recorded schema matches the running code,
+   and it holds this corpus at this root, the raw relations are views over the lake tables instead,
+   filtered to this corpus (`--all-corpora` drops the filter): the command loads the ducklake
+   extension (it never installs one) and attaches the published `catalog.reader.duckdb` READ_ONLY
+   before the sandbox goes up, since the sandbox refuses `ATTACH`. Nothing is read eagerly; every
+   view is a lake scan when the caller's statement runs, and the rest of registration binds over
+   those views as it would over the per-session ones (`attach_lake_for_query` and
+   `register_lake_raw` in `packages/atif-duck/src/atif_duck/infrastructure/lake.py`). Otherwise the
+   command prints one warning saying why and takes the per-session path below.
+5. On the per-session path, the raw readers materialize `meta.json`, `edges.jsonl`, and `loss_report.json` as TEMP TABLEs
    over globs into `<corpus_root>/sessions/`. The trajectory is split per session: a session whose
    `meta.columnar_schema` is current and whose parquet files are present is read lazily with
    `read_parquet` (typed columns, no JSON parsed at query time), and every other session is parsed
    from `trajectory.json` into a TEMP TABLE over an explicit path list; the two sets are unioned
    into one raw view per surface. The parse cost of a `query` invocation is therefore O(sessions
    without artifacts) per connection — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:402`.
-5. Trajectory, edges, and loss readers are semi-joined against the meta table, so a session
+6. Trajectory, edges, and loss readers are semi-joined against the meta table, so a session
    directory missing its `meta.json` contributes nothing rather than a partial artifact set. This
    is the read-side half of flow 1's meta-last write ordering — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:221`.
-6. The VSS step `ATTACH`es the LanceDB store through the lance extension (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:887`) and reads the
+7. The VSS step `ATTACH`es the LanceDB store through the lance extension (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:887`) and reads the
    store's stamped `model` and `dim` back out (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:921`) before creating any view over it; a store
    written by a different provider or width raises instead of binding, because vectors from
    different models live in incompatible spaces and would return numerically valid but meaningless
    cosine scores — `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:46`.
-7. Before any of that, the connection was sized to the host (`_configure_query_resources`: a memory
+8. Before any of that, the connection was sized to the host (`_configure_query_resources`: a memory
    cap from available RAM, a thread count from that cap, a private `mkdtemp` spill directory, and
    extension auto-install and auto-load off), because registration is what needs the cap. The
    fully-registered connection is then sandboxed: a directory allowlist holding only the private
-   spill area, a path allowlist holding the individual parquets the views read lazily,
+   spill area, a path allowlist holding the individual parquets the views read lazily (on the lake
+   path, each live lake data and delete file, never the lake's data directory, because a caller's
+   `ducklake_cleanup_old_files` deletes files under a directory grant),
    `enable_external_access=false`, and `lock_configuration` last so caller SQL cannot widen any of
    it (`packages/atif-cli/src/atif_cli/app.py`, `_harden_query_connection`).
-8. The statement's kinds are checked with DuckDB's own parser on the locked connection; `COPY`,
+9. The statement's kinds are checked with DuckDB's own parser on the locked connection; `COPY`,
    `EXPORT`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE` exit 70
    (`sandbox_refused`) before anything runs. Then the caller's statement executes and the cursor
    drains in batches to stdout: a JSON array of row objects on a pipe, a width-aligned table on a
@@ -127,8 +162,10 @@ sequenceDiagram
 
     CLI->>DB: duckdb.connect()
     CLI->>DB: threads, memory_limit, private temp_directory, autoinstall off
-    CLI->>Duck: register(con, corpus_root, expected model + dim)
-    Duck->>DB: CREATE TEMP TABLE raw readers over corpus globs
+    CLI->>DB: LOAD ducklake, ATTACH catalog.reader.duckdb READ_ONLY (when the lake is usable)
+    CLI->>Duck: register(con, corpus_root, expected model + dim, lake)
+    Duck->>DB: lake path: CREATE VIEW raw readers over lake tables WHERE corpus = ...
+    Duck->>DB: per-session path: CREATE TEMP TABLE raw readers over corpus globs
     DB->>Disk: read_json sessions/*/meta.json then the rest
     Disk-->>DB: rows from meta-bearing session dirs only
     Duck->>DB: read_parquet per columnar session, read_json for the rest, UNION ALL

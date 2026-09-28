@@ -61,6 +61,18 @@ extension rather than by importing lancedb
 (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:830`). `atif-models` is the single
 owner of model ids, so no other package hardcodes one (`packages/atif-models/pyproject.toml:4`).
 
+Every corpus is also loaded into one DuckLake, kept at `ATIF_SQL_LAKE_ROOT` beside the corpora.
+The per-session artifacts stay the source of truth: the lake tables are the raw reader shapes with
+`corpus`, `agent` and `session_id` in front
+(`packages/atif-duck/src/atif_duck/domain/lake.py`), loaded from the same raw relations `query`
+would otherwise build. `atif-corpus` declares the `SessionSink` port that materialize hands every
+published session to, after the swaps and in the parent process only
+(`packages/atif-corpus/src/atif_corpus/domain/ports.py`); `atif-duck` implements it as
+`DuckLakeSessionSink` and `atif-cli` wires the two together, as it does for the converter. The
+reader side attaches a published read-only copy of the lake catalog and binds the raw relations as
+views over the lake, falling back to the per-session artifacts when the lake is absent, stale, or
+doesn't hold the corpus (`packages/atif-duck/src/atif_duck/infrastructure/lake.py`).
+
 The direction of those edges is enforced rather than conventional. `[tool.importlinter]`
 (`pyproject.toml:462`) declares a layer contract per member, an independence contract forbidding
 converter / corpus / duck / models / embed from importing each other (`:417`), and a forbidden
@@ -80,6 +92,7 @@ process exit codes at the CLI edge (`:38`).
 | Build backend | `uv_build>=0.11.14,<0.12` | `packages/atif-cli/pyproject.toml:48` |
 | CLI framework | `cyclopts>=4.10.2` | `packages/atif-cli/pyproject.toml:37` |
 | Query engine | `duckdb>=1.5.2,<2` | `packages/atif-duck/pyproject.toml:20` |
+| Lake | DuckLake, through DuckDB's `ducklake` extension, with a DuckDB-file catalog | `packages/atif-duck/src/atif_duck/infrastructure/lake.py` |
 | Trajectory models | vendored from harbor 0.23.0 (`pydantic>=2.13.2`) | `packages/atif-converter/src/atif_converter/domain/atif/__init__.py` |
 | Vector store | `lancedb>=0.30,<0.40` | `packages/atif-embed/pyproject.toml:22` |
 | Model access | `boto3>=1.42.91` for Bedrock | `packages/atif-models/pyproject.toml:24` |
@@ -112,7 +125,7 @@ flowchart LR
 
     cli -->|convert| conv
     cli -->|materialize| corpus
-    cli -->|query, schema| duck
+    cli -->|query, schema, lake, session sink| duck
     cli -->|analyze| analytics
     cli -->|embed, search| embed
     analytics -->|model ids| models

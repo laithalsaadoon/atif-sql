@@ -48,6 +48,14 @@ proofs are out of scope for the workspace.
   watermark.json                   # {path: mtime_ns} across source corpus
   empty_sessions.json              # {session_id: {converter_schema, ...}} for
                                    #  transcripts with nothing to convert
+  sink_pending.json                # {session_ids: [...]}: sessions the SessionSink
+                                   #  hasn't taken yet; absent when none are pending
+
+<lake_root>/                       # default: ~/.atif-sql/lake/ (ATIF_SQL_LAKE_ROOT)
+  catalog.duckdb                   # the writer's DuckLake catalog
+  catalog.reader.duckdb            # read-only (0444) copy the writer publishes after each write
+  data/main/<table>/agent=<agent>/corpus=<corpus>/[year=<y>/month=<m>/]*.parquet
+<lake_root>.lock                   # the writer's flock, beside the root
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
   One key is reserved and not hashed: `codex` names the Codex CLI corpus.
@@ -229,7 +237,8 @@ proofs are out of scope for the workspace.
   statement is a module constant, a catalog constant, a projection
   expression, or `sql_literal(...)`, and an AST test over the SQL
   modules fails on anything else. The statements DuckDB won't prepare
-  (ATTACH for the Lance store, the producer's one-row session projection)
+  (ATTACH for the Lance store and the lake, the producer's one-row session
+  projection, the lake reader's corpus filter)
   are the only places `sql_literal` still escapes a value.
 - ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
   ArtifactProducer implementation: a pure function of the trajectory (and of
@@ -244,12 +253,26 @@ proofs are out of scope for the workspace.
   session_id, ts, type, is_sidechain, is_compact_summary, role via join).
 - Static VIEW_SCHEMA dict + drift test, so a view rename fails a gate.
 - Macro signatures are pinned against the DDL by a drift test.
+- sessions view carries `corpus`, the corpus directory's name, on both read
+  paths.
+- DuckLakeSessionSink is the SessionSink implementation: per batch, one lake
+  transaction that deletes the batch's sessions from every lake table and
+  inserts their rows from the registry's raw relations over the published
+  artifacts, then publishes catalog.reader.duckdb. It does nothing when the
+  lake doesn't exist, rebuilds a lake whose recorded schema is stale, and
+  loads a corpus the lake doesn't hold yet in full.
+- register(con, corpus_root, lake=LakeReader) binds the raw relations as views
+  over the lake tables (scoped to one corpus, or every corpus) instead of the
+  TEMP-table readers; every view and macro above binds over them unchanged.
+  The lake is attached READ_ONLY from catalog.reader.duckdb before the sandbox
+  locks the connection, and the grants name each live lake file.
 
 ## CLI (atif-cli composes; the only package importing the others)
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
-atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N]  # sync corpus
-                                       # report adds rejected / rejected_session_ids
+atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N] [--no-lake]  # sync corpus
+                                       # report adds rejected / rejected_session_ids,
+                                       # lake_synced / lake_pending / lake_error
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
 atif-sql query 'SQL' [--format auto|json|csv]
                                        # sized to the host before registration
@@ -258,7 +281,13 @@ atif-sql query 'SQL' [--format auto|json|csv]
                                        # refuses uid 0 unless ATIF_SQL_ALLOW_ROOT=1;
                                        # COPY/EXPORT/ATTACH/INSTALL/LOAD/PREPARE/EXECUTE
                                        # exit 70 sandbox_refused before execution;
-                                       # never installs an extension
+                                       # never installs an extension;
+                                       # --all-corpora (lake only, exit 78 without one),
+                                       # --no-lake (per-session artifacts)
+atif-sql lake rebuild [--corpus-root P ...]  # fresh lake, directory swap
+atif-sql lake verify                   # exit 65 lake_mismatch, 78 lake_unavailable
+atif-sql lake status                   # also folded into `atif-sql status`
+atif-sql lake compact [--expire-older-than-days N]  # default 30
 atif-sql embed --install-extension     # the ONE place the lance DuckDB extension
                                        # is downloaded (also done by a real embed run)
 atif-sql schema                        # static, <50ms, no duckdb bind
@@ -286,6 +315,10 @@ materialize_workers=min(8, cpu_count) (materialize's pool size; 1 = single proce
 ATIF_SQL_QUERY_MEMORY_LIMIT (DuckDB size literal, e.g. 6GB) and ATIF_SQL_QUERY_THREADS
 override query's host-derived cap and thread count; ATIF_SQL_ALLOW_ROOT=1 lets
 query/search/analyze run as uid 0 (a warning is logged).
+lake_root (default ~/.atif-sql/lake), corpus_base (default ~/.atif-sql/corpus;
+where `lake rebuild` looks for corpora), lake_sync_batch_size=64 and
+lake_load_batch_size=512 (sessions per lake transaction), lake_lock_timeout_seconds,
+lake_expire_days=30.
 _default_*() factories read env at call time. With agent=codex the two roots re-derive to $CODEX_HOME (default
 ~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that

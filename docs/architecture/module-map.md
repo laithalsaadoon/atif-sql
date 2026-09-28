@@ -63,6 +63,17 @@ layers contract among the members (`pyproject.toml:462`).
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py` — the raw readers, most
   of the core views and macros, and the Lance attach path
   (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:767`).
+- `packages/atif-duck/src/atif_duck/domain/raw_readers.py` — the raw relation names and
+  column shapes the registry binds and the lake stores, so neither declares them twice.
+- `packages/atif-duck/src/atif_duck/domain/lake.py` — the lake's tables, partition specs and
+  every statement the lake runs, built as module constants from the raw reader shapes, plus the
+  schema version and digest that decide when a lake is stale.
+- `packages/atif-duck/src/atif_duck/infrastructure/lake.py` — `DuckLakeSessionSink` (the
+  `SessionSink` implementation materialize writes through), the published read-only catalog copy,
+  the query-side attach and fallback, and `rebuild_lake`, `verify_lake`, `lake_status` and
+  `compact_lake`.
+- `packages/atif-duck/src/atif_duck/infrastructure/lake_settings.py` — `LakeSettings`, the
+  `ATIF_SQL_`-prefixed lake root, corpus base, batch sizes, lock timeout and snapshot expiry.
 - `packages/atif-duck/src/atif_duck/domain/catalog.py` — `VIEW_NAMES`
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`), `MACRO_SIGNATURES` (`:287`), the
   analytics catalogs (`:314`), and one `DESCRIPTIONS` entry per object (`:431`).
@@ -107,6 +118,8 @@ for catalog, 70 for runtime, split between a pure taxonomy module
 
 - `packages/atif-cli/src/atif_cli/app.py` — the commands and every wiring decision
   between them (`packages/atif-cli/src/atif_cli/app.py:52`).
+- `packages/atif-cli/src/atif_cli/lake.py` — the `lake` sub-app: `rebuild`, `verify`,
+  `status` and `compact`, each deferring atif-duck's imports into the command body.
 - `packages/atif-cli/src/atif_cli/cron.py` — `cron install` prints a crontab block and never
   writes one; `cron status` reports per-lane lock and last-run state from injected probes
   (`packages/atif-cli/src/atif_cli/cron.py:7`).
@@ -180,7 +193,10 @@ atif-duck reads the corpus with no locks and no journal
 (`packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:5`). Conversion arrives through the
 `ConverterPort` Protocol, typed to the contract's artifact shapes rather than converter internals
 since this member may never import atif-converter
-(`packages/atif-corpus/src/atif_corpus/domain/ports.py:41`). What counts as a transcript, and how deep
+(`packages/atif-corpus/src/atif_corpus/domain/ports.py:41`). The `SessionSink` Protocol in the same
+module is the other way out: after the swaps, the pass hands it every session it published or
+marked, and records the ones it hasn't taken yet in `sink_pending.json` so a failed or killed
+hand-over is retried by the next pass. What counts as a transcript, and how deep
 under the source root it sits, is one value object per agent — depth 1 for Claude Code's
 `<project>/<session>.jsonl`, depth 3 for Codex's `<YYYY>/<MM>/<DD>` nesting
 (`packages/atif-corpus/src/atif_corpus/domain/source_layout.py:119`) — so the scanner walks either
