@@ -88,7 +88,7 @@ from atif_duck.domain.columnar import (
     TOOL_CALLS_PARQUET,
     TOOL_RESULTS_PARQUET,
 )
-from atif_duck.domain.embedding_guard import ensure_store_matches
+from atif_duck.domain.embedding_guard import EmbeddingProviderMismatch, ensure_store_matches
 from atif_duck.domain.raw_readers import (
     CORPUS_COLUMN,
     EDGE_COLUMNS,
@@ -1660,6 +1660,82 @@ def register_vss(
     return True
 
 
+def _attached_lance_table_present(con: duckdb.DuckDBPyConnection, alias: str) -> bool:
+    """True iff the Lance catalog attached as ``alias`` exposes ``embeddings``."""
+    row = con.execute(
+        "SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND table_name = 'embeddings'",
+        [alias],
+    ).fetchone()
+    return row is not None and int(row[0]) > 0
+
+
+def register_vss_stores(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    lance_uris: Sequence[Path],
+    expected_model: str | None = None,
+    expected_dim: int | None = None,
+) -> bool:
+    """Bind ``message_embeddings`` over the union of several Lance stores (one per corpus).
+
+    ``query --all-corpora`` and ``search --all-corpora`` read every corpus
+    the lake holds, and each corpus keeps its own store, so the view is the
+    ``UNION ALL`` of every store that exists. Its shape is
+    :func:`register_vss`'s, so ``semantic_search`` binds unchanged. Every
+    store passes the same provider guard, and they must agree on the vector
+    width. With one store or none this is :func:`register_vss`.
+    """
+    if not lance_uris:
+        msg = "register_vss_stores needs at least one store path"
+        raise ValueError(msg)
+    present = [uri for uri in lance_uris if uri.is_dir()]
+    if len(present) <= 1 or not lance_extension_installed(con):
+        # One store, none, or no extension to read them with: register_vss
+        # covers each (a missing extension binds the empty table and warns).
+        return register_vss(
+            con,
+            lance_uri=present[0] if present else lance_uris[0],
+            expected_model=expected_model,
+            expected_dim=expected_dim,
+        )
+    con.execute(f"LOAD {LANCE_EXTENSION};")
+    widths: set[int] = set()
+    selects: list[str] = []
+    for index, uri in enumerate(present):
+        alias = f"lance_store_{int(index)}"
+        con.execute(f"ATTACH IF NOT EXISTS {sql_literal(str(uri))} AS {alias} (TYPE LANCE);")
+        if not _attached_lance_table_present(con, alias):
+            logger.info("No Lance embeddings table at {}; leaving it out", uri)
+            continue
+        row = con.execute(f"SELECT model, dim FROM {alias}.main.embeddings LIMIT 1;").fetchone()  # noqa: S608  # nosec B608 - the alias is an int-derived name
+        if row is None:
+            continue
+        stored_model, stored_dim = str(row[0]), int(row[1])
+        if expected_model is not None:
+            ensure_store_matches(
+                stored_model=stored_model,
+                stored_dim=stored_dim,
+                expected_model=expected_model,
+                expected_dim=expected_dim,
+            )
+        widths.add(stored_dim)
+        selects.append(alias)
+    if len(widths) > 1:
+        msg = f"the corpora's Lance stores disagree on the vector width: {sorted(widths)}"
+        raise EmbeddingProviderMismatch(msg)
+    if not selects:
+        return register_vss(con, lance_uri=present[0], expected_model=None)
+    width = int(widths.pop())
+    union = " UNION ALL ".join(
+        f"SELECT uuid, model, dim, CAST(embedding AS FLOAT[{width}]) AS embedding, embedded_at "  # noqa: S608  # nosec B608 - int width and int-derived aliases
+        f"FROM {alias}.main.embeddings"
+        for alias in selects
+    )
+    con.execute(f"CREATE OR REPLACE VIEW message_embeddings AS {union};")
+    logger.debug("Bound message_embeddings over {} Lance stores (dim={})", len(selects), width)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Macros
 # ---------------------------------------------------------------------------
@@ -1932,6 +2008,7 @@ def register(
     expected_model: str | None = None,
     expected_dim: int | None = None,
     lake: LakeReader | None = None,
+    lance_uris: Sequence[Path] | None = None,
 ) -> RawSources:
     """Register raw readers, views, VSS, and macros over ``corpus_root``, in order.
 
@@ -1979,6 +2056,10 @@ def register(
         instead of readers over ``corpus_root``'s per-session artifacts, and
         nothing is loaded eagerly. ``corpus_root`` still locates the
         analytics parquets and the default embeddings store.
+    lance_uris
+        Several stores to bind ``message_embeddings`` over at once (one per
+        corpus, for ``--all-corpora``); see :func:`register_vss_stores`.
+        Overrides ``lance_uri``.
 
     Raises
     ------
@@ -1998,7 +2079,11 @@ def register(
     else:
         sources = register_raw(con, corpus_root)
     register_views(con)
-    if not skip_vss:
+    if not skip_vss and lance_uris is not None:
+        register_vss_stores(
+            con, lance_uris=lance_uris, expected_model=expected_model, expected_dim=expected_dim
+        )
+    elif not skip_vss:
         register_vss(
             con,
             lance_uri=lance_uri if lance_uri is not None else corpus_root / "embeddings_lance",

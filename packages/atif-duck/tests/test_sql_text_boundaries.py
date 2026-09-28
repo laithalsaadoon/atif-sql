@@ -60,6 +60,7 @@ SQL_MODULES: dict[str, Path] = {
     "authorship_rules": _DUCK_INFRA.parent / "domain" / "authorship.py",
     "lake": _DUCK_INFRA / "lake.py",
     "lake_tables": _DUCK_INFRA.parent / "domain" / "lake.py",
+    "lake_steps": _DUCK_INFRA / "lake_steps.py",
     "corpus_text_rows": _EMBED_INFRA / "corpus_text_rows.py",
 }
 

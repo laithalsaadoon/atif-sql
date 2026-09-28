@@ -2,7 +2,7 @@
 
 """Ports for atif-embed: what the embed use case NEEDS from the world.
 
-Three seams:
+Four seams:
 
 * :class:`EmbeddingProvider` — async document embedding (batched,
   float-widened) + sync query embedding, stamped with ``model_id`` /
@@ -13,15 +13,21 @@ Three seams:
   rows come through this port; the duckdb implementation in atif-embed's OWN
   infrastructure reads the CONTRACT corpus layout directly (the ConverterPort
   precedent from atif-corpus).
+* :class:`LakeStepsPort` — the corpus's steps as the DuckLake holds them.
+  atif-duck owns the lake, so atif-cli implements this port over it and
+  hands it to :class:`~atif_embed.infrastructure.lake_text_rows.LakeTextRows`,
+  which reads only what changed since the last complete pass.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol, Self
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
     from pathlib import Path
+    from types import TracebackType
 
     import polars as pl
 
@@ -115,5 +121,103 @@ class TextRowsPort(Protocol):
         """
         ...
 
+    @property
+    def discovery(self) -> str:
+        """Which path the last :meth:`iter_unembedded` read (``corpus``, ``lake-full``, ...)."""
+        ...
 
-__all__ = ["EmbeddingProvider", "TextRowsPort", "VectorStorePort"]
+    def commit(self, *, stored_rows: int) -> None:
+        """Record that every row the last :meth:`iter_unembedded` yielded is now stored.
+
+        The use case calls it after a run that consumed the whole discovery
+        and embedded every row of it, with the store's row count afterwards.
+        An adapter with a watermark advances it here (and only when that
+        discovery ran to its end, not to a ``--limit``); one without does
+        nothing.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class LakePosition:
+    """Where one corpus's lake history stands: which history, and how far along it.
+
+    ``lineage`` changes whenever the corpus's rows are loaded from scratch (a
+    ``lake rebuild``, or the first load of a corpus), because snapshot ids
+    from one history mean nothing in the next.
+    """
+
+    lineage: str
+    snapshot_id: int
+
+
+class LakeStepSnapshot(Protocol):
+    """One corpus's steps at one lake snapshot, open until closed."""
+
+    @property
+    def position(self) -> LakePosition:
+        """The snapshot being read."""
+        ...
+
+    def can_read_changes_since(self, since: LakePosition) -> bool:
+        """True when the lake still holds every snapshot after ``since`` in this lineage."""
+        ...
+
+    def step_texts(
+        self, *, min_chars: int, changed_since: LakePosition | None
+    ) -> Iterator[tuple[str, str]]:
+        """``(primary uuid, flattened text)`` for every qualifying step, in corpus order.
+
+        Corpus order is session id, then step id. A qualifying step has a
+        primary uuid, a non-NULL text and at least ``min_chars`` characters
+        of it. With ``changed_since``, only rows whose uuid appears in a step
+        row inserted or deleted after that position are read; those rows
+        still come back in corpus order, every occurrence of each uuid, so
+        the first-wins rule picks the same text a full read would.
+        """
+        ...
+
+    def step_keys(self) -> frozenset[str]:
+        """Every step's primary uuid in the corpus, whatever its text."""
+        ...
+
+    def close(self) -> None:
+        """Release the connection."""
+        ...
+
+    def __enter__(self) -> Self:
+        """Open for a ``with`` block."""
+        ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close at the end of the ``with`` block."""
+        ...
+
+
+class LakeStepsPort(Protocol):
+    """Open the lake's view of one corpus's steps."""
+
+    def open_steps(self, corpus_root: Path) -> LakeStepSnapshot | None:
+        """The corpus's steps at the lake's current snapshot, or ``None`` to fall back.
+
+        ``None`` means no lake the caller should read: none exists, its
+        schema is stale, it doesn't hold this corpus, or it holds another
+        directory under the same name. The caller then reads the per-session
+        artifacts, as it did before the lake existed.
+        """
+        ...
+
+
+__all__ = [
+    "EmbeddingProvider",
+    "LakePosition",
+    "LakeStepSnapshot",
+    "LakeStepsPort",
+    "TextRowsPort",
+    "VectorStorePort",
+]

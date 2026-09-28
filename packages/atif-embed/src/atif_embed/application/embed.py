@@ -70,6 +70,11 @@ async def run_backfill(
 ) -> int | dict[str, Any]:
     """Discover unembedded steps, embed them, and append to the Lance store.
 
+    A run that embedded every row its discovery yielded, and whose discovery
+    ran to its end, calls ``text_rows.commit`` with the store's row count, so
+    a reader with a watermark (the lake reader) can start the next run from
+    there. A dry run never commits.
+
     Parameters
     ----------
     corpus_root
@@ -93,8 +98,8 @@ async def run_backfill(
     Returns
     -------
     int | dict
-        Under ``dry_run=True``, a plan dict with ``{pipeline, candidates,
-        batches, batch_size, concurrency, model, limit, dry_run}``.
+        Under ``dry_run=True``, a plan dict with ``{pipeline, discovery,
+        candidates, batches, batch_size, concurrency, model, limit, dry_run}``.
         Otherwise, count of newly written rows (0 when nothing is pending).
     """
     import polars as pl
@@ -110,12 +115,8 @@ async def run_backfill(
         store = LanceVectorStore(lance_uri, dim=int(settings.output_dimension))
 
     plan_model = settings.expected_embedding_identity()[0]
-    pending = discover_unembedded(
-        corpus_root,
-        text_rows=text_rows,
-        store=store,
-        limit=limit,
-    )
+    stored = store.get_embedded_hashes()
+    pending = text_rows.iter_unembedded(corpus_root, embedded=stored, limit=limit)
 
     if dry_run:
         candidates = sum(1 for _ in pending)
@@ -133,6 +134,7 @@ async def run_backfill(
             )
         return {
             "pipeline": "embed",
+            "discovery": text_rows.discovery,
             "candidates": candidates,
             "batches": n_batches,
             "batch_size": settings.batch_size,
@@ -149,6 +151,7 @@ async def run_backfill(
     first_chunk = list(islice(rows, chunk_size))
     if not first_chunk:
         logger.info("No unembedded steps found - nothing to do")
+        text_rows.commit(stored_rows=len(stored))
         return 0
 
     # Build the provider once for the whole run. dimension / model_id become
@@ -250,6 +253,12 @@ async def run_backfill(
     # sees an up-to-date index without paying brute-force scan latency.
     store.optimize()
     store.ensure_index(metric=settings.hnsw_metric)
+
+    # A watermark may only move past rows that are all stored: a failed row
+    # has to be found again next run, and a run cut short by --limit never
+    # read the rest (the reader itself checks that second half).
+    if skipped == 0:
+        text_rows.commit(stored_rows=len(store.get_embedded_hashes()))
 
     total_elapsed = time.monotonic() - total_t0
     logger.info(

@@ -9,7 +9,9 @@ embeds corpus steps with no current embedding.
 ```
 atif_embed/
   domain/
-    ports.py             EmbeddingProvider / VectorStorePort / TextRowsPort
+    ports.py             EmbeddingProvider / VectorStorePort / TextRowsPort /
+                         LakeStepsPort (+ LakePosition, LakeStepSnapshot)
+    discovery.py         PendingSelection — first-wins, hash skip, stale, limit
     embedding_guard.py   ensure_store_matches — fail-loud (model, dim) guard
     errors.py            DomainError taxonomy
     text_stamp.py        text_hash + the 50K cap + PendingText
@@ -18,9 +20,12 @@ atif_embed/
                          int8 docs / float queries, 50K clip, truncate RIGHT)
     lance_store.py       LanceDB embeddings table + IvfHnswSq cosine index
     corpus_text_rows.py  DuckDbTextRows — TextRowsPort over the contract corpus
+    lake_text_rows.py    LakeTextRows — TextRowsPort over LakeStepsPort, with
+                         the lake watermark; falls back to DuckDbTextRows
     settings.py          EmbedSettings (env prefix ATIF_SQL_)
   application/
     embed.py             run_backfill / discover_unembedded / embed_query
+    prune.py             prune_orphans — stored rows no lake step names
 ```
 
 ## Independence: why TextRowsPort exists
@@ -38,6 +43,29 @@ exclude, limit)`, and atif-embed ships its OWN DuckDB implementation
 meta.json torn-set gate — rather than importing `atif_duck.register`. The
 two packages are coupled through docs/CONTRACT.md's artifact shapes, not
 through code.
+
+## Discovery from the lake
+
+Reading every trajectory on every run costs minutes on a large corpus to find
+a handful of new rows, and the lake's `steps` table already holds each step's
+flattened `message` and `source_uuids`. `LakeStepsPort` is the seam: atif-cli
+implements it over atif-duck's `infrastructure.lake_steps`, and
+`LakeTextRows` reads through it:
+
+- Rows come back in the per-session reader's order (session id, then step
+  id), keyed the same way, so the row set and every stored vector are
+  unchanged. `PendingSelection` applies the same rules to both sources.
+- `lake_watermark.json`, inside the store directory, records the lake
+  position of the last run that read to the end and embedded every row
+  (the corpus's `registered_at` as the lineage, the snapshot id), the text
+  floor, and the store's row count. The next run reads only rows whose uuid
+  a lake snapshot inserted or deleted after it, every occurrence in corpus
+  order, so the first-wins rule lands where a full read would.
+- A missing or foreign watermark, a rebuilt lake, expired snapshots, a
+  changed floor, or a store row count that moved outside a run each force a
+  full lake read. No usable lake means the per-session reader.
+- `prune_orphans` counts, and on request deletes, stored rows whose uuid is
+  no lake step's primary uuid.
 
 ## Selection + keying semantics (CONTRACT-V2 §VSS)
 

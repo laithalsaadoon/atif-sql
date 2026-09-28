@@ -1297,8 +1297,9 @@ def query(
     that corpus (``--agent`` / ``--corpus-root`` pick it, as before), and
     nothing is loaded before the statement runs. ``--all-corpora`` scopes the
     views to every corpus the lake holds instead; ``sessions.corpus`` tells
-    them apart (the analytics views and the embeddings store stay the
-    selected corpus's). Otherwise, or with ``--no-lake``, ``query`` reads the
+    them apart (the analytics views stay the selected corpus's, and
+    ``message_embeddings`` spans every corpus's store unless
+    ``ATIF_SQL_LANCE_URI`` pins one). Otherwise, or with ``--no-lake``, ``query`` reads the
     per-session artifacts as it always has, after a one-line warning saying
     why. ``--all-corpora`` has no per-session fallback and exits 78
     (``lake_unavailable``) without a usable lake.
@@ -1454,6 +1455,7 @@ def query(
                     expected_model=expected_model,
                     expected_dim=expected_dim,
                     lake=lake_reader,
+                    lance_uris=_embedding_stores(lake_reader, embed_settings),
                 )
                 _harden_query_connection(
                     con,
@@ -1488,7 +1490,33 @@ def query(
             con.close()
 
 
-def _attach_query_lake(con: Any, corpus_root: Path, *, all_corpora: bool, fmt: OutputFormat) -> Any:
+def _embedding_stores(lake_reader: Any, embed_settings: Any) -> list[Path] | None:
+    """Every lake corpus's embeddings store, for a connection scoped to all corpora.
+
+    ``None`` (bind the selected corpus's store, as before) unless the lake
+    reader spans every corpus and the stores follow the per-corpus layout;
+    ``ATIF_SQL_LANCE_URI`` names one store for all of them, so there is
+    nothing to join.
+    """
+    if (
+        lake_reader is None
+        or lake_reader.corpus is not None
+        or embed_settings.lance_uri is not None
+    ):
+        return None
+    from atif_duck.infrastructure.lake import LakeLayout, registered_corpora
+    from atif_duck.infrastructure.lake_settings import LakeSettings
+
+    corpora = registered_corpora(LakeLayout(LakeSettings().lake_root))
+    stores: list[Path] = [
+        embed_settings.resolve_lance_uri(corpora[name].root) for name in sorted(corpora)
+    ]
+    return stores or None
+
+
+def _attach_query_lake(
+    con: Any, corpus_root: Path, *, all_corpora: bool, fmt: OutputFormat, command: str = "query"
+) -> Any:
     """Attach the lake for ``query``, or warn once and return ``None`` for the per-session path.
 
     With ``all_corpora`` there is no per-session equivalent, so an unusable
@@ -1518,14 +1546,17 @@ def _attach_query_lake(con: Any, corpus_root: Path, *, all_corpora: bool, fmt: O
             )
             emit_error(err, fmt)
             raise SystemExit(err.exit_code)
-        logger.warning("query: {}; reading the per-session artifacts instead", attached.reason)
+        logger.warning(
+            "{}: {}; reading the per-session artifacts instead", command, attached.reason
+        )
         return None
     if attached.corpus is not None:
         pending = read_sink_pending(CorpusLayout(corpus_root=corpus_root).sink_pending_path)
         if pending:
             logger.warning(
-                "query: {} session(s) of this corpus are pending a lake write; "
+                "{}: {} session(s) of this corpus are pending a lake write; "
                 "their rows show the previous materialize until the next pass lands",
+                command,
                 len(pending),
             )
     return attached
@@ -1670,12 +1701,38 @@ def embed(
     *,
     limit: int | None = None,
     all_steps: Annotated[bool, cyclopts.Parameter(name="--all")] = False,
-    dry_run: bool = False,
+    dry_run: bool | None = None,
     install_extension: Annotated[bool, cyclopts.Parameter(name="--install-extension")] = False,
+    prune_orphans: Annotated[bool, cyclopts.Parameter(name="--prune-orphans")] = False,
+    lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     corpus_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Embed unembedded corpus steps with Cohere Embed v4 and append to LanceDB.
+
+    Discovery
+    ---------
+    When the DuckLake at ``ATIF_SQL_LAKE_ROOT`` holds this corpus (current
+    schema, same directory), the steps to embed are read from its ``steps``
+    table rather than from every session's ``trajectory.json``, and only the
+    rows changed since the last complete run: the lake snapshot that run
+    reached is kept in ``lake_watermark.json`` inside the store directory.
+    A run cut short by ``--limit``, or one where any row failed to embed,
+    leaves the watermark where it was. Without a usable lake, or with
+    ``--no-lake``, discovery reads the per-session artifacts as before. The
+    dry-run plan's ``discovery`` says which path ran (``corpus``,
+    ``lake-full``, ``lake-incremental``, ``lake-unchanged``).
+
+    Orphans
+    -------
+    ``--prune-orphans`` counts the stored rows whose uuid is no step's
+    primary uuid in the lake (sessions deleted before the corpus kept them,
+    re-keyed steps). It's a dry run unless ``--no-dry-run`` is given too,
+    and it never calls Bedrock. It needs the lake (exit 78 without one), and
+    it refuses to delete while any session of the corpus is still pending a
+    lake write (exit 78), since those sessions' rows would look orphaned.
+    Output: ``{pipeline, lake_snapshot, stored, lake_keys, orphans, deleted,
+    dry_run}``.
 
     Extension
     ---------
@@ -1704,12 +1761,14 @@ def embed(
     --all           Explicitly embed EVERY unembedded step (full backfill).
     --dry-run       Preview only; emit plan JSON, no embedding calls.
     --install-extension  Install the lance DuckDB extension and exit (no Bedrock).
+    --prune-orphans Count (and with --no-dry-run, delete) rows no lake step names.
+    --no-lake       Discover from the per-session artifacts even when a lake exists.
     --corpus-root   Override the materialized corpus root.
 
     Output
     ------
-    Dry run: the plan JSON ``{pipeline, candidates, batches, batch_size,
-    concurrency, model, limit, dry_run}``. Real run:
+    Dry run: the plan JSON ``{pipeline, discovery, candidates, batches,
+    batch_size, concurrency, model, limit, dry_run}``. Real run:
     ``{"pipeline": "embed", "rows_processed": N, "dry_run": false}``.
 
     Exit codes: 0 success, 64 missing --limit/--all, 70 runtime
@@ -1720,13 +1779,18 @@ def embed(
     if install_extension:
         _install_lance_extension(fmt)
         return
+    if prune_orphans:
+        _prune_orphans(corpus_root, dry_run=dry_run is not False, fmt=fmt)
+        return
 
     import asyncio
 
     from atif_embed.application.embed import run_backfill
     from atif_embed.domain.errors import DomainError
+    from atif_embed.infrastructure.corpus_text_rows import DuckDbTextRows
     from atif_embed.infrastructure.settings import EmbedSettings
 
+    dry_run = bool(dry_run)
     if not dry_run and limit is None and not all_steps:
         emit_error(
             ClassifiedError(
@@ -1743,11 +1807,23 @@ def embed(
     embed_settings = EmbedSettings()
     if not dry_run:
         _install_lance_extension(fmt, quiet=True)
+    text_rows: Any = DuckDbTextRows()
+    if lake:
+        from atif_cli.embed_lake import lake_steps_port
+        from atif_embed.infrastructure.lake_text_rows import LAKE_WATERMARK_FILE, LakeTextRows
+
+        text_rows = LakeTextRows(
+            lake=lake_steps_port(),
+            watermark_path=embed_settings.resolve_lance_uri(settings.corpus_root)
+            / LAKE_WATERMARK_FILE,
+            fallback=text_rows,
+        )
     try:
         result = asyncio.run(
             run_backfill(
                 corpus_root=settings.corpus_root,
                 settings=embed_settings,
+                text_rows=text_rows,
                 limit=limit,
                 dry_run=dry_run,
             )
@@ -1773,6 +1849,53 @@ def embed(
         emit_json({"pipeline": "embed", "rows_processed": result, "dry_run": False}, fmt)
 
 
+def _prune_orphans(corpus_root: Path | None, *, dry_run: bool, fmt: OutputFormat) -> None:
+    """``embed --prune-orphans``: count, and unless ``dry_run`` delete, the store's orphan rows."""
+    from atif_cli.embed_lake import lake_steps_port
+    from atif_corpus.application.materialize import read_sink_pending
+    from atif_corpus.domain.layout import CorpusLayout
+    from atif_embed.application.prune import prune_orphans
+    from atif_embed.infrastructure.lance_store import LanceVectorStore
+    from atif_embed.infrastructure.settings import EmbedSettings
+
+    settings = _corpus_settings(None, corpus_root)
+    embed_settings = EmbedSettings()
+    lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)
+    pending = read_sink_pending(CorpusLayout(corpus_root=settings.corpus_root).sink_pending_path)
+    if pending and not dry_run:
+        emit_error(
+            ClassifiedError(
+                kind="lake_unavailable",
+                exit_code=EXIT_CODES["lake_unavailable"],
+                message=f"{len(pending)} session(s) of this corpus are pending a lake write, "
+                "so their stored rows would look orphaned",
+                hint="let the next materialize pass land them, then prune again",
+            ),
+            fmt,
+        )
+        raise SystemExit(EXIT_CODES["lake_unavailable"])
+    report = prune_orphans(
+        settings.corpus_root,
+        lake=lake_steps_port(),
+        store=LanceVectorStore(lance_uri, dim=int(embed_settings.output_dimension)),
+        dry_run=dry_run,
+    )
+    if report is None:
+        emit_error(
+            ClassifiedError(
+                kind="lake_unavailable",
+                exit_code=EXIT_CODES["lake_unavailable"],
+                message="--prune-orphans checks the store against the lake, and there is no "
+                "usable lake for this corpus",
+                hint="run `atif-sql lake rebuild`",
+            ),
+            fmt,
+        )
+        raise SystemExit(EXIT_CODES["lake_unavailable"])
+    report["pending_sessions"] = len(pending)
+    emit_json(report, fmt)
+
+
 # ---------------------------------------------------------------------------
 # search
 # ---------------------------------------------------------------------------
@@ -1786,6 +1909,8 @@ def search(
     k: Annotated[int, cyclopts.Parameter(name=["-k", "--k"])] = 10,
     session_id: str | None = None,
     corpus_root: Path | None = None,
+    all_corpora: bool = False,
+    lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Semantic top-k nearest-neighbor search over step embeddings.
@@ -1798,6 +1923,14 @@ def search(
        provider raises instead of returning garbage scores).
     3. Join back to ``steps`` via ``source_uuids[0]`` for a 200-char snippet.
 
+    Where the steps come from
+    -------------------------
+    Like ``query``: the lake's ``steps`` table when the lake holds this
+    corpus, else (after a one-line warning, or with ``--no-lake``) the
+    per-session artifacts. ``--all-corpora`` searches every corpus the lake
+    holds, each through its own store, and adds a ``corpus`` column; it
+    needs the lake (exit 78 without one).
+
     Prereq
     ------
     The Lance store must exist. If it's empty or missing, the command exits
@@ -1809,17 +1942,21 @@ def search(
     --k N            Top-k (default 10).
     --session-id ID  Confine the kNN to one session.
     --corpus-root    Override the materialized corpus root.
+    --all-corpora    Search every corpus the lake holds.
+    --no-lake        Read the per-session artifacts even when a lake exists.
 
     Output columns
     --------------
-    uuid, session_id, sim (cosine similarity ∈ [-1, 1]), snippet.
-    Sorted by cosine distance ascending — highest sim first.
+    uuid, session_id, snippet, sim (cosine similarity ∈ [-1, 1]), plus
+    corpus under ``--all-corpora``. Sorted by cosine distance ascending —
+    highest sim first.
 
-    Exit codes: 0 success, 2 no_embeddings, 65 embedding_mismatch (the store
-    was written by another provider), 70 runtime, 77 root_refused (uid 0
-    without ``ATIF_SQL_ALLOW_ROOT=1``), 78 extension_missing (a store exists
-    but the lance DuckDB extension is not installed; run
-    ``atif-sql embed --install-extension``).
+    Exit codes: 0 success, 2 no_embeddings, 64 --all-corpora with --no-lake,
+    65 embedding_mismatch (the store was written by another provider), 70
+    runtime, 77 root_refused (uid 0 without ``ATIF_SQL_ALLOW_ROOT=1``), 78
+    extension_missing (a store exists but the lance DuckDB extension is not
+    installed; run ``atif-sql embed --install-extension``) or
+    lake_unavailable (``--all-corpora`` without a usable lake).
     """
     _refuse_root("search", fmt)
 
@@ -1834,6 +1971,16 @@ def search(
     from atif_embed.application.embed import embed_query
     from atif_embed.infrastructure.settings import EmbedSettings
 
+    if all_corpora and not lake:
+        err = ClassifiedError(
+            kind="invalid_input",
+            exit_code=EXIT_CODES["invalid_input"],
+            message="--all-corpora reads the lake, and --no-lake turns it off",
+            hint="drop one of the two flags",
+        )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code)
+
     settings = _corpus_settings(None, corpus_root)
     embed_settings = EmbedSettings()
     expected_model, expected_dim = embed_settings.expected_embedding_identity()
@@ -1842,19 +1989,31 @@ def search(
     con = duckdb.connect(":memory:")
     try:
         try:
+            lake_reader = (
+                _attach_query_lake(
+                    con, settings.corpus_root, all_corpora=all_corpora, fmt=fmt, command="search"
+                )
+                if lake
+                else None
+            )
+            stores = _embedding_stores(lake_reader, embed_settings)
             register(
                 con,
                 settings.corpus_root,
                 lance_uri=lance_uri,
                 expected_model=expected_model,
                 expected_dim=expected_dim,
+                lake=lake_reader,
+                lance_uris=stores,
             )
         except REGISTRATION_ERRORS as exc:
             err = classify_registration_error(exc)
             emit_error(err, fmt)
             raise SystemExit(err.exit_code) from exc
 
-        if lance_uri.is_dir() and not lance_extension_installed(con):
+        if any(uri.is_dir() for uri in stores or [lance_uri]) and not lance_extension_installed(
+            con
+        ):
             emit_error(
                 ClassifiedError(
                     kind="extension_missing",
@@ -1881,36 +2040,10 @@ def search(
             raise SystemExit(EXIT_CODES["no_embeddings"])
 
         qv = embed_query(query_text, settings=embed_settings)
-        dim = len(qv)
-        params: list[object] = [qv]
-        session_filter = ""
-        if session_id is not None:
-            session_filter = "WHERE s.session_id = ?"
-            params.append(session_id)
-        params.append(k)
-        # Rank by cosine similarity descending: ORDER BY array_cosine_distance
-        # (== 1 - sim) ASC is what triggers the cosine HNSW index lookup.
-        # Using array_distance here (L2) would silently bypass the index AND
-        # give wrong ranks: the raw int8-cast-to-float document vectors have
-        # magnitudes in the thousands while the query vector is
-        # unit-normalized — only cosine is magnitude-invariant.
-        sql = f"""
-            WITH qv AS (SELECT CAST(? AS FLOAT[{dim}]) AS v)
-            SELECT me.uuid                                                     AS uuid,
-                   s.session_id                                                AS session_id,
-                   substr(s.message, 1, 200)                                   AS snippet,
-                   array_cosine_similarity(me.embedding, (SELECT v FROM qv))   AS sim
-            FROM message_embeddings me
-            JOIN steps s
-              ON json_extract_string(s.source_uuids, '$[0]') = me.uuid
-            {session_filter}
-            ORDER BY array_cosine_distance(me.embedding, (SELECT v FROM qv)) ASC
-            LIMIT ?
-        """  # noqa: S608  # nosec B608 - dim is len(vector); session_id, k and the vector are ?-bound
         try:
-            cursor = con.execute(sql, params)
-            columns = [d[0] for d in cursor.description or ()]
-            rows = cursor.fetchall()
+            columns, rows = search_rows(
+                con, qv, k=k, session_id=session_id, with_corpus=all_corpora
+            )
         except duckdb.Error as exc:
             err = classify_duckdb_error(exc)
             emit_error(err, fmt)
@@ -1918,6 +2051,58 @@ def search(
         emit_rows(columns, rows, fmt)
     finally:
         con.close()
+
+
+#: ``search``'s kNN, one text per shape. Rank by cosine similarity
+#: descending: ORDER BY array_cosine_distance (== 1 - sim) ASC is what
+#: triggers the cosine HNSW index lookup. Using array_distance here (L2) would
+#: silently bypass the index AND give wrong ranks: the raw int8-cast-to-float
+#: document vectors have magnitudes in the thousands while the query vector is
+#: unit-normalized — only cosine is magnitude-invariant. ``{dim}`` is the only
+#: placeholder, filled with ``int(len(vector))``.
+_SEARCH_SQL = """
+    WITH qv AS (SELECT CAST(? AS FLOAT[{dim}]) AS v)
+    SELECT me.uuid                                                     AS uuid,
+           s.session_id                                                AS session_id,
+           substr(s.message, 1, 200)                                   AS snippet,
+           array_cosine_similarity(me.embedding, (SELECT v FROM qv))   AS sim{corpus}
+    FROM message_embeddings me
+    JOIN steps s
+      ON json_extract_string(s.source_uuids, '$[0]') = me.uuid{corpus_join}
+    {session_filter}
+    ORDER BY array_cosine_distance(me.embedding, (SELECT v FROM qv)) ASC
+    LIMIT ?
+"""
+
+
+def search_rows(
+    con: Any,
+    query_vector: list[float],
+    *,
+    k: int,
+    session_id: str | None = None,
+    with_corpus: bool = False,
+) -> tuple[list[str], list[tuple[Any, ...]]]:
+    """Run ``search``'s kNN on a registered connection; return ``(columns, rows)``.
+
+    Separate from the command so the same statement runs over a query vector
+    the caller already has (the tests' fixed vectors; no Bedrock call).
+    """
+    params: list[object] = [query_vector]
+    if session_id is not None:
+        params.append(session_id)
+    params.append(k)
+    sql = _SEARCH_SQL.format(
+        dim=len(query_vector),
+        corpus=",\n           c.corpus                                                    AS corpus"
+        if with_corpus
+        else "",
+        corpus_join="\n    JOIN sessions c ON c.session_id = s.session_id" if with_corpus else "",
+        session_filter="WHERE s.session_id = ?" if session_id is not None else "",
+    )
+    cursor = con.execute(sql, params)
+    columns = [d[0] for d in cursor.description or ()]
+    return columns, cursor.fetchall()
 
 
 # ---------------------------------------------------------------------------
