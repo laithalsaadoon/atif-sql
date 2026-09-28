@@ -62,9 +62,17 @@ Build the corpus from the local transcripts, then query it:
 
 ```bash
 atif-sql materialize                   # discover sessions, convert, write the corpus
-atif-sql status                        # corpus freshness, read-only
+atif-sql lake rebuild                  # load every corpus into the DuckLake once
+atif-sql status                        # corpus and lake freshness, read-only
 atif-sql query 'SELECT * FROM sessions LIMIT 5'
 ```
+
+After `lake rebuild`, every `materialize` keeps the lake current (it replaces the rows of the
+sessions it wrote), and `query` reads the lake instead of opening each session's files. Without a
+lake, or with one that's out of date, `query` prints a one-line warning and reads the per-session
+files as before. `atif-sql lake verify` checks the lake against the artifacts, and
+`atif-sql lake compact` merges small files and drops old snapshots. The lake lives at
+`~/.atif-sql/lake/` (`ATIF_SQL_LAKE_ROOT` moves it) and holds every corpus.
 
 `materialize` also writes typed columnar artifacts (parquet files per session) beside the
 JSON ones, so `query` parses no JSON for those sessions; `--no-columnar` skips them, older corpora
@@ -93,7 +101,9 @@ atif-sql query "SELECT agent, count(*) FROM sessions GROUP BY 1"
 
 One corpus holds one agent, so a Codex corpus and a Claude Code corpus stay
 separate directories, and one `query` reads one of them. Pass `--corpus-root` to
-pick which, or `--agent codex` to get the Codex default.
+pick which, or `--agent codex` to get the Codex default. `--all-corpora` reads
+every corpus the lake holds at once, and `sessions.corpus` says which one a
+row came from.
 
 Working on `atif-sql` itself is a different setup — a clone, `mise`, and `mise run check` as the
 definition of done. `CONTRIBUTING.md` has it.

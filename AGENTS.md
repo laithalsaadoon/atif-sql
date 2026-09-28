@@ -24,9 +24,11 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   the vendored `domain/model_prices.json` with litellm's arithmetic; a model
   it can't price is NULL. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
-  quiescence, atomic artifact writes, and the `ArtifactProducer` port that
+  quiescence, atomic artifact writes, the `ArtifactProducer` port that
   lets the composition root add per-session files (atif-duck's columnar
-  parquets) to the same atomic swap. Per-agent discovery lives in
+  parquets) to the same atomic swap, and the `SessionSink` port that hands
+  every published session to a store kept beside the corpus (atif-duck's
+  DuckLake writer). Per-agent discovery lives in
   `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
   Codex's `<YYYY>/<MM>/<DD>` nesting), and `domain.agents` is an AST-pinned
   twin of the converter's enum, because the two packages may not import each
@@ -44,8 +46,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   speaking. Also the
   `ColumnarArtifactProducer` that writes each session's typed parquet
   artifacts at materialize time, and the registry that reads them instead of
-  `trajectory.json` when they're current (falling back per session). Layered:
-  `infrastructure` > `domain`.
+  `trajectory.json` when they're current (falling back per session). And the
+  DuckLake every corpus is queried through (`domain.lake` declares the tables,
+  `infrastructure.lake` writes, reads, verifies and compacts it; see
+  "Storage" below). Layered: `infrastructure` > `domain`.
 - `packages/atif-models` — model alias registry + structured-output LLM
   client. No other package hardcodes a Bedrock model id. Layered:
   `infrastructure` > `domain`.
@@ -62,7 +66,7 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   backfill use case. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-cli` — cyclopts CLI composing the rest into commands
   (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`,
-  `search`, `examples`, `schema`, `cron`).
+  `search`, `examples`, `schema`, `cron`, `lake`).
 
 Rules of the road:
 
@@ -120,8 +124,11 @@ Rules of the road:
   the first marker, Bandit only the second; never blanket-skip B608 in
   `[tool.bandit]`), and `packages/atif-duck/tests/test_sql_text_boundaries.py`
   runs an AST audit over `registry.py`, `columnar.py`, `analytics.py`,
-  `authorship.py` (both layers) and atif-embed's `corpus_text_rows.py` that fails on any placeholder that isn't
-  a constant, a projection call, or `sql_literal(...)`. Session ids are the
+  `authorship.py` and `lake.py` (both layers of each) and atif-embed's
+  `corpus_text_rows.py` that fails on any placeholder that isn't a constant, a
+  projection call, or `sql_literal(...)`. A statement built per table is a
+  module-level constant (a dict comprehension over the table specs), which the
+  audit reads like any other constant. Session ids are the
   one outside text that becomes a path; they're validated at the boundary
   (`domain.session_id` in atif-corpus and atif-duck, twinned) rather than
   escaped downstream.
@@ -179,6 +186,77 @@ Rules of the road:
   The `ConverterPort` instance is pickled into each worker, so an adapter
   has to stay picklable.
 
+## Storage
+
+The per-session artifacts under `<corpus>/sessions/<id>/` are the source of
+truth, and materialize keeps writing all of them (`trajectory.json`, the
+columnar parquets, the source archive). Beside them sits one DuckLake that
+holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
+
+- Layout: `catalog.duckdb` is the writer's catalog, `catalog.reader.duckdb`
+  is a read-only copy the writer publishes after every write, `data/` holds
+  the parquet files, and `<root>.lock` beside the root is the writer's flock.
+  The catalog is a DuckDB file, not SQLite, on purpose: a reader with the
+  sqlite extension loaded can `sqlite_scan` any SQLite file on the host
+  whatever `enable_external_access` says, so the query path never loads it.
+- Tables: one per artifact kind (`sessions`, `steps`, `tool_calls`,
+  `tool_results`, `session_events`, `edges`, `loss_reports`, `session_meta`),
+  each the registry's raw reader shape (`atif_duck.domain.raw_readers`, which
+  derives from the catalog and the columnar schema) with `corpus`, `agent` and
+  `session_id` in front. A source column that collides with an identity name is
+  stored as `src_<name>`. Nothing is declared twice: `domain.lake` builds every
+  table and statement from those shapes.
+- Partitioning: `agent`, `corpus`, then year and month of the row's time
+  (`ts`, or the first step's time for `sessions`). `loss_reports` and
+  `session_meta` have no time column and stop at `agent`, `corpus`. The
+  module docstring says why.
+- Schema identity: the lake records `LAKE_SCHEMA_VERSION`, a digest of the
+  table definitions and the `COLUMNAR_SCHEMA_VERSION` it was loaded under.
+  Any of them differing from the running code makes the lake stale: the next
+  materialize rebuilds it and `query` falls back meanwhile.
+  `packages/atif-duck/tests/test_lake.py` pins the version and digest together,
+  so a change to any shape the lake derives from fails until you decide whether
+  it needs a version bump, then re-pin.
+- Writer: only the materialize PARENT writes, through the `SessionSink` port
+  (`atif_corpus.domain.ports`), which atif-duck implements as
+  `DuckLakeSessionSink` and atif-cli wires in. After the swaps, materialize
+  hands it every session published or marked source-removed this pass, in plan
+  order, in batches (`ATIF_SQL_LAKE_SYNC_BATCH_SIZE`); each batch is one
+  transaction that deletes and re-inserts those sessions' rows in every table.
+  Pool workers never touch the lake, so a pool and `--workers 1` write the same
+  rows. Before anything publishes, the pass records the sessions it's about to
+  hand over in `<corpus>/sink_pending.json`; a sink failure or a killed pass
+  leaves them there and the next pass hands them over again, source change or
+  not. A failed lake write never fails the pass. With no lake, the sink does
+  nothing, so `atif-sql lake rebuild` is what turns it on. A corpus the lake
+  doesn't hold yet is loaded whole on first sync.
+- Reader: `query` loads ducklake (never installs it) and attaches
+  `catalog.reader.duckdb` READ_ONLY before the sandbox locks the connection,
+  then binds the raw relations as views over the lake tables, scoped to the
+  requested corpus (`--all-corpora` spans every corpus, and `sessions.corpus`
+  tells them apart). Its file grants name each live data and delete file, never
+  the data directory: with the directory granted, a caller's
+  `ducklake_cleanup_old_files` deletes files. With no lake, a stale one, or a
+  corpus the lake doesn't hold, query prints one warning and reads the
+  per-session artifacts as before (`--no-lake` forces that). The embeddings
+  store and the analytics tables still read the corpus directory.
+- Commands: `atif-sql lake rebuild` builds a fresh lake from every registered
+  corpus plus every corpus under `ATIF_SQL_CORPUS_BASE` (or the
+  `--corpus-root`s given) beside the old one and swaps the directory in.
+  `lake verify` compares every session's row count and content hash, table by
+  table, between the lake and its artifacts and exits 65 on a difference (78
+  with no usable lake). `lake status` (also folded into `atif-sql status`)
+  reports the state, snapshots, files and pending sessions. `lake compact`
+  merges small files, rewrites delete-heavy ones, expires snapshots older than
+  `--expire-older-than-days` (default 30) and removes unreferenced files once
+  they're an hour old, so a reader on the previous catalog copy still finds
+  its files.
+- Memory: the writer caps DuckDB at 2 GiB (lower when the host or cgroup is),
+  and runs DuckLake's file merges and rewrites on one thread, because merging
+  `tool_results` at more threads outgrew that cap. `query` sizes its own cap
+  from the cgroup v2 `memory.max` (the tightest one up the cgroup tree) when
+  it's lower than what `/proc/meminfo` reports.
+
 ## Agent query workflow
 
 For an LLM agent driving `atif-sql`, the discovery loop is this:
@@ -195,7 +273,8 @@ For an LLM agent driving `atif-sql`, the discovery loop is this:
    category}]}`; filter with `--requires core|analytics|vss` and
    `--category view|table-macro|scalar-macro`.
 3. `atif-sql query '<sql>'` — run it. `--agent codex` points it at the Codex
-   corpus without spelling the path. Copy an example verbatim (the `sid`
+   corpus without spelling the path, and `--all-corpora` runs it over every
+   corpus the lake holds (`sessions.corpus` names each row's corpus). Copy an example verbatim (the `sid`
    exemplar is a subquery over `sessions`, so it works on any corpus) or
    adapt it. `requires: analytics` needs `atif-sql analyze` to have run;
    `requires: vss` needs `atif-sql embed --all --no-dry-run` (a bare `embed`
