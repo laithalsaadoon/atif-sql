@@ -5,8 +5,8 @@
 # toolchain declaration, one command definition, so nothing in a workflow can drift from
 # what a laptop runs.
 #
-# Python 3.13, not 3.14: harbor==0.22.0 (a dev dependency, for the test oracles) floors at
-# Requires-Python >=3.12 (probed 2026-08-22 via `uv pip show` on a fresh install), and 3.13
+# Python 3.13, not 3.14: harbor (a dev dependency, for the test oracles) floors at
+# Requires-Python >=3.12 (probed 2026-08-22 on 0.22.0, and 0.23.0's metadata says the same), and 3.13
 # is the safety pick while the harbor dependency chain (litellm, supabase, ...) settles on 3.14.
 #
 # No task here reaches Bedrock. `atif-sql analyze`, `atif-sql embed`, and `atif-sql search`
@@ -60,7 +60,7 @@ shellcheck = "latest"
 # declaration order, and node's own bin holds a `pnpm` shim wherever `corepack enable` has
 # run — so with node first, every pnpm call goes through corepack and this pin is inert.
 # This version and `packageManager` in site/package.json must agree.
-pnpm = "11.21.0"
+pnpm = "11.27.1"
 node = "24"
 
 [env]
