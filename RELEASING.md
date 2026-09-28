@@ -189,15 +189,24 @@ lock` must land in ONE commit, or CI fails on a lockfile instead of on the renam
 ## Install weight is a property of the release
 
 One install carries every capability. There are no capability-gating extras, no
-`atif-sql[embed]`, and nothing to install afterwards to make a command work — so the weight
-is what every user pays, and it belongs in the release record rather than in a surprise. The heaviest distributions are `polars-runtime-32`, `pyarrow`, `lancedb`, `litellm`
-and `duckdb`. Measure a release against `uv.lock` on CPython 3.13 the same way each time:
+`atif-sql[embed]`, and nothing to install afterwards to make a command work, so the weight
+is what every user pays, and it belongs in the release record rather than in a surprise.
+Measure it against `uv.lock` on CPython 3.13, linux x86_64, into a fresh venv (never the
+workspace one):
 
 ```bash
-uv export --no-dev --all-packages --no-hashes --no-emit-workspace --format requirements-txt  # the closure
-UV_PROJECT_ENVIRONMENT=/tmp/atif-weight uv sync --locked --no-dev --all-packages             # a fresh install
-du -sh /tmp/atif-weight/lib/python3.13/site-packages                                         # its size on disk
+unset VIRTUAL_ENV
+uv export --frozen --no-dev --no-hashes --no-emit-workspace --no-emit-project \
+  --no-header --no-annotate > /tmp/runtime.txt          # the third-party runtime closure
+uv venv -p 3.13 /tmp/weight && \
+  uv pip install --no-compile --python /tmp/weight/bin/python -r /tmp/runtime.txt
+du -sk /tmp/weight/lib/python3.13/site-packages          # installed on disk, no bytecode
 ```
+
+Count the requirement lines for the dependency roster (the `sys_platform == 'win32'` lines
+don't install on linux or macOS), and record both numbers in the release PR rather than
+here, where they would go stale. The weight sits in the analytics and vector paths:
+`polars-runtime-32`, `pyarrow`, `lancedb`, and `duckdb` are most of it.
 
 **Prebuilt wheel coverage is complete on every glibc target.** Every package in the closure
 that ships native code has cp313 wheels for manylinux x86_64, manylinux aarch64, macOS arm64,
@@ -209,18 +218,14 @@ Alpine and other musl targets are not supported: `duckdb` and `lancedb` publish 
 musllinux wheels, and `lancedb==0.37.1` publishes **no sdist at all**, so there is nothing to
 build from.
 
-**The harbor subtree is the standing follow-up.** Most of the runtime packages reach this
-project only through `harbor` — `fastapi`, `uvicorn`, `starlette`, the whole `supabase` client
-stack, `litellm`, `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, `cryptography`,
-`aiohttp` — while `atif-converter` uses harbor for its public ATIF data classes and validator
-only (the conversion itself is ours since the port away from harbor's private methods). A CLI
-that converts JSONL ships a web server and a database client to do it. It is a supply-chain and
-install-weight question, not a release blocker, and it does not change the shape of a release. `litellm` in
-particular is no longer imported on the conversion hot path (`atif_converter.domain.pricing`
-reads its bundled price table directly and matches `cost_per_token` bit for bit; the import is
-now a fallback), which removed about four seconds from every convert process. The port
-makes the next step tractable: the pydantic models and the validator are small enough
-to vendor or to depend on a slimmer distribution, should upstream publish one.
+**harbor and litellm are not in the closure.** harbor's agent runtime carried a web server
+(`fastapi`, `uvicorn`, `starlette`), the whole `supabase` client stack, `litellm` and through
+it `openai`, `tiktoken`, `tokenizers`, `huggingface-hub`, and `aiohttp`, all for the ATIF data
+classes, the validator, and one price lookup per step. The data classes and the validator are
+now vendored in `atif_converter.domain.atif` and the prices in
+`atif_converter/domain/model_prices.json` (see CONTRIBUTING), so both distributions are dev
+dependencies only. `uv tree --frozen --no-dev --invert --package harbor` (and `--package
+litellm`) prints nothing, and `test_dev_only_imports_guard.py` fails if `src/` imports either.
 
 ## The normal path
 

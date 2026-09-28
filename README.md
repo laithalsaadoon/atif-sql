@@ -30,8 +30,10 @@ uvx atif-sql schema          # or run it without installing
 ```
 
 Python 3.13 or newer. The install is substantial and deliberately so, because the analytics and
-vector paths carry `polars`, `pyarrow`, `lancedb`, and `duckdb`. Prebuilt wheels cover CPython 3.13
-on manylinux x86_64 and aarch64, macOS arm64, and Windows x86_64. Alpine and other musl targets
+vector paths carry `polars`, `pyarrow`, `lancedb`, and `duckdb`. Conversion itself needs none of
+that weight: the ATIF models are vendored from Harbor and step pricing reads a vendored copy of
+litellm's price data, so neither `harbor` nor `litellm` is installed. Prebuilt wheels cover CPython
+3.13 on manylinux x86_64 and aarch64, macOS arm64, and Windows x86_64. Alpine and other musl targets
 are not supported. [RELEASING.md](RELEASING.md) says how to measure the install.
 
 `atif-sql analyze`, `atif-sql embed`, and `atif-sql search` call Amazon Bedrock and cost money
@@ -46,7 +48,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 
 | Directory | What |
 | --- | --- |
-| `atif-converter` | Claude Code and Codex CLI transcript → ATIF converters (ours, built on Harbor's public trajectory models) + per-agent fidelity policy (loss accounting per session) |
+| `atif-converter` | Claude Code and Codex CLI transcript → ATIF converters (ours, built on Harbor's ATIF models, vendored) + per-agent fidelity policy (loss accounting per session) |
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM client; no other package hardcodes a model id |

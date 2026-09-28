@@ -697,32 +697,28 @@ that the two hint STRINGS are equal, so the copies could diverge in wording whil
 Mitigation: treat the two `RECOVERY_HINT` literals as one value — change both in the same commit,
 which is what both docstrings instruct.
 
-## harbor's public ATIF surface, consumed by our ported converters
+## harbor's ATIF models, vendored and consumed by our ported converters
 
-**Producer:** upstream, `harbor.models.trajectories` (RFC 0001 data classes) and
-`harbor.utils.trajectory_validator`, pinned `harbor>=0.22.0,<1` at
-`packages/atif-converter/pyproject.toml:26`
+**Producer:** upstream `harbor.models.trajectories` (RFC 0001 data classes) and
+`harbor.utils.trajectory_validator` at harbor 0.22.0, vendored as `packages/atif-converter/src/atif_converter/domain/atif/`
+(`UPSTREAM_VERSION` in its `__init__`); harbor itself is a dev dependency
 
 **Consumer(s):**
 
 - `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75` — `convert_claude_code_records`, our Claude Code converter, a parity port of harbor
   0.22.0's, building `Trajectory` / `Step` / `ToolCall` / `Metrics` from the public models.
 - `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781` — `convert_codex_records`, the Codex counterpart.
-- `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68` — `validate_trajectory`, the only call into harbor's validator.
-- `packages/atif-converter/tests/test_harbor_public_surface_guard.py:29` — the `ast` guard that pins the allowlist to those modules.
+- `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py` — `validate_trajectory`, the only call into the vendored validator.
+- `packages/atif-converter/tests/test_dev_only_imports_guard.py` — the `ast` guard that keeps `harbor` and `litellm` out of every `src/` tree.
+- `packages/atif-converter/tests/test_vendored_atif.py` — the conformance test: the vendored files equal the installed harbor's, and both agree on the goldens.
 - `packages/atif-converter/tests/harbor_oracle.py:94` and `:111` — the parity ORACLE: harbor's private converters, reached from the tests
   only, with frozen goldens and a live-corpus diff.
 
 **Shape:**
 
 ```python
-#: The public harbor surface atif-converter is allowed to depend on.
-PUBLIC_HARBOR_MODULES: frozenset[str] = frozenset(
-    {
-        "harbor.models.trajectories",
-        "harbor.utils.trajectory_validator",
-    }
-)
+#: Distributions that are dev-only, so no production module may import them.
+DEV_ONLY: frozenset[str] = frozenset({"harbor", "litellm"})
 ```
 
 **Assumptions consumers make:**

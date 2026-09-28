@@ -1,23 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""The pricing fast path returns the SAME floats as ``litellm.cost_per_token``.
+"""The pricing arithmetic returns the SAME floats as ``litellm.cost_per_token``.
 
-litellm is imported here and only here on the conversion side: the module
-under test must price the covered shapes without it, and every value it
-returns must be ``==`` (not approximately equal) to litellm's, or
-``trajectory.json`` bytes would change. The grid runs every bare key of the
-bundled table whose provider the fast path covers, crossed with token shapes
-that reach each branch of litellm's arithmetic (no cache, cache heavier than
-the input count, inputs above the 128k / 200k / 272k / 512k thresholds), and
-with every service tier litellm names plus the ``standard`` tier Claude Code
-reports. The corpus pairs are the distinct ``(model, service_tier)`` values
-found in the two frozen benchmark corpora on 2026-09-12.
+litellm is a DEV dependency and is imported here and nowhere in ``src/``: the
+module under test prices from the vendored table (``domain/model_prices.json``)
+with its own copy of litellm's arithmetic, and every value it returns must be
+``==`` (not approximately equal) to litellm's for the same data, or
+``trajectory.json`` bytes would drift from what harbor wrote. The module is
+skipped where litellm isn't installed; ``test_pricing_policy.py`` carries frozen
+values for the same arithmetic that run everywhere.
+
+The grid runs every bare vendored key whose entry is IDENTICAL to the one in
+the installed litellm's bundled table (so a difference is arithmetic, never
+data), crossed with token shapes that reach each branch of litellm's
+arithmetic (no cache, cache heavier than the input count, inputs above the
+128k / 200k / 272k / 512k thresholds), and with every service tier litellm
+names plus the ``standard`` tier Claude Code reports. The corpus pairs are the
+distinct ``(model, service_tier)`` values found in the two frozen benchmark
+corpora on 2026-09-12.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -85,7 +90,10 @@ SERVICE_TIERS: list[str | None] = [
     "auto",
 ]
 
-COVERED_PROVIDERS = {"anthropic", "openai", "bedrock", "bedrock_converse"}
+#: The share of vendored entries that must match the installed litellm's data
+#: for the grid to mean anything. Below it the dev litellm and the table's
+#: ``meta.ref`` have drifted apart; regenerate the table or move the dev pin.
+MIN_SHARED_SHARE = 0.9
 
 
 def _litellm_cost(
@@ -128,74 +136,58 @@ def _identical(ours: tuple[float, float], theirs: tuple[float, float]) -> bool:
     return all(type(a) is type(b) and a == b for a, b in zip(ours, theirs, strict=True))
 
 
-def _bare_covered_keys() -> list[str]:
+def _table() -> pricing.PricingTable:
     table = pricing.load_table()
     assert table is not None
-    return sorted(
-        key
-        for key, entry in table.entries.items()
-        if "/" not in key and entry.get("litellm_provider") in COVERED_PROVIDERS
-    )
+    return table
+
+
+def _vendored_bare_keys() -> list[str]:
+    """Every bare key of the vendored table that carries litellm's data (no overrides)."""
+    overrides = pricing.override_models()
+    return sorted(k for k in _table().entries if "/" not in k and k not in overrides)
+
+
+def _shared_keys() -> list[str]:
+    """The vendored bare keys whose entry equals the installed litellm's bundled entry."""
+    entries = _table().entries
+    return [k for k in _vendored_bare_keys() if litellm.model_cost.get(k) == entries[k]]
 
 
 class TestTable:
-    def test_bundled_table_is_located_without_importing_litellm(self) -> None:
-        """A fresh interpreter prices a corpus model with ``litellm`` absent from ``sys.modules``."""
-        import subprocess
-
-        code = (
-            "import sys\n"
-            "from atif_converter.domain import pricing\n"
-            "cost = pricing.cost_per_token(model='claude-opus-5', prompt_tokens=1234, "
-            "completion_tokens=567, cache_creation_input_tokens=8901, "
-            "cache_read_input_tokens=23456, service_tier='standard')\n"
-            "print(cost, 'litellm' in sys.modules)\n"
+    def test_the_installed_litellm_carries_the_same_data(self) -> None:
+        """The grid compares arithmetic over shared data, so most of the data must be shared."""
+        vendored = _vendored_bare_keys()
+        shared = _shared_keys()
+        drifted = sorted(set(vendored) - set(shared))
+        assert len(shared) >= MIN_SHARED_SHARE * len(vendored), (
+            f"only {len(shared)}/{len(vendored)} vendored entries match "
+            f"the installed litellm's bundled table (vendored ref {_table().source_ref}); "
+            f"regenerate the table or move the dev pin. Drifted: {drifted[:20]}"
         )
-        out = subprocess.run(  # noqa: S603, fixed interpreter and code string
-            [sys.executable, "-c", code],
-            check=True,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "true"},
-        )
-        assert out.stdout.strip() == "(0.06735925, 0.014175) False"
-
-    def test_table_matches_litellm_model_cost(self) -> None:
-        """Our parsed entries are litellm's ``model_cost``: same keys, same values."""
-        table = pricing.load_table()
-        assert table is not None
-        assert set(table.entries) == set(litellm.model_cost)
-        assert all(table.entries[key] == litellm.model_cost[key] for key in table.entries)
 
     def test_has_pricing_entry_matches_model_cost_get(self) -> None:
+        """For the corpus models, the vendored table holds exactly what litellm's does."""
         for model in CODEX_CORPUS_MODELS:
             for key in (model, model.split("/", 1)[-1]):
                 assert pricing.has_pricing_entry(key) is bool(litellm.model_cost.get(key)), key
 
-    def test_remote_table_setting_disables_the_fast_path(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "false")
-        with pytest.raises(FastPathUnsupported):
-            fast_cost_per_token(
-                model="claude-opus-5",
-                prompt_tokens=1,
-                completion_tokens=1,
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=0,
-            )
-
 
 def _grid_cases() -> Iterator[tuple[str, tuple[int, int, int, int], str | None]]:
-    for key in _bare_covered_keys():
+    for key in _shared_keys():
         for shape in TOKEN_SHAPES:
             for tier in SERVICE_TIERS:
                 yield key, shape, tier
 
 
 class TestIdentityGrid:
-    def test_every_covered_table_key_prices_identically(self) -> None:
-        """For each bare covered key x shape x tier, ours == litellm's, or the fast path declines."""
+    def test_every_vendored_key_prices_identically(self) -> None:
+        """For each shared key x shape x tier, ours == litellm's, and the fast path never declines.
+
+        A decline is a model the table carries and the converter can't price,
+        which since litellm stopped being a fallback means NULL cost; the
+        filter in ``scripts/update_prices.py`` must not keep such an entry.
+        """
         compared = 0
         declined: set[str] = set()
         mismatches: list[str] = []
@@ -213,21 +205,17 @@ class TestIdentityGrid:
             elif ours is not theirs:
                 mismatches.append(f"{key} {shape} {tier}: ours={ours!r} litellm={theirs!r}")
         assert mismatches == [], "\n".join(mismatches[:40])
-        keys = _bare_covered_keys()
-        # The fast path must actually cover the table, not decline its way to a pass.
-        assert compared >= 0.95 * len(keys) * len(TOKEN_SHAPES) * len(SERVICE_TIERS), (
-            f"compared={compared} declined={sorted(declined)}"
-        )
-        print(
-            f"grid: {compared} comparisons over {len(keys) - len(declined)}/{len(keys)} keys, "
-            f"declined={sorted(declined)}"
-        )
+        assert declined == set(), sorted(declined)
+        assert compared > 0
+        print(f"grid: {compared} comparisons over {len(_shared_keys())} keys")
 
     @pytest.mark.parametrize(("model", "service_tier"), CLAUDE_CORPUS_PAIRS)
     @pytest.mark.parametrize("shape", TOKEN_SHAPES)
     def test_claude_corpus_pairs(
         self, model: str, service_tier: str | None, shape: tuple[int, int, int, int]
     ) -> None:
+        if pricing.is_local_override(model):
+            pytest.skip(f"{model} is priced from a local override, not litellm's data")
         ours = _fast_cost(model, shape, service_tier)  # must not decline
         theirs = _litellm_cost(model, shape, service_tier)
         if isinstance(ours, tuple):
@@ -257,11 +245,9 @@ class TestIdentityGrid:
         "model",
         [
             "claude-test-1",
-            "claude-fable-5-1",
             "claude-newfamily-7",
             "claude-newfamily-7-2",
             "claude-sonnet-9-20301231",
-            "Claude-Opus-5",
             "totally-unknown-model",
             "<synthetic>",
         ],
@@ -270,80 +256,31 @@ class TestIdentityGrid:
         """Unmapped Claude ids price to litellm's (0.0, 0.0); other unknowns fail both sides."""
         shape = (1234, 567, 8901, 23456)
         theirs = _litellm_cost(model, shape, "standard")
-        try:
-            ours = _fast_cost(model, shape, "standard")
-        except FastPathUnsupported:
-            # A case-variant of a real key: litellm prices it, the fast path hands it over.
-            assert model == "Claude-Opus-5"
-            full = pricing.cost_per_token(
-                model=model,
-                prompt_tokens=1234,
-                completion_tokens=567,
-                cache_creation_input_tokens=8901,
-                cache_read_input_tokens=23456,
-                service_tier="standard",
-            )
-            assert isinstance(theirs, tuple)
-            assert _identical(full, theirs)
-            return
+        ours = _fast_cost(model, shape, "standard")
         if isinstance(theirs, tuple):
             assert isinstance(ours, tuple)
             assert _identical(ours, theirs), (model, ours, theirs)
         else:
             assert ours is UnpriceableModelError
 
+    def test_a_case_variant_is_unpriced_where_litellm_prices_it(self) -> None:
+        """The one known shape where dropping the litellm fallback loses a price.
 
-class TestFallback:
-    def test_public_entry_point_falls_back_to_litellm(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        calls: list[dict[str, Any]] = []
-
-        def fake_cost_per_token(**kwargs: Any) -> tuple[float, float]:
-            calls.append(kwargs)
-            return (1.5, 2.5)
-
-        monkeypatch.setattr(litellm, "cost_per_token", fake_cost_per_token)
-        # "openai/gpt-5.1-codex" carries a slash, which the fast path declines.
-        cost = pricing.cost_per_token(
-            model="openai/gpt-5.1-codex",
-            prompt_tokens=10,
-            completion_tokens=2,
-            cache_creation_input_tokens=0,
-            cache_read_input_tokens=0,
+        litellm resolves a model id whose case differs from its table key; the
+        fast path declines it, and without the fallback that means no cost.
+        No transcript has reported such an id, so this pins the gap rather
+        than closing it.
+        """
+        shape = (1234, 567, 8901, 23456)
+        assert isinstance(_litellm_cost("Claude-Opus-5", shape, "standard"), tuple)
+        with pytest.raises(FastPathUnsupported):
+            _fast_cost("Claude-Opus-5", shape, "standard")
+        priced: Any = pricing.priced_cost_per_token(
+            model="Claude-Opus-5",
+            prompt_tokens=shape[0],
+            completion_tokens=shape[1],
+            cache_creation_input_tokens=shape[2],
+            cache_read_input_tokens=shape[3],
+            service_tier="standard",
         )
-        assert cost == (1.5, 2.5)
-        assert calls == [
-            {
-                "model": "openai/gpt-5.1-codex",
-                "prompt_tokens": 10,
-                "completion_tokens": 2,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 0,
-                "service_tier": None,
-            }
-        ]
-
-    def test_fallback_pins_the_bundled_table_when_unset(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
-        pricing._import_litellm()
-        assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "true"
-
-    def test_missing_litellm_surfaces_as_import_error_on_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setitem(sys.modules, "litellm", None)
-        with pytest.raises(ImportError):
-            pricing.cost_per_token(
-                model="openai/gpt-5.1-codex",
-                prompt_tokens=10,
-                completion_tokens=2,
-                cache_creation_input_tokens=0,
-                cache_read_input_tokens=0,
-            )
-
-    def test_locate_table_handles_missing_litellm(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setitem(sys.modules, "litellm", None)
-        assert pricing.locate_table() is None
+        assert priced is None

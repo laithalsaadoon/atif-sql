@@ -1,11 +1,13 @@
 # atif-converter
 
-Wraps harbor's `ClaudeCode` adapter to convert Claude Code session JSONL into
-ATIF trajectories, and owns the FIDELITY POLICY: the seven known upstream
+Converts Claude Code session JSONL and Codex rollouts into ATIF trajectories
+(converters ported from harbor 0.22.0, on harbor's ATIF models vendored in
+`atif_converter.domain.atif`), and owns the FIDELITY POLICY: the seven known upstream
 conversion gaps are encoded as `atif_converter.domain.fidelity.FidelityGap`,
 and every conversion is audited into a `LossReport` (raw-side census vs
-converted output). The tests pin harbor 0.22.0 behavior — they are the drift
-alarm for version bumps.
+converted output). harbor is a dev dependency only; the tests pin harbor 0.22.0
+behavior and hold the vendored models to it, so they are the drift alarm for a
+harbor bump.
 
 ## Census scope
 
@@ -22,31 +24,29 @@ higher `records_total` than a census scoped to `subagents/` alone would.
 Claude Code's `final_metrics.total_cost_usd` and Codex's per-call `cost_usd` are
 estimates harbor computed with `litellm.cost_per_token`. They still are, in
 value: `atif_converter.domain.pricing` returns the same floats, bit for bit,
-but it doesn't import litellm to do so. `import litellm` cost about four
-seconds per process (openai, anthropic, hundreds of pydantic model builds),
-which was most of the time a conversion took. The module reads litellm's own
-bundled price table straight off disk, finds it with `importlib.util.find_spec`
-so `litellm/__init__` never runs, and repeats litellm 1.100.1's arithmetic in
-the same float operation order for the shapes our transcripts produce: bare
-model names the table holds under the `anthropic`, `openai`, `bedrock` and
-`bedrock_converse` providers, plus the unmapped `claude-<family>-<n>` ids
-litellm routes to Anthropic through its `fallback_generalizations` rules and
-prices at zero.
+without litellm being installed. It reads `domain/model_prices.json`, a
+filtered copy of litellm's public `model_prices_and_context_window.json` (MIT;
+the notice and source ref are in its `meta` block), and repeats litellm
+1.100.1's arithmetic in the same float operation order. The table holds the
+Claude and OpenAI text models our transcripts name under the `anthropic`,
+`openai`, `bedrock` and `bedrock_converse` providers, and keeps litellm's
+`fallback_generalizations` rules, which route an unmapped `claude-<family>-<n>`
+id to Anthropic at zero rates; the converter reports such a model as unpriced
+(`None`), never $0.
 
 Anything else (a `provider/model` string, a fine-tune id, a `tiered_pricing`
-table, another provider) falls back to importing litellm and calling it as
-before, logged at debug, so correctness never depends on the fast path's
-coverage. `tests/test_pricing_identity.py` is the proof: for every covered key
-in the table crossed with token shapes that reach each branch of the
-arithmetic and every service tier, and for the model names found in the frozen
-benchmark corpora, the fast path's floats are `==` to litellm's.
+table, a model the table doesn't hold) is unpriced. Two local overrides price
+models litellm doesn't carry yet, from the vendor's published rates, and a
+session priced from one is labeled `litellm_estimate+local_overrides`.
 
-`LITELLM_LOCAL_MODEL_COST_MAP` keeps its litellm meaning. Unset or `true`, the
-fast path prices from the bundled table (litellm itself would fetch the table
-from GitHub when the variable is unset, which is slow and not reproducible; the
-fallback sets it to `true` before importing so one process never prices from
-two tables). Set to anything else, the operator has asked for the remote table,
-and every call goes through litellm.
+`scripts/update_prices.py` regenerates the table by hand from a litellm git
+ref and retires an override once upstream prices the same key.
+`tests/test_pricing_identity.py` is the proof of the arithmetic, run where the
+dev litellm is installed: for every vendored entry whose data the installed
+litellm shares, crossed with token shapes that reach each branch and every
+service tier, and for the model names found in the frozen benchmark corpora,
+our floats are `==` to litellm's. `tests/test_pricing_policy.py` pins frozen
+values that run without litellm.
 
 ## One read, then the snapshot re-check
 

@@ -31,8 +31,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from harbor.models.trajectories import Trajectory  # type: ignore[import-untyped]
-
+from atif_converter.domain.atif import Trajectory
 from atif_converter.domain.codex_conversion import convert_codex_records
 from atif_converter.infrastructure.raw_records import LoadedSession, parse_jsonl_records
 

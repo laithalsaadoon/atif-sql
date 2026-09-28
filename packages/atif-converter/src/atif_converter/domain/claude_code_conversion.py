@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # Ported from harbor 0.22.0, src/harbor/agents/installed/claude_code.py
-# (Apache-2.0, Copyright the Harbor authors), so that atif-converter depends on
-# harbor's PUBLIC trajectory models only.
+# (Apache-2.0, Copyright the Harbor authors), onto the ATIF models vendored in
+# atif_converter.domain.atif, so atif-converter doesn't depend on harbor.
 
 """Claude Code session records -> ATIF trajectory, as a pure function.
 
 This is ``ClaudeCode._convert_events_to_trajectory`` and its helpers, lifted
 out of harbor's agent class so the conversion runs over ALREADY-PARSED records
-with no file I/O and no ``harbor.agents`` import. The public data classes in
-``harbor.models.trajectories`` are the contract the output is expressed in,
-which is why this domain module may import them. harbor's structure and names
+with no file I/O and no harbor import. The ATIF data classes (harbor's
+``harbor.models.trajectories``, vendored as :mod:`atif_converter.domain.atif`)
+are the contract the output is expressed in, which is why this domain module
+imports them. harbor's structure and names
 are kept recognizable on purpose, so a future upstream diff can be re-applied
 by hand; the one structural change is that the body of
 ``_convert_events_to_trajectory`` is split into helpers around the
@@ -36,9 +37,9 @@ every trajectory down the ``litellm`` estimate path. That fallback ordering is
 kept verbatim: ``total_cost_usd`` is the litellm estimate or ``None``, and
 ``final_metrics.extra["cost_source"] == "litellm_estimate"`` whenever the
 estimate priced at least one step. The estimate itself now comes from
-:mod:`atif_converter.domain.pricing`, which reproduces ``litellm.cost_per_token``
-from litellm's bundled table without importing litellm (the import cost four
-seconds per process); the floats are identical, so the label stays. Also not ported: ``_session_dirs`` (log-dir
+:mod:`atif_converter.domain.pricing`, which repeats ``litellm.cost_per_token``'s
+arithmetic over a vendored copy of litellm's price data without litellm being
+installed; the floats are identical, so the label stays. Also not ported: ``_session_dirs`` (log-dir
 discovery, replaced by the infrastructure reader), and ``_session_text`` /
 ``_session_tool_result_content`` (they serve ``atif_to_native_trajectory``, the
 REVERSE conversion, not this one).
@@ -57,7 +58,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from harbor.models.trajectories import (  # type: ignore[import-untyped]
+from loguru import logger
+
+from atif_converter.domain import pricing
+from atif_converter.domain.agents import AgentSource
+from atif_converter.domain.atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -67,10 +72,6 @@ from harbor.models.trajectories import (  # type: ignore[import-untyped]
     ToolCall,
     Trajectory,
 )
-from loguru import logger
-
-from atif_converter.domain import pricing
-from atif_converter.domain.agents import AgentSource
 
 #: The schema version harbor 0.22.0 stamps on a Claude Code trajectory.
 SCHEMA_VERSION = "ATIF-v1.7"
@@ -426,9 +427,8 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
 
     harbor priced every step through ``litellm.cost_per_token``; the call goes
     through :mod:`atif_converter.domain.pricing`, which returns the same floats
-    from litellm's bundled table without importing litellm, and imports it only
-    for a shape it does not cover. Any pricing failure (litellm raising, or
-    litellm missing on a fallback) yields "no estimate", as in harbor.
+    from a vendored copy of litellm's price data. Any pricing failure yields
+    "no estimate", as a litellm error did in harbor.
     """
     total_cost = 0.0
     priced_any_step = False
@@ -465,7 +465,7 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
                 cache_read_input_tokens=cache_read_tokens,
                 service_tier=service_tier,
             )
-        except Exception as exc:  # noqa: BLE001 — harbor swallows every litellm error into "no estimate"
+        except Exception as exc:  # noqa: BLE001 — harbor swallowed every pricing error into "no estimate"
             logger.debug(
                 "Cannot estimate Claude cost for model '{}': {}",
                 step.model_name,

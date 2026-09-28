@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Ported from harbor 0.22.0, src/harbor/agents/installed/codex.py (Apache-2.0,
-# Copyright the Harbor authors), so that atif-converter depends on harbor's
-# PUBLIC trajectory models only.
+# Copyright the Harbor authors), onto the ATIF models vendored in
+# atif_converter.domain.atif, so atif-converter doesn't depend on harbor.
 
 """Codex rollout records -> ATIF trajectory, as one pure function.
 
 This is harbor's ``Codex._convert_events_to_trajectory`` and the helpers it
-calls, ported line for line onto the public ``harbor.models.trajectories``
-data classes. harbor documents those classes and the validator and nothing
-else, so the converter itself has to live here for the dependency to be a
-public one. The parity oracle in ``tests/harbor_oracle.py`` measures this port
+calls, ported line for line onto harbor's ``harbor.models.trajectories``
+data classes, which are vendored as :mod:`atif_converter.domain.atif`. harbor
+documents those classes and the validator and nothing else, so the converter
+itself has to live here. The parity oracle in ``tests/harbor_oracle.py`` measures this port
 against harbor's private method for as long as harbor still ships it.
 
 FAITHFUL, NOT IMPROVED. Every quirk below is harbor's, kept so the two agree
@@ -48,9 +48,8 @@ The three instance attributes the method read are replaced as follows:
 One substitution under the hood: ``_compute_cost_from_pricing`` reads the
 price table and prices each call through :mod:`atif_converter.domain.pricing`
 rather than ``litellm`` directly. The floats are identical (the module
-reproduces ``litellm.cost_per_token`` from litellm's bundled table and falls
-back to litellm for any shape it does not cover); what changed is that the
-conversion no longer pays the four-second ``import litellm``.
+repeats ``litellm.cost_per_token``'s arithmetic over a vendored copy of
+litellm's price data); what changed is that litellm isn't installed at all.
 
 Pure over already-parsed records in FILE order: no file I/O, no
 ``harbor.agents`` import. Reading the rollout is
@@ -62,7 +61,11 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from harbor.models.trajectories import (  # type: ignore[import-untyped]
+from loguru import logger
+
+from atif_converter.domain import pricing
+from atif_converter.domain.agents import AgentSource
+from atif_converter.domain.atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -72,10 +75,6 @@ from harbor.models.trajectories import (  # type: ignore[import-untyped]
     ToolCall,
     Trajectory,
 )
-from loguru import logger
-
-from atif_converter.domain import pricing
-from atif_converter.domain.agents import AgentSource
 from atif_converter.domain.codex_enrichment import message_text
 
 #: The schema version harbor 0.22.0 stamps on a Codex trajectory.
@@ -451,26 +450,21 @@ def _compute_cost_from_pricing(
     and with any ``provider/`` prefix stripped) or the calculation fails.
 
     The table lookup and the arithmetic go through
-    :mod:`atif_converter.domain.pricing`, which reads litellm's bundled table
-    without importing litellm and returns the same floats; litellm is imported
-    only for a shape the fast path does not cover.
+    :mod:`atif_converter.domain.pricing`, which reads the vendored copy of
+    litellm's price data and returns the same floats litellm would.
     """
     resolved_model_name = model_name or fallback_model_name
     if not resolved_model_name:
         return None
 
-    pricing_model_name: str | None = None
-    try:
-        for key in (
-            resolved_model_name,
-            resolved_model_name.split("/", 1)[-1],
-        ):
-            if pricing.has_pricing_entry(key):
-                pricing_model_name = key
-                break
-    except ImportError:
-        logger.debug("litellm not available; leaving codex cost_usd as None")
-        return None
+    pricing_model_name = next(
+        (
+            key
+            for key in (resolved_model_name, resolved_model_name.split("/", 1)[-1])
+            if pricing.has_pricing_entry(key)
+        ),
+        None,
+    )
 
     if pricing_model_name is None:
         logger.debug(

@@ -5,9 +5,9 @@
 # toolchain declaration, one command definition, so nothing in a workflow can drift from
 # what a laptop runs.
 #
-# Python 3.13, not 3.14: harbor==0.22.0 floors at Requires-Python >=3.12 (probed 2026-08-22
-# via `uv pip show` on a fresh install), and 3.13 is the safety pick while the harbor
-# dependency chain (litellm, supabase, ...) settles on 3.14.
+# Python 3.13, not 3.14: harbor==0.22.0 (a dev dependency, for the test oracles) floors at
+# Requires-Python >=3.12 (probed 2026-08-22 via `uv pip show` on a fresh install), and 3.13
+# is the safety pick while the harbor dependency chain (litellm, supabase, ...) settles on 3.14.
 #
 # No task here reaches Bedrock. `atif-sql analyze`, `atif-sql embed`, and `atif-sql search`
 # spend real money per call, so they are absent from every gate, every hook, and every

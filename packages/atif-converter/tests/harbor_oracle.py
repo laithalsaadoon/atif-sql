@@ -183,7 +183,7 @@ def diff_paths(expected: Any, actual: Any, path: str = "$") -> list[str]:
 
 #: JSON paths where our converter departs from harbor ON PURPOSE when a
 #: session holds a model harbor prices at a fabricated $0 (a rate-less litellm
-#: entry) or one we price from ``pricing.LOCAL_PRICE_OVERRIDES``. harbor sums
+#: entry) or one we price from a local override (``pricing.override_models()``). harbor sums
 #: litellm's ``(0.0, 0.0)``; we report no estimate, or the override's price.
 PRICING_DIVERGENCE_PATHS: frozenset[str] = frozenset(
     {"$.final_metrics.total_cost_usd", "$.final_metrics.extra.cost_source"}
@@ -223,7 +223,7 @@ def _pricing_divergence_expected(ours: dict[str, Any]) -> bool:
                 cache_creation_input_tokens=0,
                 cache_read_input_tokens=0,
             )
-        except Exception:  # noqa: BLE001, S112 - a model litellm refuses is not a policy divergence
+        except Exception:  # noqa: BLE001, S112 - a model nobody prices is not a policy divergence
             continue
         if priced is None:
             return True
