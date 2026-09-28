@@ -52,6 +52,23 @@ def _archive_sources(session_jsonl: Path, archive_dir: Path) -> tuple[ArchivedSo
     return tuple(archived)
 
 
+#: This process's simulated clock, in seconds. Only :class:`FakeConverter`
+#: with ``simulated_seconds`` moves it, and only inside ``convert``.
+_simulated_now: float = 0.0
+
+
+def simulated_clock() -> float:
+    """A clock that advances only while a :class:`FakeConverter` converts.
+
+    Hand it to ``materialize(convert_clock=...)`` with
+    ``FakeConverter(simulated_seconds=s)`` and every conversion measures
+    exactly ``s``, in whichever process (inline or pool worker) runs it,
+    however long the pass really takes. Module-level, so it pickles into a
+    spawned worker by reference; each process keeps its own count.
+    """
+    return _simulated_now
+
+
 class FakeConverter:
     """A deterministic in-memory converter with scriptable failures.
 
@@ -70,6 +87,10 @@ class FakeConverter:
     off by default, and ``converted`` is only meaningful on the inline path:
     a pool worker's copy of this object never comes back.
 
+    ``simulated_seconds`` advances :func:`simulated_clock` by that much on
+    every conversion, so a pass timed with that clock reports a known
+    duration per session.
+
     ``empty_sessions`` raises :class:`~atif_corpus.domain.ports.EmptySourceError`
     for the named sessions, the port's "nothing to convert" verdict.
     ``output_tag`` stamps ``converter_tag`` into every trajectory so a test can
@@ -84,6 +105,7 @@ class FakeConverter:
         empty_sessions: frozenset[str] = frozenset(),
         record_pid: bool = False,
         delay_seconds: float = 0.0,
+        simulated_seconds: float = 0.0,
         output_tag: str | None = None,
     ) -> None:
         #: Session ids whose conversion should raise.
@@ -97,6 +119,8 @@ class FakeConverter:
         self.record_pid = record_pid
         #: Seconds each conversion sleeps before returning.
         self.delay_seconds = delay_seconds
+        #: Seconds each conversion advances :func:`simulated_clock` by.
+        self.simulated_seconds = simulated_seconds
         #: Every session path convert() was asked about, in call order.
         self.converted: list[Path] = []
 
@@ -112,6 +136,9 @@ class FakeConverter:
             raise EmptySourceError(msg)
         if self.delay_seconds:
             time.sleep(self.delay_seconds)
+        if self.simulated_seconds:
+            global _simulated_now  # noqa: PLW0603 — the clock is per process by design
+            _simulated_now += self.simulated_seconds
         trajectory: dict[str, Any] = {
             "schema_version": "ATIF-v1.7",
             "session_id": session_id,
