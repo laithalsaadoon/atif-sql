@@ -103,14 +103,21 @@ class TestSubagentAgentId:
         assert agent_id_lines, "the fixture must exercise the divergence the filter names"
         # The fixture's model has no price, so the pricing policy's own named
         # divergence (NULL, not harbor's $0), per session and per step, shows up
-        # beside it; nothing else may.
+        # beside it, and harbor's set-ordered ``agent.extra.agent_ids`` may come
+        # out reversed; nothing else may.
         others = {line.split(":", 1)[0] for line in raw if line not in agent_id_lines}
         step_paths = {
             path.format(i=index)
             for index in range(len(ours.steps))
             for path in (*STEP_PRICING_DIVERGENCE_PATHS, "$.steps[{i}].metrics.extra")
         }
-        assert others <= {*PRICING_DIVERGENCE_PATHS, "$.final_metrics.extra", *step_paths}
+        order_paths = {"$.agent.extra.agent_ids[0]", "$.agent.extra.agent_ids[1]"}
+        assert others <= {
+            *PRICING_DIVERGENCE_PATHS,
+            "$.final_metrics.extra",
+            *step_paths,
+            *order_paths,
+        }
         assert parity_diffs(theirs, ours.to_json_dict()) == []
 
 
