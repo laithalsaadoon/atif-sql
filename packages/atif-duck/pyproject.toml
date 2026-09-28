@@ -19,6 +19,10 @@ classifiers = [
 dependencies = [
     "duckdb>=1.5.2,<2",
     "loguru>=0.7.3",
+    # LakeSettings (atif_duck.infrastructure.lake_settings): the lake root and
+    # its batch sizes come from ATIF_SQL_* env vars like every other setting.
+    "pydantic>=2.13.2",
+    "pydantic-settings>=2.13.1",
     # The columnar producer streams a session's steps into DuckDB as Arrow
     # record batches (atif_duck.infrastructure.columnar); imported lazily, so
     # the query and status paths never load it.

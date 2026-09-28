@@ -13,17 +13,20 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from duck_fixtures import PASTED_SHA, READ_SHA, SESSION_IDS
+from duck_fixtures import PASTED_SHA, READ_SHA, SESSION_IDS, register_via
 from test_columnar import add_columnar
 
 from atif_duck.infrastructure.registry import register
 
 
-@pytest.fixture(params=["json", "columnar"])
+@pytest.fixture(params=["json", "columnar", "lake"])
 def con(request: pytest.FixtureRequest, corpus_root: Path) -> duckdb.DuckDBPyConnection:
-    if request.param == "columnar":
+    if request.param in {"columnar", "lake"}:
         add_columnar(corpus_root, session_ids=tuple(SESSION_IDS))
     connection = duckdb.connect(":memory:")
+    if request.param == "lake":
+        register_via(connection, corpus_root, "lake")
+        return connection
     sources = register(connection, corpus_root)
     assert bool(sources.columnar_session_ids) == (request.param == "columnar")
     return connection

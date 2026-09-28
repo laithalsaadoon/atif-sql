@@ -89,6 +89,21 @@ from atif_duck.domain.columnar import (
     TOOL_RESULTS_PARQUET,
 )
 from atif_duck.domain.embedding_guard import ensure_store_matches
+from atif_duck.domain.raw_readers import (
+    CORPUS_COLUMN,
+    EDGE_COLUMNS,
+    LOSS_REPORT_COLUMNS,
+    META_COLUMNS,
+    RAW_EDGES,
+    RAW_LOSS_REPORTS,
+    RAW_META,
+    RAW_SESSION_EVENTS,
+    RAW_STEPS,
+    RAW_TOOL_CALLS,
+    RAW_TOOL_RESULTS,
+    RAW_TRAJECTORIES,
+    TRAJECTORY_RELATION_COLUMNS,
+)
 from atif_duck.domain.session_id import session_id_rejection
 from atif_duck.domain.sql_literal import SqlFragment, sql_literal
 from atif_duck.infrastructure.columnar import ColumnarCoverage, session_has_columnar
@@ -103,10 +118,12 @@ from atif_duck.infrastructure.projections import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Collection, Iterable, Sequence
     from pathlib import Path
 
     import duckdb
+
+    from atif_duck.infrastructure.lake import LakeReader
 
 # ---------------------------------------------------------------------------
 # Raw-reader object names
@@ -121,17 +138,17 @@ if TYPE_CHECKING:
 #: ``v_raw_tool_calls`` / ``v_raw_tool_results``, each already in its view's
 #: column shape whichever source it came from. The JSON-path TEMP TABLE that
 #: still holds ``steps JSON[]`` is ``v_raw_trajectories_json``.
-_RAW_TRAJECTORIES_TABLE: str = "v_raw_trajectories"
+_RAW_TRAJECTORIES_TABLE: str = RAW_TRAJECTORIES
 _RAW_TRAJECTORIES_JSON_TABLE: str = "v_raw_trajectories_json"
-_RAW_STEPS_TABLE: str = "v_raw_steps"
-_RAW_TOOL_CALLS_TABLE: str = "v_raw_tool_calls"
-_RAW_TOOL_RESULTS_TABLE: str = "v_raw_tool_results"
-_RAW_EDGES_TABLE: str = "v_raw_edges"
-_RAW_LOSS_REPORTS_TABLE: str = "v_raw_loss_reports"
-_RAW_META_TABLE: str = "v_raw_meta"
+_RAW_STEPS_TABLE: str = RAW_STEPS
+_RAW_TOOL_CALLS_TABLE: str = RAW_TOOL_CALLS
+_RAW_TOOL_RESULTS_TABLE: str = RAW_TOOL_RESULTS
+_RAW_EDGES_TABLE: str = RAW_EDGES
+_RAW_LOSS_REPORTS_TABLE: str = RAW_LOSS_REPORTS
+_RAW_META_TABLE: str = RAW_META
 #: ``session_events`` rows from either source, in the view's column shape. The
 #: JSON path's TEMP TABLE is the parsed ``session_events.jsonl`` lines.
-_RAW_SESSION_EVENTS_TABLE: str = "v_raw_session_events"
+_RAW_SESSION_EVENTS_TABLE: str = RAW_SESSION_EVENTS
 _RAW_SESSION_EVENTS_JSON_TABLE: str = "v_raw_session_events_json"
 
 #: The columnar branch's parquet readers: one parameterized ``read_parquet``
@@ -164,6 +181,12 @@ class RawSources:
     #: Session directory names that failed the session id boundary and so
     #: contribute to no view (sorted). Logged once each at registration.
     rejected_session_ids: tuple[str, ...] = ()
+    #: True when the raw relations are views over the lake rather than over
+    #: the per-session artifacts (:func:`atif_duck.infrastructure.lake.register_lake_raw`).
+    from_lake: bool = False
+    #: The corpus a lake registration is scoped to (``None``: every corpus,
+    #: or not a lake registration).
+    lake_corpus: str | None = None
 
     @property
     def coverage(self) -> ColumnarCoverage:
@@ -241,62 +264,12 @@ _TRAJECTORY_COLUMNS: dict[str, str] = {
     "extra": "JSON",
 }
 
-# Explicit projection for ``v_raw_edges``: one line per RAW transcript record
-# per docs/CONTRACT.md. ``parent_uuid`` is declared VARCHAR outright: a root
-# record leaves it null, so inferred typing resolves it as a NULL-vs-string
-# JSON union and every downstream view then needs its own CAST. Declaring the
-# type in the one explicit-columns reader pays that cost once.
-_EDGE_COLUMNS: dict[str, str] = {
-    "uuid": "VARCHAR",
-    "parent_uuid": "VARCHAR",
-    "message_id": "VARCHAR",
-    "type": "VARCHAR",
-    "ts": "TIMESTAMP",
-    "is_sidechain": "BOOLEAN",
-    "is_compact_summary": "BOOLEAN",
-    "source_file": "VARCHAR",
-    "tool_use_ids": "JSON",
-}
-
-# Explicit projection for ``v_raw_loss_reports``: atif_converter
-# ``LossReport.to_json()`` shape (record_counts / gaps_observed stay JSON —
-# enum-keyed dict and list respectively).
-_LOSS_REPORT_COLUMNS: dict[str, str] = {
-    "record_counts": "JSON",
-    "records_total": "BIGINT",
-    "records_converted": "BIGINT",
-    # Added with session_events (converter schema 2). A report written before
-    # then has no such key and reads as NULL, which the view keeps as NULL:
-    # "not measured" rather than "none captured".
-    "records_captured": "BIGINT",
-    "records_dropped": "BIGINT",
-    "gaps_observed": "JSON",
-    "subagent_files_found": "BIGINT",
-    "subagent_files_convertible": "BIGINT",
-    "workflow_subagent_files_found": "BIGINT",
-}
-
-# Explicit projection for ``v_raw_meta`` per docs/CONTRACT.md.
-_META_COLUMNS: dict[str, str] = {
-    "session_id": "VARCHAR",
-    "source_mtime_ns": "BIGINT",
-    "source_files": "JSON",
-    "harbor_version": "VARCHAR",
-    "converter_version": "VARCHAR",
-    "materialized_at": "VARCHAR",
-    # Which agent wrote the transcript. Added 2026-09-11 with Codex support, so
-    # a session materialized before then has no such key and reads as NULL —
-    # an explicit ``columns=`` projection nulls a missing key rather than
-    # failing, which is what lets a corpus predating the change still register.
-    # Queries read ``sessions.agent`` (from the trajectory) instead; this
-    # column is provenance for an operator reading meta.json directly.
-    "agent": "VARCHAR",
-    # Which columnar schema the session's parquet artifacts were written
-    # against (:data:`atif_duck.domain.columnar.COLUMNAR_SCHEMA_VERSION`).
-    # Absent (NULL) on a session materialized before the artifacts existed;
-    # that session is read from trajectory.json, which is always correct.
-    META_COLUMNAR_KEY: "BIGINT",
-}
+# The explicit ``read_json`` projections for ``v_raw_edges``,
+# ``v_raw_loss_reports`` and ``v_raw_meta`` live in
+# :mod:`atif_duck.domain.raw_readers`, beside the lake tables derived from them.
+_EDGE_COLUMNS: dict[str, str] = EDGE_COLUMNS
+_LOSS_REPORT_COLUMNS: dict[str, str] = LOSS_REPORT_COLUMNS
+_META_COLUMNS: dict[str, str] = META_COLUMNS
 
 
 def _typed_empty(columns: Sequence[tuple[str, str]]) -> SqlFragment:
@@ -408,12 +381,9 @@ def _register_events_json(con: duckdb.DuckDBPyConnection, paths: Sequence[Path])
 
 
 #: ``v_raw_trajectories`` columns, in order: the trajectory's top-level
-#: members minus ``steps``, plus the two path-derived keys.
-_TRAJECTORY_RELATION_COLUMNS: tuple[tuple[str, str], ...] = (
-    *(column for column in SESSION_COLUMNS if column[0] != "session_id_path"),
-    ("trajectory_path", "VARCHAR"),
-    ("session_id_path", "VARCHAR"),
-)
+#: members minus ``steps``, plus the two path-derived keys (the ``corpus``
+#: column the union view appends is not part of either branch).
+_TRAJECTORY_RELATION_COLUMNS: tuple[tuple[str, str], ...] = TRAJECTORY_RELATION_COLUMNS
 
 
 def _json_trajectories_select() -> SqlFragment:
@@ -488,7 +458,11 @@ def _bind_parquet_reader(
 # ---------------------------------------------------------------------------
 
 
-def _gate_session_dirs(con: duckdb.DuckDBPyConnection, sessions_dir: Path) -> tuple[str, ...]:
+def _gate_session_dirs(
+    con: duckdb.DuckDBPyConnection,
+    sessions_dir: Path,
+    wanted: Collection[str] | None = None,
+) -> tuple[str, ...]:
     """Apply the two per-directory gates; return the names the boundary rejected.
 
     Walks ``sessions_dir`` once, right after ``v_raw_meta`` is read and
@@ -512,10 +486,14 @@ def _gate_session_dirs(con: duckdb.DuckDBPyConnection, sessions_dir: Path) -> tu
     rows = con.execute(f"SELECT session_id_path FROM {_RAW_META_TABLE}").fetchall()  # noqa: S608  # nosec B608 - module constant
     with_meta = {row[0] for row in rows}
     rejected: list[str] = []
-    for session_dir in sorted(sessions_dir.iterdir()):
-        if not session_dir.is_dir():
-            continue
-        name = session_dir.name
+    # A filtered registration is handed names rather than a listing; either
+    # way a name is checked before it becomes a path.
+    names = (
+        sorted(entry.name for entry in sessions_dir.iterdir() if entry.is_dir())
+        if wanted is None
+        else sorted(set(wanted))
+    )
+    for name in names:
         rejection = session_id_rejection(name)
         if rejection is not None:
             logger.warning(
@@ -524,7 +502,8 @@ def _gate_session_dirs(con: duckdb.DuckDBPyConnection, sessions_dir: Path) -> tu
             con.execute(f"DELETE FROM {_RAW_META_TABLE} WHERE session_id_path = ?", [name])  # noqa: S608  # nosec B608 - module constant; the name is bound
             rejected.append(name)
             continue
-        if name not in with_meta:
+        session_dir = sessions_dir / name
+        if name not in with_meta and session_dir.is_dir():
             logger.warning(
                 "Skipping incomplete session dir {} (no meta.json — "
                 "crashed writer or partial cleanup); excluded from all views",
@@ -570,7 +549,33 @@ def _split_sources(
     return columnar_ids, json_ids
 
 
-def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSources:
+def _typed_empty_table(
+    con: duckdb.DuckDBPyConnection, table: str, columns: Sequence[tuple[str, str]]
+) -> None:
+    """Create ``table`` as a zero-row TEMP TABLE of ``columns`` (a filtered pass found no file)."""
+    con.execute(f"CREATE OR REPLACE TEMP TABLE {table} AS {_typed_empty(columns)};")  # nosec B608 - module constant over catalog constants
+
+
+def _json_reader_columns(columns: dict[str, str], path_column: str) -> tuple[tuple[str, str], ...]:
+    """What ``SELECT *, filename AS <path>, <key>`` over a ``read_json(filename=true)`` yields."""
+    return (
+        *columns.items(),
+        ("filename", "VARCHAR"),
+        (path_column, "VARCHAR"),
+        ("session_id_path", "VARCHAR"),
+    )
+
+
+def _existing(paths: Iterable[Path]) -> list[str]:
+    return [str(path) for path in paths if path.is_file()]
+
+
+def register_raw(
+    con: duckdb.DuckDBPyConnection,
+    corpus_root: Path,
+    *,
+    session_ids: Collection[str] | None = None,
+) -> RawSources:
     """Create the raw readers over ``corpus_root``.
 
     ``v_raw_meta`` / ``v_raw_edges`` / ``v_raw_loss_reports`` are TEMP TABLEs
@@ -591,7 +596,10 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     ``v_raw_trajectories_json`` from a bound file list and unnested per
     query, as every version before the columnar artifacts did). A corpus
     with no columnar session registers exactly as before; a corpus with no
-    JSON session never opens a ``trajectory.json``.
+    JSON session never opens a ``trajectory.json``. ``v_raw_trajectories``
+    ends with a ``corpus`` column: the corpus directory's name, the same
+    value the lake stores, so the ``sessions`` view names its corpus on
+    either path.
 
     TORN-SET GUARD: ``meta.json`` is written last by the corpus writer, so
     its presence marks a session dir as complete. Every other reader is
@@ -612,6 +620,11 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         Open DuckDB connection.
     corpus_root
         Materialized corpus root (the directory containing ``sessions/``).
+    session_ids
+        Register only these sessions (the lake writer loads a batch at a
+        time). The globs become explicit lists of the files that exist, and a
+        batch with no complete session registers every relation empty rather
+        than failing. ``None`` (the default) registers the whole corpus.
 
     Returns
     -------
@@ -622,15 +635,22 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     Raises
     ------
     duckdb.Error
-        If any DDL fails (including an empty/absent corpus — ``read_json``
-        errors on a glob with zero matches, which is the honest failure
-        mode for "nothing materialized yet"). Logged via
+        If any DDL fails (including an empty/absent corpus on an unfiltered
+        pass — ``read_json`` errors on a glob with zero matches, which is the
+        honest failure mode for "nothing materialized yet"). Logged via
         ``logger.exception`` before re-raise.
     """
     sessions_dir = corpus_root / "sessions"
-    edges_glob = str(sessions_dir / "*" / "edges.jsonl")
-    loss_glob = str(sessions_dir / "*" / "loss_report.json")
-    meta_glob = str(sessions_dir / "*" / "meta.json")
+    wanted = None if session_ids is None else sorted(set(session_ids))
+    # A filtered pass names its files. Every id is checked against the
+    # boundary before it becomes a path, and only files that exist are
+    # listed, because read_json errors on one missing file in a list.
+    wanted_ok = [sid for sid in wanted or () if session_id_rejection(sid) is None]
+    meta_source: str | list[str] = (
+        str(sessions_dir / "*" / "meta.json")
+        if wanted is None
+        else _existing(sessions_dir / sid / "meta.json" for sid in wanted_ok)
+    )
 
     # meta.json is written LAST by atif-corpus — its presence marks a
     # session dir as COMPLETE. The edges and loss readers are restricted to
@@ -641,26 +661,31 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
     meta_gate = f"session_id_path IN (SELECT session_id_path FROM {_RAW_META_TABLE})"  # noqa: S608  # nosec B608 - module constant
 
     try:
-        # meta FIRST: every other reader derives from it. The glob is the
-        # statement's one parameter.
-        con.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE {_RAW_META_TABLE} AS
-            SELECT *,
-                   filename AS meta_path,
-                   regexp_extract(filename, '/sessions/([^/]+)/meta\\.json$', 1)
-                       AS session_id_path
-            FROM read_json(
-                ?,
-                format='auto',
-                filename=true,
-                columns={{{_render_columns_clause(_META_COLUMNS)}}}
-            );
-            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table and columns are constants
-            [meta_glob],
-        )
-        logger.debug("Registered {} from glob {}", _RAW_META_TABLE, meta_glob)
-        rejected = _gate_session_dirs(con, sessions_dir)
+        # meta FIRST: every other reader derives from it. The glob (or file
+        # list) is the statement's one parameter.
+        if meta_source:
+            con.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE {_RAW_META_TABLE} AS
+                SELECT *,
+                       filename AS meta_path,
+                       regexp_extract(filename, '/sessions/([^/]+)/meta\\.json$', 1)
+                           AS session_id_path
+                FROM read_json(
+                    ?,
+                    format='auto',
+                    filename=true,
+                    columns={{{_render_columns_clause(_META_COLUMNS)}}}
+                );
+                """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table and columns are constants
+                [meta_source],
+            )
+        else:
+            _typed_empty_table(
+                con, _RAW_META_TABLE, _json_reader_columns(_META_COLUMNS, "meta_path")
+            )
+        logger.debug("Registered {} from {}", _RAW_META_TABLE, "glob" if wanted is None else "list")
+        rejected = _gate_session_dirs(con, sessions_dir, wanted)
 
         columnar_ids, json_ids = _split_sources(con, sessions_dir)
         logger.info(
@@ -774,7 +799,10 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         ):
             # Table names are module constants; every branch is built above
             # from catalog constants over module-constant readers.
-            con.execute(f"CREATE OR REPLACE VIEW {table} AS\n{_union_or_empty(branches, columns)};")  # nosec B608 - constants only
+            body = _union_or_empty(branches, columns)
+            if table == _RAW_TRAJECTORIES_TABLE:
+                body = _with_corpus(body, corpus_root)
+            con.execute(f"CREATE OR REPLACE VIEW {table} AS\n{body};")  # nosec B608 - constants only
             logger.debug("Registered {} ({} source branch(es))", table, len(branches))
 
         # edges.jsonl is one line per RAW record -> newline_delimited.
@@ -782,47 +810,67 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         # the edges.jsonl path itself is aliased to `edges_path`. The glob
         # reads every matching file (the meta gate filters rows afterwards),
         # so the bound is sized over every file the glob can reach.
-        edges_bound = _object_size_bound(sessions_dir.glob("*/edges.jsonl"))
-        con.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE {_RAW_EDGES_TABLE} AS
-            SELECT * FROM (
-                SELECT *,
-                       filename AS edges_path,
-                       regexp_extract(filename, '/sessions/([^/]+)/edges\\.jsonl$', 1)
-                           AS session_id_path
-                FROM read_json(
-                    ?,
-                    format='newline_delimited',
-                    filename=true,
-                    columns={{{_render_columns_clause(_EDGE_COLUMNS)}}},
-                    maximum_object_size={int(edges_bound)}
-                )
-            ) WHERE {meta_gate};
-            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants; the bound is an int
-            [edges_glob],
-        )
-        logger.debug("Registered {} from glob {}", _RAW_EDGES_TABLE, edges_glob)
+        if wanted is None:
+            edges_source: str | list[str] = str(sessions_dir / "*" / "edges.jsonl")
+            edges_bound = _object_size_bound(sessions_dir.glob("*/edges.jsonl"))
+            loss_source: str | list[str] = str(sessions_dir / "*" / "loss_report.json")
+        else:
+            edge_paths = [sessions_dir / sid / "edges.jsonl" for sid in wanted_ok]
+            edges_source = _existing(edge_paths)
+            edges_bound = _object_size_bound(edge_paths)
+            loss_source = _existing(sessions_dir / sid / "loss_report.json" for sid in wanted_ok)
+        if edges_source:
+            con.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE {_RAW_EDGES_TABLE} AS
+                SELECT * FROM (
+                    SELECT *,
+                           filename AS edges_path,
+                           regexp_extract(filename, '/sessions/([^/]+)/edges\\.jsonl$', 1)
+                               AS session_id_path
+                    FROM read_json(
+                        ?,
+                        format='newline_delimited',
+                        filename=true,
+                        columns={{{_render_columns_clause(_EDGE_COLUMNS)}}},
+                        maximum_object_size={int(edges_bound)}
+                    )
+                ) WHERE {meta_gate};
+                """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants; the bound is an int
+                [edges_source],
+            )
+        else:
+            _typed_empty_table(
+                con, _RAW_EDGES_TABLE, _json_reader_columns(_EDGE_COLUMNS, "edges_path")
+            )
+        logger.debug("Registered {}", _RAW_EDGES_TABLE)
 
-        con.execute(
-            f"""
-            CREATE OR REPLACE TEMP TABLE {_RAW_LOSS_REPORTS_TABLE} AS
-            SELECT * FROM (
-                SELECT *,
-                       filename AS report_path,
-                       regexp_extract(filename, '/sessions/([^/]+)/loss_report\\.json$', 1)
-                           AS session_id_path
-                FROM read_json(
-                    ?,
-                    format='auto',
-                    filename=true,
-                    columns={{{_render_columns_clause(_LOSS_REPORT_COLUMNS)}}}
-                )
-            ) WHERE {meta_gate};
-            """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants
-            [loss_glob],
-        )
-        logger.debug("Registered {} from glob {}", _RAW_LOSS_REPORTS_TABLE, loss_glob)
+        if loss_source:
+            con.execute(
+                f"""
+                CREATE OR REPLACE TEMP TABLE {_RAW_LOSS_REPORTS_TABLE} AS
+                SELECT * FROM (
+                    SELECT *,
+                           filename AS report_path,
+                           regexp_extract(filename, '/sessions/([^/]+)/loss_report\\.json$', 1)
+                               AS session_id_path
+                    FROM read_json(
+                        ?,
+                        format='auto',
+                        filename=true,
+                        columns={{{_render_columns_clause(_LOSS_REPORT_COLUMNS)}}}
+                    )
+                ) WHERE {meta_gate};
+                """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants
+                [loss_source],
+            )
+        else:
+            _typed_empty_table(
+                con,
+                _RAW_LOSS_REPORTS_TABLE,
+                _json_reader_columns(_LOSS_REPORT_COLUMNS, "report_path"),
+            )
+        logger.debug("Registered {}", _RAW_LOSS_REPORTS_TABLE)
     except Exception:
         # register-or-fail-loud — any DuckDB error must surface to the caller.
         logger.exception("Failed to register raw readers over {}", corpus_root)
@@ -832,6 +880,17 @@ def register_raw(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> RawSource
         json_session_ids=tuple(json_ids),
         lazy_read_paths=tuple(lazy_paths),
         rejected_session_ids=rejected,
+    )
+
+
+def _with_corpus(body: SqlFragment, corpus_root: Path) -> SqlFragment:
+    """Append the ``corpus`` column (the corpus directory's name) to the trajectory rows.
+
+    ``CREATE VIEW`` cannot be prepared, so the name enters the statement
+    through :func:`sql_literal`, as ``ATTACH`` paths do.
+    """
+    return SqlFragment(
+        f"SELECT *, {sql_literal(corpus_root.name)} AS {CORPUS_COLUMN} FROM (\n{body}\n)"  # noqa: S608  # nosec B608 - the constant-built union plus a sql_literal
     )
 
 
@@ -888,6 +947,10 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         # and a ``git`` struct. A Claude Code session spanning two cwds reports
         # one of them silently, so treat the column as indicative, not
         # exhaustive.
+        #
+        # ``corpus`` names the corpus the session belongs to (the corpus
+        # directory's name). Scoped to one corpus it is one value; over the
+        # lake with every corpus attached it is how a query tells them apart.
         con.execute(
             """
             CREATE OR REPLACE VIEW sessions AS
@@ -911,7 +974,8 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
                 t.final_metrics.total_cost_usd                        AS total_cost_usd,
                 CAST(json_extract(t.final_metrics.extra, '$.reported_cost_usd') AS DOUBLE)
                                                                       AS reported_cost_usd,
-                t.trajectory_path
+                t.trajectory_path,
+                t.corpus
             FROM v_raw_trajectories t
             LEFT JOIN (
                 SELECT
@@ -1868,6 +1932,7 @@ def register(
     lance_uri: Path | None = None,
     expected_model: str | None = None,
     expected_dim: int | None = None,
+    lake: LakeReader | None = None,
 ) -> RawSources:
     """Register raw readers, views, VSS, and macros over ``corpus_root``, in order.
 
@@ -1908,6 +1973,13 @@ def register(
         ``<corpus_root>/embeddings_lance`` (atif-embed's per-corpus default).
     expected_model, expected_dim
         Active embedder identity for :func:`register_vss`'s fail-loud guard.
+    lake
+        A lake already attached by
+        :func:`atif_duck.infrastructure.lake.attach_lake_for_query`. When given,
+        the raw relations are views over its tables (scoped as it says)
+        instead of readers over ``corpus_root``'s per-session artifacts, and
+        nothing is loaded eagerly. ``corpus_root`` still locates the
+        analytics parquets and the default embeddings store.
 
     Raises
     ------
@@ -1920,7 +1992,12 @@ def register(
     )
     from atif_duck.infrastructure.authorship import register_authorship
 
-    sources = register_raw(con, corpus_root)
+    if lake is not None:
+        from atif_duck.infrastructure.lake import register_lake_raw
+
+        sources = register_lake_raw(con, lake)
+    else:
+        sources = register_raw(con, corpus_root)
     register_views(con)
     if not skip_vss:
         register_vss(

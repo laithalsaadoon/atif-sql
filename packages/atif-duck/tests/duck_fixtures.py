@@ -841,3 +841,51 @@ def lance_extension_present() -> None:
         con.execute("INSTALL lance")
     finally:
         con.close()
+
+
+# The lake tests need the ducklake extension; query-time code only LOADs it,
+# so the suite installs it once up front, as it does lance.
+@pytest.fixture(scope="session", autouse=True)
+def ducklake_extension_present() -> None:
+    from atif_duck.infrastructure.lake import install_ducklake_extension
+
+    install_ducklake_extension()
+
+
+# ---------------------------------------------------------------------------
+# Both read paths. The view tests take their connection through
+# ``register_via`` so each one runs over the per-session artifacts AND over a
+# lake loaded from them: the lake path must return the same rows.
+# ---------------------------------------------------------------------------
+
+READ_PATHS: tuple[str, ...] = ("per-session", "lake")
+
+
+def register_via(con: Any, corpus_root: Path, read_path: str, **kwargs: Any) -> Any:
+    """``register`` over ``corpus_root``, through a lake built from it when ``read_path`` says so."""
+    from atif_duck.infrastructure.lake import (
+        LakeCorpus,
+        LakeLayout,
+        LakeReader,
+        attach_lake_for_query,
+        corpus_agent,
+        rebuild_lake,
+    )
+    from atif_duck.infrastructure.registry import register
+
+    lake = None
+    if read_path == "lake":
+        layout = LakeLayout(corpus_root / ".test-lake")
+        rebuild_lake(layout, [LakeCorpus(root=corpus_root, agent=corpus_agent(corpus_root))])
+        attached = attach_lake_for_query(con, layout, corpus_root=corpus_root, all_corpora=False)
+        assert isinstance(attached, LakeReader), attached
+        lake = attached
+    sources = register(con, corpus_root, lake=lake, **kwargs)
+    assert sources.from_lake is (read_path == "lake")
+    return sources
+
+
+@pytest.fixture(params=READ_PATHS)
+def read_path(request: pytest.FixtureRequest) -> str:
+    """``per-session`` or ``lake``: which source the views read."""
+    return str(request.param)

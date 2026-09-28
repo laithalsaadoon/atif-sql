@@ -71,6 +71,7 @@ VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("total_cost_usd", "DOUBLE"),
         ("reported_cost_usd", "DOUBLE"),
         ("trajectory_path", "VARCHAR"),
+        ("corpus", "VARCHAR"),
     ),
     "steps": (
         ("session_id", "VARCHAR"),
@@ -490,7 +491,8 @@ DESCRIPTIONS: dict[str, str] = {
         "counts, model, cost. total_cost_usd is our estimate from token counts "
         "(NULL when any step's model has no price); reported_cost_usd is what "
         "Claude Code itself recorded (its last cost-state record), NULL for Codex "
-        "and for sessions without one."
+        "and for sessions without one. corpus names the corpus the session belongs "
+        "to; `query --all-corpora` spans every corpus in the lake."
     ),
     "steps": "One row per ATIF step (turn): flattened message text plus token metrics.",
     "messages": "Raw-record identity from edges.jsonl: uuid, parent_uuid, type, timestamp.",

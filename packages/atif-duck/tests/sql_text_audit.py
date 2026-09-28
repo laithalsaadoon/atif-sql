@@ -151,10 +151,10 @@ class ModuleAudit:
         ``name`` from the generator, not from the function's locals, and the
         generator's target inherits the trust of what it iterates.
         """
-        comprehensions: list[ast.GeneratorExp | ast.ListComp | ast.SetComp] = []
+        comprehensions: list[ast.GeneratorExp | ast.ListComp | ast.SetComp | ast.DictComp] = []
         current: ast.AST | None = self.parents.get(node)
         while current is not None and not isinstance(current, ast.FunctionDef):
-            if isinstance(current, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+            if isinstance(current, (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp)):
                 comprehensions.append(current)
             current = self.parents.get(current)
         bound: dict[str, bool] = {}
@@ -208,6 +208,13 @@ class ModuleAudit:
                 for name in _target_names(generator.target):
                     inner[name] = iterable_ok
             return self.trusted(node.elt, fn, inner)
+        if isinstance(node, ast.DictComp):
+            inner = dict(bound)
+            for generator in node.generators:
+                iterable_ok = self.trusted(generator.iter, fn, inner)
+                for name in _target_names(generator.target):
+                    inner[name] = iterable_ok
+            return self.trusted(node.key, fn, inner) and self.trusted(node.value, fn, inner)
         if isinstance(node, ast.Starred):
             return self.trusted(node.value, fn, bound)
         if isinstance(node, ast.NamedExpr):

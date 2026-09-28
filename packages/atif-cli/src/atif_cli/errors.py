@@ -53,6 +53,10 @@ EXIT_CODES: dict[str, int] = {
     # same wrong root cannot succeed — but a distinct `kind` string, because the
     # remedy is a path, not a store. A separate code matters most for what it is
     # NOT: exit 1 here is an uncaught traceback, indistinguishable from a crash.
+    "lake_mismatch": 65,  # lake verify: a session's lake rows differ from its artifacts
+    # (EX_DATAERR). `atif-sql lake rebuild` reloads every corpus from its artifacts.
+    "lake_unavailable": 78,  # lake verify/compact: no lake, a stale one, or no ducklake
+    # extension; an operator runs `atif-sql lake rebuild` (EX_CONFIG, like terminal_state).
     "harbor_missing": 127,  # RETIRED, kept so this table never renumbers. It named
     # the loss of the private harbor method the converter used to be built on; the
     # conversion is ours now (atif_converter.domain.*_conversion), so no code path

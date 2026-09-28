@@ -36,6 +36,14 @@ from test_vss import DIM, MODEL, _write_lance
 
 from atif_duck.domain.catalog import VIEW_NAMES
 from atif_duck.infrastructure.columnar import ColumnarArtifactProducer, columnar_coverage
+from atif_duck.infrastructure.lake import (
+    LakeCorpus,
+    LakeError,
+    LakeLayout,
+    LakeReader,
+    attach_lake_for_query,
+    rebuild_lake,
+)
 from atif_duck.infrastructure.registry import register, register_raw, register_vss
 
 #: packages/atif-duck/tests/ -> packages/
@@ -50,6 +58,8 @@ SQL_MODULES: dict[str, Path] = {
     "analytics": _DUCK_INFRA / "analytics.py",
     "authorship": _DUCK_INFRA / "authorship.py",
     "authorship_rules": _DUCK_INFRA.parent / "domain" / "authorship.py",
+    "lake": _DUCK_INFRA / "lake.py",
+    "lake_tables": _DUCK_INFRA.parent / "domain" / "lake.py",
     "corpus_text_rows": _EMBED_INFRA / "corpus_text_rows.py",
 }
 
@@ -267,6 +277,32 @@ class TestAdversarialContentIsData:
             live = sorted(map(repr, columnar_con.execute(f"SELECT * FROM {view}").fetchall()))
             assert live == json_rows[view], view
 
+    def test_lake_path_under_a_hostile_corpus_and_lake_root(self, hostile_root: Path) -> None:
+        """The corpus name enters the lake as data and a quoted lake root still attaches."""
+        add_columnar(hostile_root, (*SESSION_IDS, ADVERSARIAL_SESSION))
+        per_session = duckdb.connect(":memory:")
+        register(per_session, hostile_root)
+        # Everything but '?', which DuckDB reads as the start of options in
+        # a database path; the lake refuses such a root (test below).
+        layout = LakeLayout(hostile_root.parent / "lake o'brien; --$1")
+        rebuild_lake(layout, [LakeCorpus(root=hostile_root, agent="claude-code")])
+        con = duckdb.connect(":memory:")
+        reader = attach_lake_for_query(con, layout, corpus_root=hostile_root, all_corpora=False)
+        assert isinstance(reader, LakeReader), reader
+        assert reader.corpus == HOSTILE_ROOT_NAME
+        register(con, hostile_root, lake=reader)
+        _assert_adversarial_content_is_data(con, hostile_root)
+        for view in VIEW_NAMES:
+            query = f"SELECT * FROM {view}"
+            assert sorted(map(repr, con.execute(query).fetchall())) == sorted(
+                map(repr, per_session.execute(query).fetchall())
+            ), view
+
+    def test_a_lake_root_with_a_question_mark_is_refused(self, hostile_root: Path) -> None:
+        layout = LakeLayout(hostile_root.parent / "lake?x")
+        with pytest.raises(LakeError, match="may not contain"):
+            rebuild_lake(layout, [LakeCorpus(root=hostile_root, agent="claude-code")])
+
     def test_analytics_parquets_under_the_hostile_root_bind(self, hostile_root: Path) -> None:
         analytics = hostile_root / "analytics" / "session_classifications"
         analytics.mkdir(parents=True)
@@ -450,6 +486,19 @@ class TestEveryPlaceholderIsTrusted:
             "user_input",
             "where",
         ]
+
+    def test_a_dict_comprehension_is_audited_like_any_other(self) -> None:
+        """A module-level dict of statements is trusted only over a trusted iterable."""
+        planted = (
+            "TABLES = ('a', 'b')\n"
+            'GOOD = {t: f"SELECT * FROM {t}" for t in TABLES}\n'
+            "def bad(con, names):\n"
+            '    return {n: f"SELECT * FROM {n}" for n in names}\n'
+            "outside = input()\n"
+            'WORSE = {t: f"SELECT * FROM {t} WHERE x = {outside.strip()}" for t in TABLES}\n'
+        )
+        audit = audit_source(planted)
+        assert sorted(v.expression for v in audit.violations) == ["n", "outside.strip()"]
 
     def test_the_trusted_shapes_pass(self) -> None:
         accepted = (
