@@ -58,7 +58,12 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   perceived — see `PIPELINE_NAMES` in
   `infrastructure/sqlite_state/checkpointer.py`). They read human turns only
   (`domain.authorship`), and classify and conflicts skip automated review
-  (`turn_audit`) and one-shot-job sessions. The trajectory pipeline and the structural
+  (`turn_audit`) and one-shot-job sessions. Session data comes through the
+  `SessionSource` port (`domain.ports`): the default reads each session's
+  `trajectory.json` and `edges.jsonl`, and atif-cli plugs in the lake's
+  (`atif_cli.lake_sessions`). Both build steps through
+  `domain.transcript.step_event`, so the projection rules are written once.
+  The trajectory pipeline and the structural
   cluster/terms/community pipelines were cut on 2026-09-27; outcome is the
   deterministic `session_outcomes` view now. Layered: `application` >
   `infrastructure` > `domain`.
@@ -245,7 +250,9 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   the same way. Each corpus keeps its own embeddings store in its directory,
   and under `--all-corpora` `message_embeddings` is the union of every
   corpus's store (one store for all when `ATIF_SQL_LANCE_URI` pins it). The
-  analytics tables still read the corpus directory.
+  analytics views read each corpus's `analytics/` parquets on either path,
+  and with `--all-corpora` they read every lake corpus's (granted file by
+  file like the rest).
 - Embed discovery: `atif-sql embed` reads the steps to embed from the lake's
   `steps` table (primary uuid = `source_uuids[0]`, text = `message`, the
   store's existing key and text), in the per-session reader's order, so the
@@ -260,6 +267,26 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   a `--limit`) and embedded every row. `embed --prune-orphans` counts stored
   rows whose uuid is no lake step's (dry run unless `--no-dry-run`, refused
   while sessions are pending a lake write).
+- Analytics: `analyze` reads session data from the lake when the lake holds
+  the corpus (`--no-lake` reads the files). A session is read from the lake
+  only when its `session_meta` row carries the `materialized_at` and
+  `source_mtime_ns` its `meta.json` carries now; any other session (not
+  loaded, left behind by a failed or skipped lake write) is read from its
+  files, so a lagging lake never hands a pipeline an older transcript. Session
+  enumeration and the `trajectory.json` mtime bound come from the session
+  directories either way, so the checkpoint sees the same bounds. The
+  outputs stay parquet under `analytics/`, not lake tables: they're a few
+  small shard directories per corpus that one process appends to, so the lake
+  would add a second writer to lock against materialize and a pending ledger
+  for a failed sync, and buy no fewer files.
+- Row order and layout: a step's tool calls and results have no ordinal, so
+  their order is insertion order (`rowid`), and the writer inserts the
+  step-level tables (`SOURCE_ORDERED_TABLES`) on one thread, since a parallel
+  partitioned insert interleaves rows. Files are written in small row groups
+  (`LAKE_ROW_GROUP_SIZE`), so reading one session touches only the groups
+  holding it rather than a month of a corpus. Both are part of the schema
+  digest, so a lake written otherwise is stale and the next materialize
+  rebuilds it.
 - Commands: `atif-sql lake rebuild` builds a fresh lake from every registered
   corpus plus every corpus under `ATIF_SQL_CORPUS_BASE` (or the
   `--corpus-root`s given) beside the old one and swaps the directory in.
