@@ -120,7 +120,12 @@ class TestEndToEnd:
         assert inline["materialized"] == pooled["materialized"] == 2
         assert pooled["failures"] == []
         for session_id in (SESSION_A, SESSION_B):
-            for name in ("trajectory.json", "edges.jsonl", "loss_report.json"):
+            for name in (
+                "trajectory.json.zst",
+                "edges.jsonl.zst",
+                "session_events.jsonl.zst",
+                "loss_report.json",
+            ):
                 assert (pooled_root / "sessions" / session_id / name).read_bytes() == (
                     corpus_root / "sessions" / session_id / name
                 ).read_bytes(), f"{session_id}/{name}"

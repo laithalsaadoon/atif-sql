@@ -244,6 +244,7 @@ ignore = [
 "**/atif_cli/app.py" = ["T20"]
 "**/atif_cli/cron.py" = ["T20"]
 "**/atif_cli/lake.py" = ["T20"]
+"**/atif_cli/corpus.py" = ["T20"]
 # `scripts/` and `experiments/` are executed by path (`python3 scripts/x.py`),
 # never imported, so neither is a package.
 "scripts/**" = ["INP001"]

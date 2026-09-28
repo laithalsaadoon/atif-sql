@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 import zstandard
-from cli_fixtures import write_synthetic_session
+from cli_fixtures import read_artifact_bytes, write_synthetic_session
 
 from atif_cli.app import materialize, query, status
 from atif_cli.converter_adapter import RealConverter
@@ -152,7 +152,9 @@ class TestLifecycleThroughTheRealConverter:
         _materialize(source_root, corpus_root, capsys)
         (source_root / "-tmp-proj" / f"{SESSION_A}.jsonl").unlink()
         _materialize(source_root, corpus_root, capsys)
-        trajectory_before = (corpus_root / "sessions" / SESSION_A / "trajectory.json").read_bytes()
+        trajectory_before = read_artifact_bytes(
+            corpus_root / "sessions" / SESSION_A / "trajectory.json.zst"
+        )
 
         monkeypatch.setattr(schema_version_module, "CONVERTER_SCHEMA_VERSION", 99)
         assert _status(source_root, corpus_root, capsys)["staleness"]["generation_stale"] == 1
@@ -165,7 +167,9 @@ class TestLifecycleThroughTheRealConverter:
             assert _meta(corpus_root, session_id)["converter_schema"] == 99
         # Converted from the restored archive by the real converter: same input,
         # same converter code, so the same trajectory bytes.
-        trajectory_after = (corpus_root / "sessions" / SESSION_A / "trajectory.json").read_bytes()
+        trajectory_after = read_artifact_bytes(
+            corpus_root / "sessions" / SESSION_A / "trajectory.json.zst"
+        )
         assert trajectory_after == trajectory_before
         assert _meta(corpus_root, SESSION_A)["source_present"] is False
         assert _materialize(source_root, corpus_root, capsys)["materialized"] == 0

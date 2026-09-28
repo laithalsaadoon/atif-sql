@@ -23,7 +23,12 @@ from typing import Any
 
 import duckdb
 import pytest
-from cli_fixtures import write_analytics_parquets, write_synthetic_session
+from cli_fixtures import (
+    read_artifact_text,
+    write_analytics_parquets,
+    write_artifact_text,
+    write_synthetic_session,
+)
 from loguru import logger
 
 from atif_cli import app as app_mod
@@ -317,7 +322,7 @@ class TestQueryReadsTheLake:
     def test_every_panel_query_agrees_between_the_two_paths(
         self, shared_lake_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from test_columnar_cli import PANEL_QUERIES
+        from test_storage_layout_cli import PANEL_QUERIES
 
         for sql in PANEL_QUERIES:
             assert _query(sql, shared_lake_corpus, capsys) == _query(
@@ -522,9 +527,9 @@ class TestLakeCommands:
     def test_verify_exits_65_on_a_tampered_artifact_and_78_without_a_lake(
         self, lake_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        edges = lake_corpus / "sessions" / SESSION_B / "edges.jsonl"
-        edges.chmod(0o644)
-        edges.write_text(edges.read_text() + edges.read_text().splitlines()[0] + "\n")
+        edges = lake_corpus / "sessions" / SESSION_B / "edges.jsonl.zst"
+        text = read_artifact_text(edges)
+        write_artifact_text(edges, text + text.splitlines()[0] + "\n")
         assert _exit_code(verify, fmt="json") == EXIT_CODES["lake_mismatch"]
         payload = _json(capsys)
         assert payload["mismatched_sessions"] == 1

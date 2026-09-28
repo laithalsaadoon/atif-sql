@@ -31,6 +31,9 @@ dependencies = [
     # (the analytics views carry tz-aware ts/classified_at/detected_at
     # columns); without it every fetch of those columns raises.
     "pytz>=2024.1",
+    # The lake loader decodes compressed trajectories (trajectory.json.zst) in
+    # Python, and reads a compressed artifact's size from its frame header.
+    "zstandard>=0.25.0",
 ]
 
 [project.urls]

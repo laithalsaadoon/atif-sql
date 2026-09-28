@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from atif_duck.domain import artifacts
 from atif_duck.domain.catalog import VIEW_SCHEMA
 
 if TYPE_CHECKING:
@@ -72,8 +73,9 @@ COLUMNAR_FILENAMES: tuple[str, ...] = (
     SESSION_EVENTS_PARQUET,
 )
 
-#: The JSON artifact the ``session_events`` rows come from (atif-corpus writes it).
-SESSION_EVENTS_JSONL: str = "session_events.jsonl"
+#: The JSON artifact the ``session_events`` rows come from (atif-corpus writes
+#: it, compressed on a current corpus: see :mod:`atif_duck.domain.artifacts`).
+SESSION_EVENTS_JSONL: str = artifacts.SESSION_EVENTS_JSONL
 
 #: ``session.parquet`` columns. ``session_id_path`` is the session directory
 #: name, the canonical key every view uses as ``session_id``; the rest are the

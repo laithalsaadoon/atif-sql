@@ -17,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from atif_duck.infrastructure.lake import (
     DEFAULT_LOAD_BATCH_SIZE,
     DEFAULT_LOCK_TIMEOUT_SECONDS,
+    DEFAULT_STAGE_WORKERS,
     DEFAULT_SYNC_BATCH_SIZE,
 )
 
@@ -48,6 +49,10 @@ class LakeSettings(BaseSettings):
     #: Sessions per lake transaction when a whole corpus is loaded
     #: (``ATIF_SQL_LAKE_LOAD_BATCH_SIZE``).
     lake_load_batch_size: int = Field(default=DEFAULT_LOAD_BATCH_SIZE, ge=1)
+    #: Processes that stage a batch's parquet from its compressed trajectories
+    #: while the lake loads it (``ATIF_SQL_LAKE_STAGE_WORKERS``); 1 stages in
+    #: the loading process.
+    lake_stage_workers: int = Field(default=DEFAULT_STAGE_WORKERS, ge=1)
     #: Seconds a writer waits for another writer (``ATIF_SQL_LAKE_LOCK_TIMEOUT_SECONDS``).
     lake_lock_timeout_seconds: float = Field(default=DEFAULT_LOCK_TIMEOUT_SECONDS, gt=0)
     #: ``lake compact`` expires snapshots older than this many days

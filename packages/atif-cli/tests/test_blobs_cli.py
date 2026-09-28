@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
+from cli_fixtures import read_artifact_text
 
 from atif_cli.app import materialize, query
 from atif_cli.output import OutputFormat
@@ -110,7 +111,7 @@ def test_an_inline_image_is_stored_once_and_queryable(
     assert report["materialized"] == 1
     assert report["failed"] == 0
 
-    trajectory = (corpus / "sessions" / SESSION / "trajectory.json").read_text()
+    trajectory = read_artifact_text(corpus / "sessions" / SESSION / "trajectory.json.zst")
     assert base64.b64encode(IMAGE).decode() not in trajectory
     digest = hashlib.sha256(IMAGE).hexdigest()
     assert f"[image sha256:{digest} image/png {len(IMAGE)} bytes]" in trajectory

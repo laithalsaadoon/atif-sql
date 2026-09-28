@@ -157,6 +157,71 @@ def write_synthetic_session(source_root: Path, session_id: str) -> Path:
     return main
 
 
+def read_artifact_bytes(path: Path) -> bytes:
+    """A stored artifact's bytes, decompressed when it is a ``.zst`` file."""
+    import zstandard
+
+    data = path.read_bytes()
+    if path.name.endswith(".zst"):
+        with zstandard.ZstdDecompressor().stream_reader(data) as reader:
+            return reader.readall()
+    return data
+
+
+def read_artifact_text(path: Path) -> str:
+    """A stored artifact's text, decompressed when it is a ``.zst`` file."""
+    return read_artifact_bytes(path).decode("utf-8")
+
+
+def write_artifact_text(path: Path, text: str) -> None:
+    """Replace a stored artifact's content, compressing it when it is a ``.zst`` file."""
+    import zstandard
+
+    data = text.encode("utf-8")
+    if path.name.endswith(".zst"):
+        data = zstandard.ZstdCompressor().compress(data)
+    path.chmod(0o644)
+    path.write_bytes(data)
+
+
+def to_legacy_layout(corpus_root: Path, session_id: str, *, parquet: bool = True) -> Path:
+    """Rewrite one materialized session into the layout materialize wrote before compression.
+
+    Decompresses ``trajectory.json.zst``, ``edges.jsonl.zst`` and
+    ``session_events.jsonl.zst`` into their plain names (keeping each file's
+    mtime) and, with ``parquet``, writes the five per-session parquet files
+    through the columnar producer and stamps ``meta.columnar_schema``, which
+    is exactly what a default materialize pass wrote then. Returns the
+    session directory.
+    """
+    import zstandard
+
+    from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION, META_COLUMNAR_KEY
+    from atif_duck.infrastructure.columnar import ColumnarArtifactProducer
+
+    session_dir = corpus_root / "sessions" / session_id
+    for name in ("trajectory.json", "edges.jsonl", "session_events.jsonl"):
+        compressed = session_dir / f"{name}.zst"
+        st = compressed.stat()
+        with (
+            compressed.open("rb") as handle,
+            zstandard.ZstdDecompressor().stream_reader(handle) as reader,
+        ):
+            (session_dir / name).write_bytes(reader.readall())
+        os.utime(session_dir / name, ns=(st.st_atime_ns, st.st_mtime_ns))
+        compressed.unlink()
+    if parquet:
+        trajectory = json.loads((session_dir / "trajectory.json").read_text())
+        ColumnarArtifactProducer().produce(
+            session_dir, session_id=session_id, trajectory=trajectory
+        )
+        meta_path = session_dir / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta[META_COLUMNAR_KEY] = COLUMNAR_SCHEMA_VERSION
+        meta_path.write_text(json.dumps(meta) + "\n")
+    return session_dir
+
+
 @pytest.fixture
 def synthetic_session(tmp_path: Path) -> Path:
     """One convertible session's main JSONL under a tmp source root."""

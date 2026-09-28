@@ -20,7 +20,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from corpus_fixtures import NOW_NS, SESSION_A, SESSION_B, STALE_NS, write_session
+from corpus_fixtures import (
+    NOW_NS,
+    SESSION_A,
+    SESSION_B,
+    STALE_NS,
+    read_artifact_text,
+    write_session,
+)
 
 from atif_corpus.application.materialize import MaterializationReport, materialize
 from atif_corpus.domain.layout import CorpusLayout
@@ -57,11 +64,11 @@ class RecordingProducer:
         # The contract the fake asserts on every call: staged dir, JSON
         # artifacts already there, meta.json not yet.
         assert ".staging" in session_dir.parts
-        assert (session_dir / "trajectory.json").is_file()
-        assert (session_dir / "edges.jsonl").is_file()
+        assert (session_dir / "trajectory.json.zst").is_file()
+        assert (session_dir / "edges.jsonl.zst").is_file()
         assert (session_dir / "loss_report.json").is_file()
         assert not (session_dir / "meta.json").exists()
-        assert json.loads((session_dir / "trajectory.json").read_text()) == trajectory
+        assert json.loads(read_artifact_text(session_dir / "trajectory.json.zst")) == trajectory
         self.calls.append((session_dir, session_id, len(trajectory["steps"])))
         (session_dir / "extra.parquet").write_text(session_id)
         if session_id in self.fail_sessions:

@@ -24,9 +24,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   the vendored `domain/model_prices.json` with litellm's arithmetic; a model
   it can't price is NULL. Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-corpus` — corpus materialization: discovery, watermarks,
-  quiescence, atomic artifact writes, the `ArtifactProducer` port that
-  lets the composition root add per-session files (atif-duck's columnar
-  parquets) to the same atomic swap, and the `SessionSink` port that hands
+  quiescence, atomic artifact writes (the bulk JSON artifacts zstd-compressed),
+  in-place compression of an old-layout session for `corpus slim`, the
+  `ArtifactProducer` port that lets a composition root add per-session files
+  to the same atomic swap (atif-cli wires none now), and the `SessionSink` port that hands
   every published session to a store kept beside the corpus (atif-duck's
   DuckLake writer). Per-agent discovery lives in
   `domain.source_layout` (`transcript_depth` 1 for Claude Code, 3 for
@@ -44,9 +45,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `session_outcomes` views); atif-analytics carries an AST-pinned twin of the
   table, and every reader treats only `author = 'human'` as the user
   speaking. Also the
-  `ColumnarArtifactProducer` that writes each session's typed parquet
-  artifacts at materialize time, and the registry that reads them instead of
-  `trajectory.json` when they're current (falling back per session). And the
+  `ColumnarArtifactProducer`, which types one session's trajectory into
+  parquet in bounded memory (the lake loader stages each session through it),
+  and the registry, which reads a session's own parquet when an old-layout
+  session still has current ones and its stored trajectory otherwise. And the
   DuckLake every corpus is queried through (`domain.lake` declares the tables,
   `infrastructure.lake` writes, reads, verifies and compacts it; see
   "Storage" below). Layered: `infrastructure` > `domain`.
@@ -74,7 +76,7 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   Layered: `application` > `infrastructure` > `domain`.
 - `packages/atif-cli` — cyclopts CLI composing the rest into commands
   (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`,
-  `search`, `examples`, `schema`, `cron`, `lake`).
+  `search`, `examples`, `schema`, `cron`, `lake`, `corpus`).
 
 Rules of the road:
 
@@ -164,8 +166,8 @@ Rules of the road:
   source-removed session whose generation is stale re-converts from it.
 - Staleness has two halves. The watermark says whether the SOURCE moved; the
   generation says whether the CODE did: a session whose `meta.converter_schema`
-  (or `meta.columnar_schema`, on a columnar pass) differs from the running value
-  is stale, and one from before the key existed is stale too. `converter_schema`
+  differs from the running value is stale, and one from before the key existed
+  is stale too. `converter_schema`
   is `atif_converter.domain.schema_version.CONVERTER_SCHEMA_VERSION`;
   `meta.converter_version` is the `atif-sql` release and is provenance only
   (the bundled wheel has no `atif-converter` distribution, so the old lookup
@@ -177,9 +179,11 @@ Rules of the road:
   beside the version, so any converter code change fails until you decide: bump
   if output can change, then re-pin the digest either way. A harbor or litellm
   bump can change output with no converter code change, so it needs the same
-  decision by hand. The columnar schema works the same way from atif-duck's
-  `COLUMNAR_SCHEMA_VERSION`: a bump re-converts rather than leaving sessions on
-  the `trajectory.json` fallback.
+  decision by hand. atif-duck's `COLUMNAR_SCHEMA_VERSION` no longer makes a
+  session stale, because materialize writes no per-session parquet: a bump
+  changes the lake's recorded identity, so the next materialize rebuilds the
+  lake, and an old-layout session whose `meta.columnar_schema` no longer
+  matches is read from its trajectory.
 - A transcript with nothing to convert (the converter's `EmptySessionError`,
   translated to the port's `EmptySourceError`) is recorded in
   `<corpus>/empty_sessions.json` with the generation it was checked under, its
@@ -197,9 +201,41 @@ Rules of the road:
 ## Storage
 
 The per-session artifacts under `<corpus>/sessions/<id>/` are the source of
-truth, and materialize keeps writing all of them (`trajectory.json`, the
-columnar parquets, the source archive). Beside them sits one DuckLake that
-holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
+truth. Beside them sits one DuckLake that holds every corpus, at
+`ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`), and the lake is the one
+copy of the queryable rows:
+
+- Per-session artifacts: materialize writes `trajectory.json.zst` (the ATIF
+  document, the interchange copy and what the lake loads from),
+  `edges.jsonl.zst`, `session_events.jsonl.zst`, a plain `loss_report.json`
+  and `meta.json`, and the raw source archive under `source/`. Each `.zst` is
+  one zstd frame whose content size is in its header; decompressed, it's byte
+  for byte the plain file materialize used to write
+  (`atif_corpus.infrastructure.atomic.write_json_zstd_atomic`, which
+  serializes twice so a large document is never held as one string). The
+  names live in `atif_corpus.domain.layout` and are twinned in
+  `atif_duck.domain.artifacts`, `atif_analytics.infrastructure.corpus_reader`
+  and `atif_embed.infrastructure.corpus_text_rows`, pinned by
+  `packages/atif-cli/tests/test_artifact_names_twin_pin.py`. Every reader
+  resolves a session's stored file per session, compressed first
+  (`stored_names`), so a corpus written before this (plain JSON plus five
+  per-session parquet files) keeps working unchanged. Path columns
+  (`sessions.trajectory_path`, the edges reader's `edges_path`) name the
+  logical `trajectory.json` / `edges.jsonl` either way, so a lake row doesn't
+  change when a session is compressed.
+- `atif-sql corpus slim` converts an old-layout corpus, and nothing else does:
+  deploying a new version never rewrites or deletes an artifact. It's a dry
+  run unless `--no-dry-run`, and the dry run compresses into a byte counter,
+  so its report is exact. For real, it compresses each plain artifact in place
+  (`atif_corpus.infrastructure.compress_artifacts`: the copy is read back and
+  compared with the plain file before the plain file is removed, and it keeps
+  the plain file's mtime, because analyze bounds each session by its
+  trajectory's mtime), then runs `lake verify` for that corpus reading every
+  session from its trajectory and ignoring the parquet
+  (`use_session_parquet=False`), and deletes the parquet only when that comes
+  back clean. A corpus the lake doesn't hold or that differs keeps its
+  parquet, and slim exits 78 or 65 once every corpus is done. It never
+  rewrites `meta.json`, so the lake's `session_meta` rows stay equal to it.
 
 - Layout: `catalog.duckdb` is the writer's catalog, `catalog.reader.duckdb`
   is a read-only copy the writer publishes after every write, `data/` holds
@@ -238,6 +274,19 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   not. A failed lake write never fails the pass. With no lake, the sink does
   nothing, so `atif-sql lake rebuild` is what turns it on. A corpus the lake
   doesn't hold yet is loaded whole on first sync.
+- Loading a batch (sync, first load, rebuild, and verify's reading of the
+  artifacts): a session with current parquet of its own (an old-layout
+  session) is read from it. Every other session is staged: its stored
+  trajectory is decoded in Python and typed by the `ColumnarArtifactProducer`
+  into five parquet files under `<lake root>.load-<pid>/<id>/`, which the
+  registry reads (`register_raw(stage_columnar=...)`), and the batch deletes
+  them when it's done. DuckDB's own JSON reader can't be the load path: on the
+  largest sessions it needs more than the writer's whole memory cap. The
+  staged rows are the ones the JSON reader yields (the columnar parity tests,
+  and `test_compressed_layout.py::TestStagedLoad`). `ATIF_SQL_LAKE_STAGE_WORKERS`
+  stages a batch on a spawn-context process pool; the files, and so the
+  inserted rows, don't depend on it. A dead process's `.load-<pid>` is swept
+  like `.rebuild-<pid>`.
 - Reader: `query` loads ducklake (never installs it) and attaches
   `catalog.reader.duckdb` READ_ONLY before the sandbox locks the connection,
   then binds the raw relations as views over the lake tables, scoped to the
@@ -246,8 +295,11 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   the data directory: with the directory granted, a caller's
   `ducklake_cleanup_old_files` deletes files. With no lake, a stale one, or a
   corpus the lake doesn't hold, query prints one warning and reads the
-  per-session artifacts as before (`--no-lake` forces that). `search` reads
-  the same way. Each corpus keeps its own embeddings store in its directory,
+  per-session artifacts as before (`--no-lake` forces that). That fallback
+  parses every trajectory on each run and holds each one in memory, so it's
+  slow on a large corpus, and a full scan of `tool_calls` or `tool_results`
+  there can run out of query memory. That error's hint points at `lake
+  rebuild`. `search` reads the same way. Each corpus keeps its own embeddings store in its directory,
   and under `--all-corpora` `message_embeddings` is the union of every
   corpus's store (one store for all when `ATIF_SQL_LANCE_URI` pins it). The
   analytics views read each corpus's `analytics/` parquets on either path,
@@ -275,8 +327,9 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   `source_mtime_ns` its `meta.json` carries now; any other session (not
   loaded, left behind by a failed or skipped lake write) is read from its
   files, so a lagging lake never hands a pipeline an older transcript. Session
-  enumeration and the `trajectory.json` mtime bound come from the session
-  directories either way, so the checkpoint sees the same bounds. A lake
+  enumeration and the stored trajectory's mtime bound come from the session
+  directories either way, so the checkpoint sees the same bounds (`corpus
+  slim` keeps each file's mtime for this reason). A lake
   read that fails mid-run (a rebuild swapped the lake out, or compact removed
   a file the open attach still names) warns once, and the rest of the run
   reads files. The reader drops a memoized session whenever its bounds move
@@ -310,7 +363,8 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   publishes nothing.
 - Memory: the writer caps DuckDB at 2 GiB (lower when the host or cgroup is),
   and runs DuckLake's file merges and rewrites on one thread, because merging
-  `tool_results` at more threads outgrew that cap. `query` sizes its own cap
+  `tool_results` at more threads outgrew that cap. Each staging worker holds
+  one decoded trajectory at a time, outside that cap. `query` sizes its own cap
   from the cgroup v2 `memory.max` (the tightest one up the cgroup tree) when
   it's lower than what `/proc/meminfo` reports.
 

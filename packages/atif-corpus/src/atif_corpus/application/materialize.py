@@ -140,6 +140,7 @@ from atif_corpus.domain.layout import (
     SOURCE_ARCHIVE_DIRNAME,
     TRAJECTORY_FILENAME,
     CorpusLayout,
+    stored_filename,
 )
 from atif_corpus.domain.ports import EmptySourceError
 from atif_corpus.domain.sessions import (
@@ -153,7 +154,8 @@ from atif_corpus.infrastructure.atomic import (
     replace_dir_atomic,
     write_blob_atomic,
     write_json_atomic,
-    write_text_atomic,
+    write_json_zstd_atomic,
+    write_text_zstd_atomic,
 )
 from atif_corpus.infrastructure.scanner import scan_sources
 from atif_corpus.infrastructure.source_archive import (
@@ -635,8 +637,11 @@ def _write_session(
     session_events → (producer's extra artifacts) → meta, ``meta.json`` last as
     belt-and-braces (atif-duck gates its readers on meta presence), and each
     artifact is fsynced before its rename so the ordering holds across power
-    loss too. The producer sees the staged ``trajectory.json`` already on
-    disk and the same dict in memory; whatever it writes rides the same swap.
+    loss too. The trajectory, edges and session events are stored
+    zstd-compressed (``<name>.zst``, see
+    :data:`~atif_corpus.domain.layout.COMPRESSED_ARTIFACT_FILENAMES`). The
+    producer sees the staged trajectory already on disk and the same dict in
+    memory; whatever it writes rides the same swap.
     The session's attachments go to the shared blob store (outside the
     staging dir, see :func:`_store_blobs`) before any of that, so every blob
     a published session references is already on disk.
@@ -683,14 +688,16 @@ def _write_session(
                 shutil.rmtree(archive_dir, ignore_errors=True)
                 archive_meta = {}
         _store_blobs(layout, output.blobs)
-        write_json_atomic(staging / TRAJECTORY_FILENAME, output.trajectory_dict, compact=True)
+        write_json_zstd_atomic(
+            staging / stored_filename(TRAJECTORY_FILENAME), output.trajectory_dict, compact=True
+        )
         write_json_atomic(staging / LOSS_REPORT_FILENAME, output.loss_report_dict)
-        write_text_atomic(
-            staging / EDGES_FILENAME,
+        write_text_zstd_atomic(
+            staging / stored_filename(EDGES_FILENAME),
             "".join(f"{line}\n" for line in output.edges_lines),
         )
-        write_text_atomic(
-            staging / SESSION_EVENTS_FILENAME,
+        write_text_zstd_atomic(
+            staging / stored_filename(SESSION_EVENTS_FILENAME),
             "".join(f"{line}\n" for line in output.events_lines),
         )
         extras, artifact_elapsed = _produce_extra_artifacts(
@@ -1387,8 +1394,7 @@ def expected_generation(
 
     ``converter_schema`` when the caller names one (atif-cli passes the
     converter's ``CONVERTER_SCHEMA_VERSION``), otherwise ``converter_version``;
-    plus whatever the caller adds in ``expected_meta`` (atif-cli adds
-    ``columnar_schema`` when the columnar producer runs). ``expected_meta`` may
+    plus whatever the caller adds in ``expected_meta``. ``expected_meta`` may
     not contradict the stamped key: the value stamped and the value compared
     must be the same one.
     """
@@ -1538,9 +1544,8 @@ def materialize(
         stale. When omitted, ``converter_version`` is compared instead, so a
         caller without a schema number still re-converts on an upgrade.
     expected_meta
-        Further ``meta.json`` values a current session must carry (atif-cli
-        passes the columnar schema version when it injects the columnar
-        producer). A session recording anything else for one of these keys,
+        Further ``meta.json`` values a current session must carry. A session
+        recording anything else for one of these keys,
         or lacking one, is stale.
     quiesce_seconds
         Source-silence threshold; contract default 300.

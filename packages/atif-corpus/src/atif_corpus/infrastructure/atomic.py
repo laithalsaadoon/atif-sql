@@ -29,10 +29,18 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Iterator
     from pathlib import Path
 
 #: Compact separators for trajectory.json, fixed by CONTRACT.md.
 COMPACT_SEPARATORS: tuple[str, str] = (",", ":")
+
+#: zstd level for the compressed artifacts. The library default: on the
+#: copied corpora it stores the JSON artifacts at about a tenth of their size
+#: at a few hundred MB/s on one core, and the level is part of what makes a
+#: pool worker and ``--workers 1`` write the same bytes, so it is pinned here
+#: rather than left to the library.
+ZSTD_LEVEL: int = 3
 
 
 def _tmp_sibling(path: Path) -> Path:
@@ -93,6 +101,65 @@ def write_json_atomic(
         tmp.unlink(missing_ok=True)
         raise
     fsync_dir(path.parent)
+
+
+def _json_chunks(obj: Any, *, compact: bool) -> Iterator[str]:
+    """``obj`` serialized in pieces, exactly as :func:`write_json_atomic` serializes it."""
+    encoder = json.JSONEncoder(separators=COMPACT_SEPARATORS if compact else None)
+    yield from encoder.iterencode(obj)
+    yield "\n"
+
+
+def _zstd_compressor() -> Any:
+    import zstandard
+
+    return zstandard.ZstdCompressor(level=ZSTD_LEVEL, write_content_size=True, threads=0)
+
+
+def _write_zstd_chunks(path: Path, chunks: Callable[[], Iterable[bytes]], size: int) -> None:
+    """Compress ``chunks()`` (``size`` bytes in all) into ``path`` atomically and durably.
+
+    The frame records ``size`` as its content size, so a reader learns the
+    document's size from the first bytes of the file. Same tmp, fsync, rename,
+    fsync-dir discipline as :func:`write_json_atomic`.
+    """
+    tmp = _tmp_sibling(path)
+    try:
+        with tmp.open("wb") as handle:
+            with _zstd_compressor().stream_writer(handle, size=size, closefd=False) as writer:
+                for chunk in chunks():
+                    writer.write(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(path)
+    except BaseException:
+        logger.debug("atomic write failed; removing tmp {}", tmp)
+        tmp.unlink(missing_ok=True)
+        raise
+    fsync_dir(path.parent)
+
+
+def write_json_zstd_atomic(path: Path, obj: Any, *, compact: bool = False) -> None:
+    """Write what :func:`write_json_atomic` would write, zstd-compressed, to ``path``.
+
+    Serializes twice: once to count the bytes (the frame header carries the
+    content size, which readers size their JSON parser from) and once into
+    the compressor, so no serialized copy of a large document is ever held in
+    memory. Decompressed, the file is byte for byte the plain artifact.
+    """
+
+    def chunks() -> Iterator[bytes]:
+        for piece in _json_chunks(obj, compact=compact):
+            yield piece.encode("utf-8")
+
+    size = sum(len(chunk) for chunk in chunks())
+    _write_zstd_chunks(path, chunks, size)
+
+
+def write_text_zstd_atomic(path: Path, text: str) -> None:
+    """Write ``text`` zstd-compressed to ``path`` atomically and durably (see :func:`write_text_atomic`)."""
+    data = text.encode("utf-8")
+    _write_zstd_chunks(path, lambda: (data,), len(data))
 
 
 def replace_dir_atomic(tmp_dir: Path, dst_dir: Path) -> None:

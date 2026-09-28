@@ -27,6 +27,13 @@ Selection semantics (CONTRACT-V2 §VSS):
 
 Torn-set guard: like atif-duck's raw readers, only session dirs with a
 ``meta.json`` (written last by atif-corpus) contribute rows.
+
+Stored names: materialize stores the trajectory compressed, as
+``trajectory.json.zst``; a corpus written before that keeps the plain
+``trajectory.json`` until ``atif-sql corpus slim`` compresses it. Each
+session's stored file is resolved once (compressed first) and DuckDB
+decompresses it, so the rows are the same either way. Batches are sized by
+the decompressed bytes, which is what a statement holds.
 """
 
 from __future__ import annotations
@@ -49,6 +56,14 @@ MIN_TEXT_CHARS = 32
 #: ``read_json`` upper bound — live trajectory.json files reach 85 MB
 #: (harbor inlines subagent sidechains); 1 GiB gives ~10x headroom.
 _MAX_OBJECT_SIZE = 1_073_741_824
+
+#: The trajectory's name, and the suffix it carries when stored compressed
+#: (twins of atif-corpus's, pinned in atif-cli's tests).
+TRAJECTORY_FILENAME = "trajectory.json"
+COMPRESSED_SUFFIX = ".zst"
+
+#: The largest zstd frame header: enough bytes to read any frame's content size.
+_FRAME_HEADER_MAX_BYTES = 18
 
 #: Rows pulled off a DuckDB result per ``fetchmany``.
 _FETCH_PAGE_ROWS = 512
@@ -78,7 +93,9 @@ def _step_texts_sql() -> str:
 
     ``filename=true`` plus ``ORDER BY filename, step_id`` keeps row order
     identical to reading the batch's files one at a time, so batch boundaries
-    cannot change which rows a ``--limit`` run picks.
+    cannot change which rows a ``--limit`` run picks. The two spellings of a
+    session's file differ only after its directory name, so a corpus mixing
+    them sorts in the same session order.
     """
     return f"""
         WITH step_texts AS (
@@ -114,8 +131,29 @@ def _step_texts_sql() -> str:
         """  # noqa: S608  # nosec B608 - paths are a bound parameter; both limits are int constants
 
 
+def _decoded_size(path: Path) -> int:
+    """The trajectory's size once decompressed: what a statement reading it holds."""
+    if not path.name.endswith(COMPRESSED_SUFFIX):
+        return path.stat().st_size
+    import zstandard
+
+    with path.open("rb") as handle:
+        size = zstandard.frame_content_size(handle.read(_FRAME_HEADER_MAX_BYTES))
+    # A frame without a recorded size (not written by atif-sql): its stored
+    # size is the only cheap stand-in, and it merely under-fills a batch.
+    return int(size) if size >= 0 else path.stat().st_size
+
+
+def _stored_trajectory(session_dir: Path) -> Path | None:
+    for name in (f"{TRAJECTORY_FILENAME}{COMPRESSED_SUFFIX}", TRAJECTORY_FILENAME):
+        path = session_dir / name
+        if path.is_file():
+            return path
+    return None
+
+
 def _complete_trajectory_paths(corpus_root: Path) -> list[tuple[str, int]]:
-    """``(path, size_bytes)`` for every COMPLETE session dir (meta.json present)."""
+    """``(path, decoded size)`` for every COMPLETE session dir (meta.json present)."""
     sessions_dir = corpus_root / "sessions"
     if not sessions_dir.is_dir():
         return []
@@ -123,15 +161,15 @@ def _complete_trajectory_paths(corpus_root: Path) -> list[tuple[str, int]]:
     for session_dir in sorted(sessions_dir.iterdir()):
         if not session_dir.is_dir():
             continue
-        trajectory = session_dir / "trajectory.json"
         if not (session_dir / "meta.json").is_file():
             logger.warning(
                 "Skipping incomplete session dir {} (no meta.json); excluded from embed",
                 session_dir,
             )
             continue
-        if trajectory.is_file():
-            paths.append((str(trajectory), trajectory.stat().st_size))
+        trajectory = _stored_trajectory(session_dir)
+        if trajectory is not None:
+            paths.append((str(trajectory), _decoded_size(trajectory)))
     return paths
 
 

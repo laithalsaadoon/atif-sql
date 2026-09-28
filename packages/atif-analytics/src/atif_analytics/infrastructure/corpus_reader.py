@@ -14,6 +14,13 @@ Torn-set guard: like atif-duck, a session directory is visible only when
 ``meta.json`` exists (the corpus writer lands it last), so a crashed
 writer's partial dir contributes nothing.
 
+Stored names: materialize stores ``trajectory.json`` and ``edges.jsonl``
+zstd-compressed, as ``<name>.zst``, and a corpus written before that keeps
+the plain files until ``atif-sql corpus slim`` compresses them. Every reader
+here resolves the stored file per session (:func:`stored_file`, compressed
+first) and reads the same bytes either way. ``corpus slim`` keeps the plain
+file's mtime on the compressed one, so the mtime bound doesn't move.
+
 Session enumeration reads timestamps from ``edges.jsonl``, never from the
 parsed steps: :meth:`CorpusReader.session_bounds` runs over every session
 in the window on every tick, and parsing a trajectory (tool_result bodies
@@ -39,6 +46,7 @@ Semantic notes (mirrors atif-duck's ``steps`` view; the shared projection is
 
 from __future__ import annotations
 
+import io
 import json
 from collections import OrderedDict
 from datetime import UTC, datetime
@@ -56,7 +64,7 @@ from atif_analytics.domain.transcript import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterable, Iterator, Sequence
 
     from atif_analytics.domain.authorship import SessionKind
     from atif_analytics.domain.ports import SessionBounds, SessionSource
@@ -64,6 +72,9 @@ if TYPE_CHECKING:
 TRAJECTORY_FILENAME = "trajectory.json"
 EDGES_FILENAME = "edges.jsonl"
 META_FILENAME = "meta.json"
+#: The suffix a compressed artifact carries (twin of atif-corpus's, pinned in
+#: atif-cli's tests).
+COMPRESSED_SUFFIX = ".zst"
 
 #: Parsed-step memo capacity. A single trajectory can decode to tens of MB
 #: of tool_result strings, so this is an LRU rather than a grow-forever
@@ -130,8 +141,42 @@ def parse_trajectory_step(step: dict[str, Any]) -> StepEvent:
     )
 
 
+def stored_file(session_dir: Path, name: str) -> Path | None:
+    """The file ``name`` is stored under (``<name>.zst`` first, then ``<name>``), or ``None``."""
+    for candidate in (f"{name}{COMPRESSED_SUFFIX}", name):
+        path = session_dir / candidate
+        if path.is_file():
+            return path
+    return None
+
+
+def _read_bytes(path: Path) -> bytes:
+    if not path.name.endswith(COMPRESSED_SUFFIX):
+        return path.read_bytes()
+    import zstandard
+
+    with path.open("rb") as handle, zstandard.ZstdDecompressor().stream_reader(handle) as reader:
+        return reader.readall()
+
+
+def _lines(path: Path) -> Iterable[str]:
+    """``path``'s decompressed text, line by line."""
+    with path.open("rb") as raw:
+        if path.name.endswith(COMPRESSED_SUFFIX):
+            import zstandard
+
+            with (
+                zstandard.ZstdDecompressor().stream_reader(raw) as reader,
+                io.TextIOWrapper(reader, encoding="utf-8") as text,
+            ):
+                yield from text
+        else:
+            with io.TextIOWrapper(raw, encoding="utf-8") as text:
+                yield from text
+
+
 def complete_session_dirs(sessions_dir: Path) -> list[Path]:
-    """Session dirs carrying meta.json + trajectory.json (torn-set gate), sorted."""
+    """Session dirs carrying meta.json + a stored trajectory (torn-set gate), sorted."""
     if not sessions_dir.is_dir():
         return []
     out: list[Path] = []
@@ -141,7 +186,7 @@ def complete_session_dirs(sessions_dir: Path) -> list[Path]:
         if not (d / META_FILENAME).exists():
             logger.warning("Skipping incomplete session dir {} (no meta.json)", d)
             continue
-        if (d / TRAJECTORY_FILENAME).exists():
+        if stored_file(d, TRAJECTORY_FILENAME) is not None:
             out.append(d)
     return out
 
@@ -155,21 +200,20 @@ def last_edge_ts(session_dir: Path) -> datetime | None:
     max rather than the last line so a hand-written or re-ordered file
     still yields the true newest timestamp.
     """
-    path = session_dir / EDGES_FILENAME
+    path = stored_file(session_dir, EDGES_FILENAME) or session_dir / EDGES_FILENAME
     newest: datetime | None = None
     try:
-        with path.open() as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                ts = parse_ts(rec.get("ts")) if isinstance(rec, dict) else None
-                if ts is not None and (newest is None or ts > newest):
-                    newest = ts
+        for raw_line in _lines(path):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = parse_ts(rec.get("ts")) if isinstance(rec, dict) else None
+            if ts is not None and (newest is None or ts > newest):
+                newest = ts
     except OSError as exc:
         logger.warning(
             "corpus_reader: unreadable edges for {} ({}); no last_ts bound",
@@ -180,20 +224,23 @@ def last_edge_ts(session_dir: Path) -> datetime | None:
 
 
 def trajectory_mtime(session_dir: Path) -> datetime | None:
-    """The ``trajectory.json`` mtime: the bound that moves when materialize rewrites a session."""
+    """The stored trajectory's mtime: the bound that moves when materialize rewrites a session."""
+    path = stored_file(session_dir, TRAJECTORY_FILENAME)
+    if path is None:
+        return None
     try:
-        st = (session_dir / TRAJECTORY_FILENAME).stat()
+        st = path.stat()
     except OSError:
         return None
     return datetime.fromtimestamp(st.st_mtime, tz=UTC)
 
 
 def read_trajectory_steps(session_dir: Path) -> list[StepEvent]:
-    """Parse one session's ``trajectory.json`` steps (empty when unreadable)."""
-    path = session_dir / TRAJECTORY_FILENAME
+    """Parse one session's stored trajectory steps (empty when unreadable)."""
+    path = stored_file(session_dir, TRAJECTORY_FILENAME) or session_dir / TRAJECTORY_FILENAME
     try:
-        doc = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        doc = json.loads(_read_bytes(path))
+    except (OSError, ValueError) as exc:
         logger.warning("corpus_reader: unreadable trajectory for {} ({})", session_dir.name, exc)
         return []
     return [parse_trajectory_step(s) for s in (doc.get("steps") or []) if isinstance(s, dict)]
@@ -201,21 +248,20 @@ def read_trajectory_steps(session_dir: Path) -> list[StepEvent]:
 
 def read_edges_uuids(session_dir: Path) -> set[str] | None:
     """Non-null raw-record uuids from ``edges.jsonl``, or ``None`` if unreadable."""
-    path = session_dir / EDGES_FILENAME
+    path = stored_file(session_dir, EDGES_FILENAME) or session_dir / EDGES_FILENAME
     out: set[str] = set()
     try:
-        with path.open() as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                uuid = rec.get("uuid")
-                if isinstance(uuid, str) and uuid:
-                    out.add(uuid)
+        for raw_line in _lines(path):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            uuid = rec.get("uuid")
+            if isinstance(uuid, str) and uuid:
+                out.add(uuid)
     except OSError as exc:
         logger.warning("corpus_reader: unreadable edges for {} ({})", session_dir.name, exc)
         return None

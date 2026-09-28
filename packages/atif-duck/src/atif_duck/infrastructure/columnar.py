@@ -5,14 +5,17 @@ r"""Write and detect the typed columnar artifacts (see :mod:`atif_duck.domain.co
 Two jobs, both keyed on the contract in the domain module:
 
 * :class:`ColumnarArtifactProducer` writes the five parquet files for one
-  session from the trajectory dict the corpus writer already holds. It is the
-  adapter atif-cli plugs into atif-corpus's ``ArtifactProducer`` port.
+  session from its trajectory dict. The lake loader runs it to stage each
+  session it loads (:mod:`atif_duck.infrastructure.lake`); it still fits
+  atif-corpus's ``ArtifactProducer`` port, though materialize no longer
+  injects it. A corpus written before that keeps these files until
+  ``atif-sql corpus slim`` removes them.
 * :func:`session_has_columnar` and :func:`columnar_coverage` answer "may this
   session be read from parquet?" for the registry and for ``atif-sql status``,
   with one predicate so the two can never disagree.
 
-Why the producer walks the dict instead of ``read_json`` over the staged
-``trajectory.json``: DuckDB's JSON reader holds the whole document plus its
+Why the producer walks the dict instead of ``read_json`` over the stored
+trajectory: DuckDB's JSON reader holds the whole document plus its
 typed conversion in memory, which measured at 515 MB just to parse a 204 MB
 session, against a materialize pass that otherwise peaks at 667 MB on the same
 corpus. The dict is already in memory, so the producer streams it into DuckDB
@@ -87,6 +90,7 @@ from atif_duck.infrastructure.projections import (
     step_columns,
     step_key_columns,
 )
+from atif_duck.infrastructure.stored_artifacts import iter_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -263,22 +267,19 @@ def _result_rows(session_id: str, steps: Iterable[Any]) -> Iterator[tuple[str | 
             yield (session_id, step_id, ts, _dumps(result))
 
 
-def _event_rows(session_id: str, events_jsonl: Path) -> Iterator[tuple[str | None, ...]]:
-    """One ``(session_id, line)`` row per non-blank line of the staged events file.
+def _event_rows(session_id: str, events_jsonl: Path | None) -> Iterator[tuple[str | None, ...]]:
+    """One ``(session_id, line)`` row per non-blank line of the events file.
 
-    A missing file yields nothing, so the artifact is an empty parquet with the
-    right columns: the corpus writer always stages one, but a caller driving
-    the producer directly may not.
+    The file may be stored compressed. A missing file yields nothing, so the
+    artifact is an empty parquet with the right columns: a session written
+    before the events artifact existed has none.
     """
-    try:
-        handle = events_jsonl.open(encoding="utf-8")
-    except FileNotFoundError:
+    if events_jsonl is None:
         return
-    with handle:
-        for line in handle:
-            text = line.strip()
-            if text:
-                yield (session_id, text)
+    for line in iter_lines(events_jsonl):
+        text = line.strip()
+        if text:
+            yield (session_id, text)
 
 
 def _batches(rows: Iterable[tuple[str | None, ...]], schema: Any) -> Iterator[Any]:
@@ -459,11 +460,14 @@ class ColumnarArtifactProducer:
     module stays cheap for the commands that only detect artifacts.
     """
 
-    def __init__(self, *, threads: int = 2) -> None:
+    def __init__(self, *, threads: int = 2, durable: bool = True) -> None:
         #: DuckDB worker threads for the per-batch projections. Two is enough
         #: to overlap Python's batch production with DuckDB's parsing; more
         #: only adds in-flight allocations to the peak.
         self.threads = threads
+        #: fsync each file before returning. The lake loader stages files it
+        #: deletes a moment later and turns this off.
+        self.durable = durable
 
     def _connection(self) -> duckdb.DuckDBPyConnection:
         import duckdb
@@ -478,6 +482,7 @@ class ColumnarArtifactProducer:
         *,
         session_id: str,
         trajectory: Mapping[str, Any],
+        events_path: Path | None = None,
     ) -> Mapping[str, Any]:
         """Write the five parquet files into ``session_dir``; return the meta extras.
 
@@ -492,6 +497,9 @@ class ColumnarArtifactProducer:
             will publish under), stamped into every row as ``session_id``.
         trajectory
             The ATIF trajectory dict the corpus writer just serialized.
+        events_path
+            The session's events file (plain or compressed). Default: the
+            ``session_events.jsonl`` staged in ``session_dir``.
 
         Returns
         -------
@@ -505,8 +513,9 @@ class ColumnarArtifactProducer:
             the staged directory never publishes.
         """
         con = self._connection()
+        events = session_dir / SESSION_EVENTS_JSONL if events_path is None else events_path
         try:
-            self._produce(con, session_dir, session_id, trajectory)
+            self._produce(con, session_dir, session_id, trajectory, events, durable=self.durable)
         finally:
             con.close()
         logger.debug("columnar: wrote {} for session {}", COLUMNAR_FILENAMES, session_id)
@@ -518,6 +527,9 @@ class ColumnarArtifactProducer:
         session_dir: Path,
         session_id: str,
         trajectory: Mapping[str, Any],
+        events_path: Path,
+        *,
+        durable: bool,
     ) -> None:
         steps = trajectory.get("steps")
         step_list: list[Any] = steps if isinstance(steps, list) else []
@@ -531,6 +543,7 @@ class ColumnarArtifactProducer:
             _session_row_sql(session_literal),
             COLUMNAR_SCHEMAS[SESSION_PARQUET],
             session_dir / SESSION_PARQUET,
+            durable=durable,
         )
 
         steps_schema = _string_schema(("session_id", *STEP_MEMBERS))
@@ -542,6 +555,7 @@ class ColumnarArtifactProducer:
             ),
             COLUMNAR_SCHEMAS[STEPS_PARQUET],
             session_dir / STEPS_PARQUET,
+            durable=durable,
         )
 
         calls_schema = _string_schema(("session_id", "step_id", "timestamp", "call"))
@@ -554,6 +568,7 @@ class ColumnarArtifactProducer:
             ),
             COLUMNAR_SCHEMAS[TOOL_CALLS_PARQUET],
             session_dir / TOOL_CALLS_PARQUET,
+            durable=durable,
         )
 
         results_schema = _string_schema(("session_id", "step_id", "timestamp", "res"))
@@ -566,17 +581,19 @@ class ColumnarArtifactProducer:
             ),
             COLUMNAR_SCHEMAS[TOOL_RESULTS_PARQUET],
             session_dir / TOOL_RESULTS_PARQUET,
+            durable=durable,
         )
 
         events_schema = _string_schema(("session_id", "ev"))
         ColumnarArtifactProducer._write(
             con,
-            _batches(_event_rows(session_id, session_dir / SESSION_EVENTS_JSONL), events_schema),
+            _batches(_event_rows(session_id, events_path), events_schema),
             SqlFragment(
                 f"SELECT session_id, {render(EVENT_COLUMNS)} FROM {_SOURCE}"  # noqa: S608  # nosec B608 - projections constants only
             ),
             COLUMNAR_SCHEMAS[SESSION_EVENTS_PARQUET],
             session_dir / SESSION_EVENTS_PARQUET,
+            durable=durable,
         )
 
     @staticmethod
@@ -586,6 +603,8 @@ class ColumnarArtifactProducer:
         select_sql: SqlFragment,
         columns: Sequence[tuple[str, str]],
         target: Path,
+        *,
+        durable: bool = True,
     ) -> None:
         """Project each batch through DuckDB and append it to ``target`` as one row group."""
         import pyarrow.parquet as pq
@@ -605,11 +624,12 @@ class ColumnarArtifactProducer:
             writer.close()
         # Durability matches the JSON artifacts: bytes on stable storage before
         # meta.json publishes them. Then read-only, per the module docstring.
-        fd = os.open(target, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        if durable:
+            fd = os.open(target, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         target.chmod(_ARTIFACT_MODE)
 
 

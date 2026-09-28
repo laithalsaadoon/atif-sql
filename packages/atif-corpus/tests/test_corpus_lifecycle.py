@@ -29,7 +29,14 @@ from typing import Any, override
 
 import pytest
 import zstandard
-from corpus_fixtures import NOW_NS, SESSION_A, SESSION_B, STALE_NS, write_session
+from corpus_fixtures import (
+    NOW_NS,
+    SESSION_A,
+    SESSION_B,
+    STALE_NS,
+    read_artifact_text,
+    write_session,
+)
 from loguru import logger
 
 from atif_corpus.application import materialize as materialize_module
@@ -358,7 +365,9 @@ class TestGenerationStaleness:
         for session_id in (SESSION_A, SESSION_B):
             assert meta_of(corpus_root, session_id)["converter_version"] == "0.2.0"
             trajectory = json.loads(
-                CorpusLayout(corpus_root=corpus_root).trajectory_path(session_id).read_text()
+                read_artifact_text(
+                    CorpusLayout(corpus_root=corpus_root).trajectory_path(session_id)
+                )
             )
             assert trajectory["converter_tag"] == "new"
 
@@ -520,7 +529,7 @@ class TestArchiveReconversion:
         assert after["source_present"] is False
         for key in ("source_removed_at", "source_files", "source_mtime_ns", "source_archive"):
             assert after[key] == before[key], key
-        trajectory = json.loads(layout.trajectory_path(SESSION_A).read_text())
+        trajectory = json.loads(read_artifact_text(layout.trajectory_path(SESSION_A)))
         assert trajectory["converter_tag"] == "new"
         assert source_tree(layout.source_archive_dir(SESSION_A)) == archive_before
         assert not list(layout.staging_dir.iterdir())

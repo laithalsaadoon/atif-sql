@@ -244,8 +244,15 @@ class TestCorpusLayout:
 
     def test_contract_paths(self) -> None:
         sid = "11111111-1111-1111-1111-111111111111"
-        assert self.layout.trajectory_path(sid) == Path(f"/corpus/sessions/{sid}/trajectory.json")
+        # The three bulk JSON artifacts are stored zstd-compressed; the small
+        # two stay plain.
+        assert self.layout.trajectory_path(sid) == Path(
+            f"/corpus/sessions/{sid}/trajectory.json.zst"
+        )
         assert self.layout.loss_report_path(sid) == Path(f"/corpus/sessions/{sid}/loss_report.json")
-        assert self.layout.edges_path(sid) == Path(f"/corpus/sessions/{sid}/edges.jsonl")
+        assert self.layout.edges_path(sid) == Path(f"/corpus/sessions/{sid}/edges.jsonl.zst")
+        assert self.layout.session_events_path(sid) == Path(
+            f"/corpus/sessions/{sid}/session_events.jsonl.zst"
+        )
         assert self.layout.meta_path(sid) == Path(f"/corpus/sessions/{sid}/meta.json")
         assert self.layout.watermark_path == Path("/corpus/watermark.json")

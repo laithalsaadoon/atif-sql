@@ -3,8 +3,9 @@
 """DuckDB view and macro registry over the materialized ATIF corpus.
 
 Wires a DuckDB connection to a ``<corpus_root>/sessions/<id>/`` tree (per
-docs/CONTRACT.md: ``trajectory.json``, ``edges.jsonl``, ``loss_report.json``,
-``meta.json``) and exposes it as a stable set of SQL views and analytical
+docs/CONTRACT.md: ``trajectory.json``, ``edges.jsonl``, ``session_events.jsonl``,
+each stored as ``<name>.zst`` or, in an older corpus, plain, plus
+``loss_report.json`` and ``meta.json``) and exposes it as a stable set of SQL views and analytical
 macros. Every view reads ATIF-v1.7, never raw Claude Code JSONL, so a
 column's meaning comes from the ATIF schema rather than from a transcript
 field that happens to share its name.
@@ -24,13 +25,18 @@ Design notes
 * ``trajectory.json`` is ONE document per file (``format='auto'``, compact
   JSON), NOT newline-delimited; ``steps`` is projected as a ``JSON[]``
   column so views unnest it lazily at query time. ``edges.jsonl`` is
-  ``format='newline_delimited'``.
+  ``format='newline_delimited'``. DuckDB decompresses a ``.zst`` file on its
+  own, so the readers take the stored file of each session
+  (:mod:`atif_duck.infrastructure.stored_artifacts`), and the path columns
+  strip ``.zst`` so a row names the same logical file before and after a
+  slim.
 * Two sources per session, chosen per session. A session whose
   ``meta.json`` names the current ``columnar_schema`` and whose parquet
   artifacts are present (:mod:`atif_duck.domain.columnar`) is read through
   lazy views over ``read_parquet``, so no JSON is parsed for it at query
-  time; every other session is read from ``trajectory.json`` exactly as
-  before. When a corpus holds both kinds the two branches ``UNION ALL`` into
+  time; every other session is read from its trajectory exactly as
+  before, unless the caller passes ``stage_columnar`` (the lake loader),
+  which stages parquet for those sessions first. When a corpus holds both kinds the two branches ``UNION ALL`` into
   one relation per raw reader (``v_raw_trajectories``, ``v_raw_steps``,
   ``v_raw_tool_calls``, ``v_raw_tool_results``), and the business views
   never learn which branch a row came from. The parquet branch is lazy on
@@ -77,6 +83,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from atif_duck.domain.artifacts import EDGES_JSONL, TRAJECTORY_JSON
 from atif_duck.domain.catalog import DEFAULT_PRICING, VIEW_SCHEMA
 from atif_duck.domain.columnar import (
     META_COLUMNAR_KEY,
@@ -116,9 +123,10 @@ from atif_duck.infrastructure.projections import (
     step_columns,
     step_key_columns,
 )
+from atif_duck.infrastructure.stored_artifacts import decoded_size, stored_artifact
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterable, Sequence
+    from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
     from pathlib import Path
 
     import duckdb
@@ -150,6 +158,11 @@ _RAW_META_TABLE: str = RAW_META
 #: JSON path's TEMP TABLE is the parsed ``session_events.jsonl`` lines.
 _RAW_SESSION_EVENTS_TABLE: str = RAW_SESSION_EVENTS
 _RAW_SESSION_EVENTS_JSON_TABLE: str = "v_raw_session_events_json"
+#: One row, one column: the corpus's ``sessions/`` directory, inserted as a
+#: bound parameter. The columnar branch derives ``trajectory_path`` from it,
+#: so the path is data rather than statement text, and it reads the same for a
+#: session whose parquet the lake loader staged elsewhere.
+_RAW_SESSIONS_DIR_TABLE: str = "v_raw_sessions_dir"
 
 #: The columnar branch's parquet readers: one parameterized ``read_parquet``
 #: relation per artifact kind, registered as a view under these names and
@@ -187,6 +200,10 @@ class RawSources:
     #: The corpus a lake registration is scoped to (``None``: every corpus,
     #: or not a lake registration).
     lake_corpus: str | None = None
+    #: Sessions read from parquet the caller staged from their trajectory
+    #: (``stage_columnar``, the lake loader's path); also in
+    #: :attr:`columnar_session_ids`.
+    staged_session_ids: tuple[str, ...] = ()
 
     @property
     def coverage(self) -> ColumnarCoverage:
@@ -230,15 +247,14 @@ def _object_size_bound(paths: Iterable[Path]) -> int:
     A newline-delimited file's objects are its lines and a one-document file
     IS its object, so the largest file present bounds every object either
     reader meets. That size plus headroom, floored at DuckDB's default and
-    capped at :data:`_OBJECT_SIZE_CAP`, is the bound. A path that vanished
-    between the listing and the stat counts as zero.
+    capped at :data:`_OBJECT_SIZE_CAP`, is the bound. A compressed file is
+    measured by its decompressed size (read from its frame header), because
+    that's what the reader holds. A path that vanished between the listing
+    and the stat counts as zero.
     """
     largest = 0
     for path in paths:
-        try:
-            largest = max(largest, path.stat().st_size)
-        except OSError:
-            continue
+        largest = max(largest, decoded_size(path))
     with_headroom = largest + largest // _OBJECT_SIZE_HEADROOM_DIVISOR + _OBJECT_SIZE_HEADROOM_BYTES
     return max(_OBJECT_SIZE_FLOOR, min(_OBJECT_SIZE_CAP, with_headroom))
 
@@ -358,7 +374,7 @@ def _register_events_json(con: duckdb.DuckDBPyConnection, paths: Sequence[Path])
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE {_RAW_SESSION_EVENTS_JSON_TABLE} AS
-        SELECT regexp_extract(filename, '/sessions/([^/]+)/session_events\\.jsonl$', 1)
+        SELECT regexp_extract(filename, '/sessions/([^/]+)/session_events\\.jsonl(\\.zst)?$', 1)
                    AS session_id,
                {render(EVENT_COLUMNS)}
         FROM (
@@ -394,20 +410,25 @@ def _json_trajectories_select() -> SqlFragment:
 def _columnar_trajectories_select() -> SqlFragment:
     """``session.parquet`` rows in ``v_raw_trajectories`` shape.
 
-    ``trajectory_path`` is derived the way ``read_json(filename=true)``
-    reports it (``<sessions_dir>/<id>/trajectory.json``), so the ``sessions``
-    view's path column reads the same whichever branch produced the row. The
-    parquet reader carries each file's own ``filename``
-    (``<sessions_dir>/<id>/session.parquet``), so the trajectory path is that
-    string with its last component replaced: the corpus root never has to be
-    spliced into the statement.
+    ``trajectory_path`` is the logical ATIF document path
+    (``<sessions_dir>/<id>/trajectory.json``), the value the JSON branch
+    reports too, so the ``sessions`` view's path column reads the same
+    whichever branch produced the row and whether the document is stored
+    compressed. The sessions directory comes from the one-row
+    :data:`_RAW_SESSIONS_DIR_TABLE`, filled by bound parameter, so the corpus
+    root never has to be spliced into the statement, and a session whose
+    parquet the lake loader staged outside the corpus still names its own
+    document.
     """
     casts = ", ".join(
         f"CAST({name} AS {sql_type}) AS {name}"
         for name, sql_type in SESSION_COLUMNS
         if name != "session_id_path"
     )
-    path_expr = "regexp_replace(filename, '/[^/]+$', '/trajectory.json')"
+    path_expr = (
+        f"(SELECT sessions_dir FROM {_RAW_SESSIONS_DIR_TABLE}) || '/' || session_id_path "  # noqa: S608  # nosec B608 - module constant
+        f"|| '/{TRAJECTORY_JSON}'"
+    )
     return SqlFragment(
         f"SELECT {casts}, {path_expr} AS trajectory_path, session_id_path "  # noqa: S608  # nosec B608 - catalog constants over a module-constant reader
         f"FROM {_RAW_SESSIONS_PARQUET_TABLE}"
@@ -513,16 +534,17 @@ def _gate_session_dirs(
 
 
 def _split_sources(
-    con: duckdb.DuckDBPyConnection, sessions_dir: Path
-) -> tuple[list[str], list[str]]:
-    """Partition the meta-bearing sessions into (columnar ids, JSON ids).
+    con: duckdb.DuckDBPyConnection, sessions_dir: Path, *, use_session_parquet: bool = True
+) -> tuple[list[str], dict[str, Path]]:
+    """Partition the meta-bearing sessions into columnar ids and ``{JSON id: trajectory file}``.
 
-    A session is columnar when :func:`session_has_columnar` says so; every
-    other session with a ``trajectory.json`` is JSON. A meta-bearing dir
-    with neither readable source is skipped with a warning rather than
-    failing the whole registration: ``read_json`` over an explicit path list
-    errors on one missing file, and one broken session must not take the
-    corpus offline.
+    A session is columnar when :func:`session_has_columnar` says so (and
+    ``use_session_parquet`` is on); every other session with a stored
+    trajectory (``trajectory.json.zst`` or ``trajectory.json``) is JSON. A
+    meta-bearing dir with neither readable source is skipped with a warning
+    rather than failing the whole registration: ``read_json`` over an
+    explicit path list errors on one missing file, and one broken session
+    must not take the corpus offline.
 
     Runs after :func:`_gate_session_dirs`, so every id read here has passed
     the session id boundary and may become a path component.
@@ -533,17 +555,19 @@ def _split_sources(
         f"SELECT session_id_path, {META_COLUMNAR_KEY} FROM {_RAW_META_TABLE} ORDER BY 1"  # noqa: S608  # nosec B608 - module constants
     ).fetchall()
     columnar_ids: list[str] = []
-    json_ids: list[str] = []
+    json_ids: dict[str, Path] = {}
     for session_id, columnar_schema in rows:
         session_dir = sessions_dir / str(session_id)
-        if session_has_columnar(session_dir, columnar_schema):
+        if use_session_parquet and session_has_columnar(session_dir, columnar_schema):
             columnar_ids.append(str(session_id))
-        elif (session_dir / "trajectory.json").is_file():
-            json_ids.append(str(session_id))
+            continue
+        trajectory = stored_artifact(session_dir, TRAJECTORY_JSON)
+        if trajectory is not None:
+            json_ids[str(session_id)] = trajectory
         else:
             logger.warning(
                 "Skipping session dir {} (meta.json present but no readable "
-                "trajectory.json or columnar artifacts); excluded from all views",
+                "trajectory or columnar artifacts); excluded from all views",
                 session_dir,
             )
     return columnar_ids, json_ids
@@ -575,6 +599,8 @@ def register_raw(
     corpus_root: Path,
     *,
     session_ids: Collection[str] | None = None,
+    use_session_parquet: bool = True,
+    stage_columnar: Callable[[Sequence[str]], Mapping[str, Path]] | None = None,
 ) -> RawSources:
     """Create the raw readers over ``corpus_root``.
 
@@ -582,10 +608,12 @@ def register_raw(
     over ``read_json`` of the CONTRACT corpus layout
     ``<corpus_root>/sessions/<session_id>/...``, with ``session_id_path``
     derived from the directory component via regexp over ``filename``. Each
-    glob is ONE bound parameter, never statement text. (A glob rather than an
-    explicit file list because DuckDB reads 300 small files about twice as
-    fast through a glob; the cost is that a corpus root containing a glob
-    metacharacter such as ``[`` or a backslash is not readable, which was already so.)
+    glob or file list is ONE bound parameter, never statement text. (Meta and
+    loss reports go through a glob rather than an explicit file list because
+    DuckDB reads 300 small files about twice as fast through a glob; the cost
+    is that a corpus root containing a glob metacharacter such as ``[`` or a
+    backslash is not readable, which was already so. Edges are a list of each
+    session's stored file, since the file may carry either spelling.)
 
     ``v_raw_trajectories`` / ``v_raw_steps`` / ``v_raw_tool_calls`` /
     ``v_raw_tool_results`` are VIEWs that union up to two sources, chosen
@@ -600,6 +628,13 @@ def register_raw(
     ends with a ``corpus`` column: the corpus directory's name, the same
     value the lake stores, so the ``sessions`` view names its corpus on
     either path.
+
+    STORED NAMES: ``trajectory.json``, ``edges.jsonl`` and
+    ``session_events.jsonl`` may each be stored as ``<name>.zst``
+    (:mod:`atif_duck.domain.artifacts`); each session's stored file is
+    resolved once and DuckDB decompresses it. Their path columns
+    (``trajectory_path``, ``edges_path``) name the logical artifact either
+    way.
 
     TORN-SET GUARD: ``meta.json`` is written last by the corpus writer, so
     its presence marks a session dir as complete. Every other reader is
@@ -625,6 +660,19 @@ def register_raw(
         time). The globs become explicit lists of the files that exist, and a
         batch with no complete session registers every relation empty rather
         than failing. ``None`` (the default) registers the whole corpus.
+    use_session_parquet
+        Read a session from its own parquet artifacts when they're current
+        (the default). ``False`` ignores them, so every session is read from
+        its trajectory: ``corpus slim`` verifies the lake that way before it
+        deletes them.
+    stage_columnar
+        Called once with the ids that would be read from their trajectory
+        through DuckDB's JSON reader; returns ``{id: directory}`` for each
+        one it wrote the five columnar files for (from the same trajectory).
+        Those sessions are read from the staged parquet instead. The lake
+        loader passes one: parsing a large trajectory in DuckDB needs far
+        more than the writer's memory cap, and the columnar producer types it
+        in bounded memory into the same rows.
 
     Returns
     -------
@@ -687,11 +735,29 @@ def register_raw(
         logger.debug("Registered {} from {}", _RAW_META_TABLE, "glob" if wanted is None else "list")
         rejected = _gate_session_dirs(con, sessions_dir, wanted)
 
-        columnar_ids, json_ids = _split_sources(con, sessions_dir)
+        columnar_ids, json_trajectories = _split_sources(
+            con, sessions_dir, use_session_parquet=use_session_parquet
+        )
+        columnar_dirs = {sid: sessions_dir / sid for sid in columnar_ids}
+        staged: dict[str, Path] = {}
+        if stage_columnar is not None and json_trajectories:
+            staged = dict(stage_columnar(list(json_trajectories)))
+            for sid, directory in staged.items():
+                columnar_dirs[sid] = directory
+                del json_trajectories[sid]
+            columnar_ids = sorted(columnar_dirs)
+        json_ids = list(json_trajectories)
         logger.info(
-            "register_raw: {} session(s) read from columnar artifacts, {} from trajectory.json",
+            "register_raw: {} session(s) read from columnar artifacts ({} staged), "
+            "{} from their trajectory",
             len(columnar_ids),
+            len(staged),
             len(json_ids),
+        )
+        con.execute(
+            f"CREATE OR REPLACE TEMP TABLE {_RAW_SESSIONS_DIR_TABLE} AS "  # nosec B608 - module constant; the directory is a bound parameter
+            "SELECT CAST(? AS VARCHAR) AS sessions_dir",
+            [str(sessions_dir)],
         )
 
         trajectory_branches: list[SqlFragment] = []
@@ -710,7 +776,7 @@ def register_raw(
         )
         if columnar_ids:
             for reader, artifact, with_filename in parquet_readers:
-                paths = [sessions_dir / sid / artifact for sid in columnar_ids]
+                paths = [columnar_dirs[sid] / artifact for sid in columnar_ids]
                 _bind_parquet_reader(con, reader, paths, with_filename=with_filename)
                 lazy_paths.extend(paths)
             trajectory_branches.append(_columnar_trajectories_select())
@@ -741,15 +807,18 @@ def register_raw(
             # the columnar sessions' trajectory.json too, which is the cost
             # this whole arrangement exists to avoid. The list is the
             # statement's one parameter.
-            trajectory_paths = [sessions_dir / sid / "trajectory.json" for sid in json_ids]
+            # A compressed document is decompressed by the reader (detected
+            # from the .zst suffix, per file); trajectory_path drops the
+            # suffix so it names the logical document either way.
+            trajectory_paths = [json_trajectories[sid] for sid in json_ids]
             json_files = [str(path) for path in trajectory_paths]
             trajectory_bound = _object_size_bound(trajectory_paths)
             con.execute(
                 f"""
                 CREATE OR REPLACE TEMP TABLE {_RAW_TRAJECTORIES_JSON_TABLE} AS
                 SELECT *,
-                       filename AS trajectory_path,
-                       regexp_extract(filename, '/sessions/([^/]+)/trajectory\\.json$', 1)
+                       regexp_replace(filename, '\\.zst$', '') AS trajectory_path,
+                       regexp_extract(filename, '/sessions/([^/]+)/trajectory\\.json(\\.zst)?$', 1)
                            AS session_id_path
                 FROM read_json(
                     ?,
@@ -775,14 +844,16 @@ def register_raw(
             # artifacts must not keep the previous generation's parsed JSON.
             con.execute(f"DROP TABLE IF EXISTS {_RAW_TRAJECTORIES_JSON_TABLE};")
 
-        # A JSON-path session's events come from its session_events.jsonl. A
-        # session materialized before that artifact existed has none and
-        # contributes no rows; an empty file (no kept records) is skipped
-        # here rather than handed to the reader.
+        # A JSON-path session's events come from its session_events.jsonl
+        # (stored compressed or plain). A session materialized before that
+        # artifact existed has none and contributes no rows; an empty one (no
+        # kept records) is skipped here rather than handed to the reader.
         event_files = [
             path
-            for path in (sessions_dir / sid / SESSION_EVENTS_JSONL for sid in json_ids)
-            if path.is_file() and path.stat().st_size > 0
+            for path in (
+                stored_artifact(sessions_dir / sid, SESSION_EVENTS_JSONL) for sid in json_ids
+            )
+            if path is not None and decoded_size(path) > 0
         ]
         if event_files:
             _register_events_json(con, event_files)
@@ -807,17 +878,27 @@ def register_raw(
 
         # edges.jsonl is one line per RAW record -> newline_delimited.
         # The record's own `source_file` (the raw transcript path) is kept;
-        # the edges.jsonl path itself is aliased to `edges_path`. The glob
-        # reads every matching file (the meta gate filters rows afterwards),
-        # so the bound is sized over every file the glob can reach.
+        # the edges.jsonl path itself is aliased to `edges_path`, without the
+        # .zst suffix a compressed file carries. A list of each complete
+        # session's stored file rather than a glob: a glob per spelling would
+        # fail on the one with no match, and would read a session caught
+        # mid-slim twice.
+        meta_ids = [
+            str(row[0])
+            for row in con.execute(
+                f"SELECT session_id_path FROM {_RAW_META_TABLE} ORDER BY 1"  # noqa: S608  # nosec B608 - module constant
+            ).fetchall()
+        ]
+        edge_paths = [
+            path
+            for path in (stored_artifact(sessions_dir / sid, EDGES_JSONL) for sid in meta_ids)
+            if path is not None
+        ]
+        edges_source: list[str] = [str(path) for path in edge_paths]
+        edges_bound = _object_size_bound(edge_paths)
         if wanted is None:
-            edges_source: str | list[str] = str(sessions_dir / "*" / "edges.jsonl")
-            edges_bound = _object_size_bound(sessions_dir.glob("*/edges.jsonl"))
             loss_source: str | list[str] = str(sessions_dir / "*" / "loss_report.json")
         else:
-            edge_paths = [sessions_dir / sid / "edges.jsonl" for sid in wanted_ok]
-            edges_source = _existing(edge_paths)
-            edges_bound = _object_size_bound(edge_paths)
             loss_source = _existing(sessions_dir / sid / "loss_report.json" for sid in wanted_ok)
         if edges_source:
             con.execute(
@@ -825,8 +906,8 @@ def register_raw(
                 CREATE OR REPLACE TEMP TABLE {_RAW_EDGES_TABLE} AS
                 SELECT * FROM (
                     SELECT *,
-                           filename AS edges_path,
-                           regexp_extract(filename, '/sessions/([^/]+)/edges\\.jsonl$', 1)
+                           regexp_replace(filename, '\\.zst$', '') AS edges_path,
+                           regexp_extract(filename, '/sessions/([^/]+)/edges\\.jsonl(\\.zst)?$', 1)
                                AS session_id_path
                     FROM read_json(
                         ?,
@@ -836,7 +917,7 @@ def register_raw(
                         maximum_object_size={int(edges_bound)}
                     )
                 ) WHERE {meta_gate};
-                """,  # noqa: S608  # nosec B608 - glob is a bound parameter; table/columns/gate are constants; the bound is an int
+                """,  # noqa: S608  # nosec B608 - file list is a bound parameter; table/columns/gate are constants; the bound is an int
                 [edges_source],
             )
         else:
@@ -880,6 +961,7 @@ def register_raw(
         json_session_ids=tuple(json_ids),
         lazy_read_paths=tuple(lazy_paths),
         rejected_session_ids=rejected,
+        staged_session_ids=tuple(sorted(staged)),
     )
 
 

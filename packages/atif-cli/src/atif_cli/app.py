@@ -8,8 +8,8 @@ Those five may never import each other, so every cross-package seam (the
 ConverterPort adapter, the clock, version pins, the DuckDB connection) is
 wired here, per docs/CONTRACT.md §CLI.
 
-The eleven registered commands — nine ``@app.command`` functions plus the
-``cron`` and ``lake`` sub-apps:
+The twelve registered commands — nine ``@app.command`` functions plus the
+``cron``, ``lake`` and ``corpus`` sub-apps:
 
 * ``convert``      one-shot convert+audit for a single session JSONL
 * ``materialize``  sync the materialized corpus (RealConverter behind the port)
@@ -23,6 +23,7 @@ The eleven registered commands — nine ``@app.command`` functions plus the
 * ``cron``         sub-app: ``install`` (prints, never writes) and ``status``
 * ``lake``         sub-app: ``rebuild``, ``verify``, ``status``, ``compact`` for
   the DuckLake every corpus is queried through
+* ``corpus``       sub-app: ``slim`` converts a corpus to the compressed layout
 
 A command that reaches Bedrock is marked above because its spend is not
 recoverable. Each one guards itself differently: ``analyze`` defaults to a DRY
@@ -67,6 +68,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import cyclopts
 
+from atif_cli.corpus import corpus_app
 from atif_cli.cron import cron_app
 from atif_cli.errors import EXIT_CODES, ClassifiedError
 from atif_cli.lake import lake_app
@@ -102,6 +104,8 @@ app.command(cron_app)
 # The `lake` subcommand group (rebuild / verify / status / compact): lean at
 # import like `cron`, every heavy import deferred into its command bodies.
 app.command(lake_app)
+# The `corpus` subcommand group (slim): lean at import, like `lake`.
+app.command(corpus_app)
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +822,6 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         print(
             f"total: {report.total_seconds:.2f}s  "
             f"(convert: {report.convert_seconds:.2f}s summed over {report.workers} worker(s), "
-            f"columnar: {report.artifact_seconds:.2f}s, "
             f"lake: {report.sink_synced_count} synced in {report.sink_seconds:.2f}s)"
         )
         if report.sink_error is not None:
@@ -865,7 +868,6 @@ def materialize(
     corpus_root: Path | None = None,
     sessions: str | None = None,
     workers: int | None = None,
-    columnar: Annotated[bool, cyclopts.Parameter(negative="--no-columnar")] = True,
     lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
@@ -873,9 +875,11 @@ def materialize(
 
     Runs one scan → plan → convert → write pass through atif-corpus's
     materialize use case, with atif-converter's real converter adapted
-    behind the ConverterPort (see :mod:`atif_cli.converter_adapter`) and
-    atif-duck's columnar producer behind the ArtifactProducer port. The
-    CLI owns the wall clock and the version pins stamped into ``meta.json``.
+    behind the ConverterPort (see :mod:`atif_cli.converter_adapter`). Each
+    session is written as ``trajectory.json.zst``, ``edges.jsonl.zst`` and
+    ``session_events.jsonl.zst`` (zstd), ``loss_report.json``, ``meta.json``
+    and its raw source archive; the lake holds the queryable rows. The CLI
+    owns the wall clock and the version pins stamped into ``meta.json``.
 
     Parameters
     ----------
@@ -906,14 +910,6 @@ def materialize(
         is the single-process reference path; above that a process pool
         converts sessions in parallel and writes byte-identical artifacts.
         Below ``1`` exits 64.
-    columnar
-        Write the typed columnar artifacts (``session.parquet``,
-        ``steps.parquet``, ``tool_calls.parquet``, ``tool_results.parquet``,
-        ``session_events.parquet``) beside the JSON artifacts, so ``query``
-        reads typed columns instead of parsing ``trajectory.json``. Default on;
-        ``--no-columnar`` writes only the contract artifacts and the
-        raw source archive (``source/``), and ``query`` then takes the JSON
-        path for those sessions.
     lake
         After the sessions are swapped into place, replace their rows in the
         DuckLake at ``ATIF_SQL_LAKE_ROOT`` (default ``~/.atif-sql/lake``), one
@@ -934,8 +930,6 @@ def materialize(
         materialize as materialize_use_case,
     )
     from atif_corpus.domain.source_layout import layout_for
-    from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION, META_COLUMNAR_KEY
-    from atif_duck.infrastructure.columnar import ColumnarArtifactProducer
     from atif_duck.infrastructure.lake import DuckLakeSessionSink, LakeLayout
     from atif_duck.infrastructure.lake_settings import LakeSettings
 
@@ -977,9 +971,9 @@ def materialize(
             # The converter's own output version. A session recording another
             # one re-converts, from its source archive if the source is gone.
             converter_schema=CONVERTER_SCHEMA_VERSION,
-            # A columnar pass also expects the schema its producer stamps, so a
-            # schema bump (or a session written --no-columnar) re-converts.
-            expected_meta=({META_COLUMNAR_KEY: COLUMNAR_SCHEMA_VERSION} if columnar else None),
+            # No per-session parquet any more, so no columnar schema to
+            # expect: a session written with them (before `corpus slim`) is
+            # as current as one written without, and the lake loads either.
             quiesce_seconds=(
                 quiesce_seconds if quiesce_seconds is not None else settings.quiesce_seconds
             ),
@@ -987,13 +981,13 @@ def materialize(
             session_ids=session_filter,
             workers=worker_count,
             worker_setup=_materialize_worker_setup,
-            artifact_producer=ColumnarArtifactProducer() if columnar else None,
             session_sink=(
                 DuckLakeSessionSink(
                     LakeLayout(lake_settings.lake_root),
                     lock_timeout_seconds=lake_settings.lake_lock_timeout_seconds,
                     load_batch_size=lake_settings.lake_load_batch_size,
                     memory_limit_bytes=_query_memory_limit_bytes(),
+                    stage_workers=lake_settings.lake_stage_workers,
                 )
                 if lake
                 else None
@@ -1134,7 +1128,7 @@ def status(
 
     Read-only and fast: scans source mtimes and replays the same planning
     decision ``materialize`` would make (quiescence, watermark, and the
-    recorded converter schema and columnar schema), without converting
+    recorded converter schema), without converting
     anything. The staleness summary is therefore exactly "what would a
     materialize pass do right now", and ``stale`` includes sessions a
     converter upgrade made stale (``generation_stale`` counts those alone).
@@ -1150,13 +1144,15 @@ def status(
     pair of roots. The JSON payload carries the resolved agent, which is what
     lets an unattended lane confirm it ticked the corpus it meant to.
 
-    ``query path`` says how ``query`` will read this corpus: ``columnar``
-    when every complete session carries the typed parquet artifacts,
-    ``json`` when none does, ``mixed`` when some do (the rest were
-    materialized before the artifacts existed, or with ``--no-columnar``;
-    ``materialize --force`` brings them over). It applies the same
-    per-session predicate the registry does, so it cannot say ``columnar``
-    while ``query`` silently parses JSON.
+    ``layout`` says how many sessions are still stored the old way (plain
+    ``trajectory.json`` / ``edges.jsonl`` / ``session_events.jsonl``, or the
+    per-session parquet files materialize no longer writes) and how many
+    bytes that is; ``atif-sql corpus slim`` converts them. ``query path``
+    says how ``query`` reads this corpus when it can't use the lake:
+    ``columnar`` when every complete session still carries its parquet,
+    ``json`` when none does (every session materialized or slimmed since the
+    parquet was dropped), ``mixed`` in between. It applies the same
+    per-session predicate the registry does.
 
     ``vector search`` says whether ``semantic_search`` and ``search`` can
     reach an embeddings store: ``ready`` (store present, lance extension
@@ -1168,11 +1164,12 @@ def status(
     """
     import time
 
+    from atif_cli.corpus import storage_layout
     from atif_converter.domain.schema_version import CONVERTER_SCHEMA_VERSION
     from atif_corpus.application.materialize import preview_pass, read_watermark
     from atif_corpus.domain.layout import CorpusLayout
     from atif_corpus.domain.source_layout import layout_for
-    from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION, META_COLUMNAR_KEY
+    from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION
     from atif_duck.infrastructure.columnar import columnar_coverage
 
     settings = _corpus_settings(source_root, corpus_root, agent)
@@ -1180,14 +1177,12 @@ def status(
     quiesce = quiesce_seconds if quiesce_seconds is not None else settings.quiesce_seconds
 
     watermark = read_watermark(layout.watermark_path)
-    # Planned as a default `materialize` would plan it: the columnar producer
-    # on, so its schema version is part of what "current" means.
+    # Planned as a default `materialize` would plan it.
     preview = preview_pass(
         source_root=settings.source_root,
         corpus_root=settings.corpus_root,
         converter_version=_version_of("atif-sql"),
         converter_schema=CONVERTER_SCHEMA_VERSION,
-        expected_meta={META_COLUMNAR_KEY: COLUMNAR_SCHEMA_VERSION},
         quiesce_seconds=quiesce,
         source_layout=layout_for(settings.agent),
     )
@@ -1213,6 +1208,7 @@ def status(
         "from_archive": len(preview.archive_session_ids),
     }
     coverage = columnar_coverage(settings.corpus_root)
+    storage = storage_layout(settings.corpus_root)
     vector = _vector_surface(settings.corpus_root)
     lake_block = _lake_surface(settings.corpus_root)
     if resolve_format(fmt) is OutputFormat.TABLE:
@@ -1235,10 +1231,11 @@ def status(
             f"({staleness['from_archive']} to re-convert from archive), "
             f"{len(preview.empty_session_ids)} empty"
         )
+        print(f"layout:       {storage.summary}")
         print(
-            f"query path:   {coverage.query_path}  "
+            f"query path:   {coverage.query_path} without the lake  "
             f"({coverage.columnar_sessions} of {coverage.total_sessions} complete sessions "
-            "carry typed columnar artifacts)"
+            "still carry per-session parquet)"
         )
         print(f"vector search: {vector['vector_search']}  ({vector['note']})")
         print(f"lake:         {lake_block['state']}  ({lake_block['note']})")
@@ -1261,6 +1258,7 @@ def status(
                 "columnar_sessions": coverage.columnar_sessions,
                 "json_sessions": coverage.json_sessions,
                 "query_path": coverage.query_path,
+                "layout": storage.as_dict(),
                 "lance_extension_installed": vector["lance_extension_installed"],
                 "embeddings_store_present": vector["embeddings_store_present"],
                 "vector_search": vector["vector_search"],
@@ -1449,6 +1447,7 @@ def query(
 
     with _private_spill_dir() as spill_dir:
         con = duckdb.connect()
+        lake_reader = None
         try:
             try:
                 _configure_query_resources(con, resources, spill_dir)
@@ -1487,17 +1486,44 @@ def query(
                     raise SystemExit(err.exit_code)
                 cursor = con.execute(sql)
             except REGISTRATION_ERRORS as exc:
-                err = classify_registration_error(exc)
+                err = _per_session_memory_hint(classify_registration_error(exc), exc, lake_reader)
                 emit_error(err, fmt)
                 raise SystemExit(err.exit_code) from exc
             try:
                 emit_cursor(cursor, fmt)
             except REGISTRATION_ERRORS as exc:
-                err = classify_registration_error(exc)
+                err = _per_session_memory_hint(classify_registration_error(exc), exc, lake_reader)
                 emit_error(err, fmt)
                 raise SystemExit(err.exit_code) from exc
         finally:
             con.close()
+
+
+#: The hint a query that ran out of memory on the per-session path carries.
+PER_SESSION_MEMORY_HINT = (
+    "this query read the per-session files because no usable lake holds the corpus, "
+    "and that path holds every document it reads in memory; the lake answers it in "
+    "bounded memory: run `atif-sql lake rebuild` (or `atif-sql materialize`), or raise "
+    f"{QUERY_MEMORY_LIMIT_ENV}"
+)
+
+
+def _per_session_memory_hint(
+    err: ClassifiedError, exc: Exception, lake_reader: object | None
+) -> ClassifiedError:
+    """Point an out-of-memory error on the per-session path at the lake.
+
+    The per-session reader loads each trajectory whole through DuckDB's JSON
+    reader, so a full scan of a large corpus can exceed the query cap where
+    the lake, reading typed parquet, doesn't.
+    """
+    import dataclasses
+
+    import duckdb
+
+    if lake_reader is not None or not isinstance(exc, duckdb.OutOfMemoryException):
+        return err
+    return dataclasses.replace(err, hint=PER_SESSION_MEMORY_HINT)
 
 
 def _embedding_stores(lake_reader: Any, embed_settings: Any) -> list[Path] | None:

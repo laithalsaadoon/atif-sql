@@ -61,6 +61,7 @@ the lake does not hold yet is loaded whole by the first sink call for it.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import errno
 import fcntl
 import os
@@ -73,6 +74,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from atif_duck.domain.artifacts import SESSION_EVENTS_JSONL, TRAJECTORY_JSON
 from atif_duck.domain.lake import (
     AGENT_COLUMN,
     ARTIFACT_HASH_SQL,
@@ -97,9 +99,11 @@ from atif_duck.domain.lake import (
 from atif_duck.domain.raw_readers import CORPUS_COLUMN
 from atif_duck.domain.session_id import session_id_rejection
 from atif_duck.domain.sql_literal import SqlFragment, sql_literal
+from atif_duck.infrastructure.stored_artifacts import read_bytes, stored_artifact
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Sequence
+    from collections.abc import Callable, Generator, Mapping, Sequence
+    from concurrent.futures import Executor
 
     import duckdb
 
@@ -121,6 +125,11 @@ DEFAULT_SYNC_BATCH_SIZE: int = 64
 #: corpus the lake does not hold yet). Bounds the TEMP tables the registry
 #: builds per batch (edges, loss reports, JSON-path trajectories).
 DEFAULT_LOAD_BATCH_SIZE: int = 512
+
+#: Processes that stage parquet from trajectories while the lake loads a
+#: batch (``ATIF_SQL_LAKE_STAGE_WORKERS``). Each holds one decoded document
+#: at a time; measured on the copied corpora in the PR that added it.
+DEFAULT_STAGE_WORKERS: int = min(4, os.cpu_count() or 1)
 
 #: How long a writer waits for another writer's lock before giving up. A
 #: materialize tick that gives up records its sessions as pending and the
@@ -493,11 +502,116 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class Staging:
+    """Where the loader stages a batch's parquet, and how many processes stage it."""
+
+    root: Path
+    workers: int = 1
+    #: The process pool staging runs on, opened by :func:`_stage_pool` for a
+    #: whole load (``None``: stage in this process).
+    pool: Executor | None = None
+
+    @classmethod
+    def beside(cls, layout: LakeLayout, *, workers: int = 1) -> Staging:
+        """``<root>.load-<pid>``, a sibling of the lake root (swept if a dead process left it)."""
+        return cls(layout.root.with_name(f"{layout.root.name}.load-{os.getpid()}"), workers)
+
+
+@contextlib.contextmanager
+def _stage_pool(staging: Staging) -> Generator[Staging]:
+    """``staging`` with a spawn-context process pool of ``staging.workers``, for a whole load.
+
+    One pool for every batch of a load, so workers start once rather than
+    once per batch. With one worker, staging runs in this process.
+    """
+    if staging.workers <= 1 or staging.pool is not None:
+        yield staging
+        return
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
+    with ProcessPoolExecutor(
+        max_workers=staging.workers, mp_context=multiprocessing.get_context("spawn")
+    ) as pool:
+        yield dataclasses.replace(staging, pool=pool)
+
+
+def _stage_session(corpus_root: Path, stage_root: Path, session_id: str) -> bool:
+    """Write one session's five parquet files under ``stage_root/<id>/`` from its stored trajectory.
+
+    Module-level so a spawned pool worker can run it. ``False`` when the
+    session has no readable trajectory document (the registry then reads it
+    through the JSON path, which reports the problem).
+    """
+    import json
+
+    from atif_duck.infrastructure.columnar import ColumnarArtifactProducer
+
+    session_dir = corpus_root / "sessions" / session_id
+    trajectory_file = stored_artifact(session_dir, TRAJECTORY_JSON)
+    if trajectory_file is None:
+        return False
+    trajectory = json.loads(read_bytes(trajectory_file))
+    if not isinstance(trajectory, dict):
+        return False
+    target = stage_root / session_id
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+    ColumnarArtifactProducer(durable=False).produce(
+        target,
+        session_id=session_id,
+        trajectory=trajectory,
+        events_path=stored_artifact(session_dir, SESSION_EVENTS_JSONL),
+    )
+    return True
+
+
+@contextlib.contextmanager
+def _staged_columnar(
+    staging: Staging, corpus_root: Path
+) -> Generator[Callable[[Sequence[str]], dict[str, Path]]]:
+    """A ``stage_columnar`` callback for :func:`register_raw`, and the cleanup of what it staged.
+
+    For each session the registry would read through DuckDB's JSON reader,
+    the callback decodes the stored trajectory in Python and hands it to the
+    columnar producer, which writes the session's five parquet files under
+    ``<staging root>/<id>/``: the same rows the JSON reader yields (the producer
+    is held to that by the columnar parity tests), typed in bounded memory.
+    DuckDB's JSON reader needs several times a document's size to parse it,
+    which on the largest sessions is more than the writer's whole memory cap.
+
+    With a pool (:func:`_stage_pool`) and more than one session, the
+    sessions are staged in parallel, one per task so a large one doesn't hold
+    up a chunk of small ones (each worker holds one document at a time); the
+    files, and so the rows the batch inserts, are the same either way. The
+    files are deleted when the batch is done with them.
+    """
+    stage_root, pool = staging.root, staging.pool
+
+    def stage(session_ids: Sequence[str]) -> dict[str, Path]:
+        ids = list(session_ids)
+        if pool is not None and len(ids) > 1:
+            done = list(
+                pool.map(_stage_session, [corpus_root] * len(ids), [stage_root] * len(ids), ids)
+            )
+        else:
+            done = [_stage_session(corpus_root, stage_root, sid) for sid in ids]
+        return {sid: stage_root / sid for sid, ok in zip(ids, done, strict=True) if ok}
+
+    shutil.rmtree(stage_root, ignore_errors=True)
+    try:
+        yield stage
+    finally:
+        shutil.rmtree(stage_root, ignore_errors=True)
+
+
 def _load_batch(
     con: duckdb.DuckDBPyConnection,
     corpus: LakeCorpus,
     session_ids: Sequence[str],
     *,
+    staging: Staging,
     replace_corpus: bool = False,
     delete: bool = True,
     register_at: str | None = None,
@@ -511,11 +625,35 @@ def _load_batch(
 
     The registry binds the batch's raw relations first (TEMP tables and
     lazy parquet views in the in-memory catalog): a DuckDB transaction may
-    write to one database only, and the lake is that one.
+    write to one database only, and the lake is that one. A session with
+    current parquet artifacts of its own is read from them; every other one
+    from parquet staged from its trajectory (:func:`_staged_columnar`).
     """
+    with _staged_columnar(staging, corpus.root) as stage:
+        _insert_batch(
+            con,
+            corpus,
+            session_ids,
+            stage=stage,
+            replace_corpus=replace_corpus,
+            delete=delete,
+            register_at=register_at,
+        )
+
+
+def _insert_batch(
+    con: duckdb.DuckDBPyConnection,
+    corpus: LakeCorpus,
+    session_ids: Sequence[str],
+    *,
+    stage: Callable[[Sequence[str]], Mapping[str, Path]],
+    replace_corpus: bool,
+    delete: bool,
+    register_at: str | None,
+) -> None:
     from atif_duck.infrastructure.registry import register_raw
 
-    register_raw(con, corpus.root, session_ids=session_ids)
+    register_raw(con, corpus.root, session_ids=session_ids, stage_columnar=stage)
     con.execute("BEGIN TRANSACTION")
     try:
         for table in LAKE_TABLES:
@@ -535,7 +673,9 @@ def _load_batch(
         raise
 
 
-def _load_corpus(con: duckdb.DuckDBPyConnection, corpus: LakeCorpus, *, batch_size: int) -> int:
+def _load_corpus(
+    con: duckdb.DuckDBPyConnection, corpus: LakeCorpus, *, batch_size: int, staging: Staging
+) -> int:
     """Load a whole corpus in batches; the corpus is registered by the LAST batch's transaction.
 
     The first batch also deletes every row the corpus had, so a corpus a
@@ -546,15 +686,17 @@ def _load_corpus(con: duckdb.DuckDBPyConnection, corpus: LakeCorpus, *, batch_si
     ids = corpus_session_ids(corpus.root)
     batches = [ids[i : i + batch_size] for i in range(0, len(ids), batch_size)] or [[]]
     registered_at = _now_iso()
-    for index, batch in enumerate(batches):
-        _load_batch(
-            con,
-            corpus,
-            batch,
-            replace_corpus=index == 0,
-            delete=False,
-            register_at=registered_at if index == len(batches) - 1 else None,
-        )
+    with _stage_pool(staging) as pooled:
+        for index, batch in enumerate(batches):
+            _load_batch(
+                con,
+                corpus,
+                batch,
+                staging=pooled,
+                replace_corpus=index == 0,
+                delete=False,
+                register_at=registered_at if index == len(batches) - 1 else None,
+            )
     logger.info("lake: loaded corpus {} ({} session(s))", corpus.name, len(ids))
     return len(ids)
 
@@ -585,11 +727,11 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _sweep_siblings(layout: LakeLayout) -> None:
-    """Remove ``<root>.rebuild-<pid>`` / ``<root>.old-<pid>`` left by a dead process."""
+    """Remove ``<root>.rebuild-<pid>`` / ``.old-<pid>`` / ``.load-<pid>`` left by a dead process."""
     parent = layout.root.parent
     if not parent.is_dir():
         return
-    for suffix in ("rebuild", "old"):
+    for suffix in ("rebuild", "old", "load"):
         for entry in parent.glob(f"{layout.root.name}.{suffix}-*"):
             tail = entry.name.rsplit("-", 1)[-1]
             if tail.isdigit() and not _pid_alive(int(tail)):
@@ -620,6 +762,7 @@ def _rebuild_locked(
     *,
     batch_size: int,
     memory_limit_bytes: int | None,
+    stage_workers: int = 1,
 ) -> RebuildReport:
     """Build a fresh lake beside the old one, then swap it in. Caller holds the lock."""
     started = time.perf_counter()
@@ -636,7 +779,12 @@ def _rebuild_locked(
             _attach(con, build.catalog_path, build.data_dir, read_only=False)
             _create_schema(con)
             for corpus in ordered:
-                count = _load_corpus(con, corpus, batch_size=batch_size)
+                count = _load_corpus(
+                    con,
+                    corpus,
+                    batch_size=batch_size,
+                    staging=Staging.beside(layout, workers=stage_workers),
+                )
                 loaded.append((corpus.name, corpus.agent, count))
             # A load in batches leaves several small files per partition.
             with _file_maintenance(con):
@@ -691,6 +839,7 @@ def rebuild_lake(
     batch_size: int = DEFAULT_LOAD_BATCH_SIZE,
     lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
     memory_limit_bytes: int | None = None,
+    stage_workers: int = 1,
 ) -> RebuildReport:
     """Load every corpus's per-session artifacts into a fresh lake and swap it into place.
 
@@ -702,7 +851,11 @@ def rebuild_lake(
     """
     with writer_lock(layout, timeout_seconds=lock_timeout_seconds):
         return _rebuild_locked(
-            layout, corpora, batch_size=batch_size, memory_limit_bytes=memory_limit_bytes
+            layout,
+            corpora,
+            batch_size=batch_size,
+            memory_limit_bytes=memory_limit_bytes,
+            stage_workers=stage_workers,
         )
 
 
@@ -724,6 +877,8 @@ class DuckLakeSessionSink:
     lock_timeout_seconds: float = DEFAULT_LOCK_TIMEOUT_SECONDS
     load_batch_size: int = DEFAULT_LOAD_BATCH_SIZE
     memory_limit_bytes: int | None = None
+    #: Processes that stage a batch's parquet from its trajectories.
+    stage_workers: int = 1
     #: How many sync calls wrote rows (for tests and the report).
     writes: int = field(default=0)
 
@@ -752,15 +907,22 @@ class DuckLakeSessionSink:
                     [*known.values(), corpus],
                     batch_size=self.load_batch_size,
                     memory_limit_bytes=self.memory_limit_bytes,
+                    stage_workers=self.stage_workers,
                 )
                 self.writes += 1
                 return
             with _writer_connection(self.memory_limit_bytes) as con:
                 _attach(con, self.layout.catalog_path, self.layout.data_dir, read_only=False)
+                staging = Staging.beside(self.layout, workers=self.stage_workers)
                 if action == "load_corpus":
-                    _load_corpus(con, corpus, batch_size=self.load_batch_size)
+                    _load_corpus(con, corpus, batch_size=self.load_batch_size, staging=staging)
                 else:
-                    _load_batch(con, corpus, sorted(set(session_ids)))
+                    ids = sorted(set(session_ids))
+                    # A pool only pays for its start-up on more sessions than workers.
+                    if len(ids) <= self.stage_workers:
+                        staging = Staging(staging.root)
+                    with _stage_pool(staging) as pooled:
+                        _load_batch(con, corpus, ids, staging=pooled)
                 _detach(con)
             _publish_reader_catalog(self.layout)
             self.writes += 1
@@ -941,15 +1103,24 @@ def verify_lake(
     corpora: Sequence[LakeCorpus] | None = None,
     *,
     memory_limit_bytes: int | None = None,
+    use_session_parquet: bool = True,
+    batch_size: int = DEFAULT_LOAD_BATCH_SIZE,
+    stage_workers: int = 1,
 ) -> VerifyReport:
     """Compare every session's rows, table by table, between the lake and its artifacts.
 
     Per (table, session): the row count and an order-free content hash
     (``sum(hash(columns))``) of the lake rows against the same over the
-    registry's raw relation for that corpus. A session present on one side
-    only differs by construction. Reads the published catalog, so it needs
-    no lock and can run beside a writer (a write that lands mid-verify can
-    show up as a difference; run it again).
+    registry's raw relation for that corpus, bound batch by batch exactly as
+    a load binds it (a session's own current parquet, else parquet staged
+    from its trajectory). A session present on one side only differs by
+    construction. Reads the published catalog, so it needs no lock and can
+    run beside a writer (a write that lands mid-verify can show up as a
+    difference; run it again).
+
+    ``use_session_parquet=False`` reads every session from its trajectory,
+    ignoring the parquet artifacts: what the corpus holds once they're gone,
+    which is what ``corpus slim`` checks before it deletes them.
     """
     if not layout.exists():
         return VerifyReport(stale=("no lake",), corpora=(), mismatches=())
@@ -957,21 +1128,34 @@ def verify_lake(
 
     mismatches: list[LakeMismatch] = []
     checked: list[tuple[str, int]] = []
-    with _writer_connection(memory_limit_bytes) as con:
+    with _writer_connection(memory_limit_bytes) as con, contextlib.ExitStack() as stack:
         _attach(con, layout.reader_catalog_path, layout.data_dir, read_only=True)
         stale = lake_info_mismatches(_read_info(con))
         known = _read_corpora(con)
         targets = list(corpora) if corpora is not None else list(known.values())
         if stale:
             return VerifyReport(stale=stale, corpora=(), mismatches=())
+        staging = stack.enter_context(_stage_pool(Staging.beside(layout, workers=stage_workers)))
         for corpus in sorted(targets, key=lambda c: c.name):
             ids = corpus_session_ids(corpus.root)
-            # The whole corpus through its globs (twice as fast as a list),
-            # unless it is empty, where a glob with no match is an error.
-            register_raw(con, corpus.root, session_ids=None if ids else [])
+            batches = [ids[i : i + batch_size] for i in range(0, len(ids), batch_size)] or [[]]
+            artifacts: dict[str, dict[str, tuple[int, int]]] = {t.name: {} for t in LAKE_TABLES}
+            for batch in batches:
+                with _staged_columnar(staging, corpus.root) as stage:
+                    register_raw(
+                        con,
+                        corpus.root,
+                        session_ids=batch,
+                        use_session_parquet=use_session_parquet,
+                        stage_columnar=stage,
+                    )
+                    for table in LAKE_TABLES:
+                        artifacts[table.name].update(
+                            _hashes(con, ARTIFACT_HASH_SQL[table.name], [])
+                        )
             sessions: set[str] = set()
             for table in LAKE_TABLES:
-                artifact = _hashes(con, ARTIFACT_HASH_SQL[table.name], [])
+                artifact = artifacts[table.name]
                 lake = _hashes(con, LAKE_HASH_SQL[table.name], [corpus.name])
                 sessions.update(artifact)
                 sessions.update(lake)
@@ -1164,6 +1348,7 @@ __all__ = [
     "CLEANUP_GRACE_HOURS",
     "DEFAULT_LOAD_BATCH_SIZE",
     "DEFAULT_LOCK_TIMEOUT_SECONDS",
+    "DEFAULT_STAGE_WORKERS",
     "DEFAULT_SYNC_BATCH_SIZE",
     "DEFAULT_WRITER_MEMORY_BYTES",
     "DUCKLAKE_EXTENSION",
@@ -1180,6 +1365,7 @@ __all__ = [
     "LakeStatus",
     "LakeUnavailable",
     "RebuildReport",
+    "Staging",
     "VerifyReport",
     "attach_lake_for_query",
     "compact_lake",
