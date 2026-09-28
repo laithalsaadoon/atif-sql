@@ -246,7 +246,8 @@ proofs are out of scope for the workspace.
   so the JSON columns are normalized exactly as read_json would.
 - sessions view carries `agent` and `agent_version` from trajectory.agent, and
   coalesces the shapes harbor emits for working directory and git branch
-  (cwds[0]/cwd, git_branches[0]/git.branch). The steps view coalesces
+  (cwds[0]/cwd, git_branches[0]/git.branch). Claude Code's lists are in
+  first-seen order, so cwds[0] is where the session started. The steps view coalesces
   cache_creation_input_tokens with the Codex spelling cache_write_input_tokens.
 - messages-parity view name: `steps` (one row per ATIF step) PLUS a `messages`
   compatibility view reconstructed from edges (uuid-keyed: uuid, parent_uuid,

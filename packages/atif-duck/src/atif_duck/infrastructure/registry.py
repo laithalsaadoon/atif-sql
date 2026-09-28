@@ -942,11 +942,10 @@ def register_views(con: duckdb.DuckDBPyConnection) -> None:
         #
         # cwd / git_branch come from the harbor adapter's ``agent.extra``; the
         # key differs per agent and both are read here because ``agent.extra``
-        # is free-form: Claude Code writes SETS (``cwds`` / ``git_branches``,
-        # first element representative) while Codex writes one ``cwd`` string
-        # and a ``git`` struct. A Claude Code session spanning two cwds reports
-        # one of them silently, so treat the column as indicative, not
-        # exhaustive.
+        # is free-form: Claude Code writes LISTS in first-seen order (``cwds`` /
+        # ``git_branches``) while Codex writes one ``cwd`` string and a ``git``
+        # struct. A Claude Code session spanning two cwds reports the one it
+        # started in; the later ones stay in ``agent.extra``.
         #
         # ``corpus`` names the corpus the session belongs to (the corpus
         # directory's name). Scoped to one corpus it is one value; over the
