@@ -420,3 +420,207 @@ class TestCodex:
         ]
         assert [[i["sha256"] for i in images] for images in user_images] == [[_sha(PASTED_PNG)]]
         assert result.validation_errors == ()
+
+
+# ---------------------------------------------------------------------------
+# Codex code mode: one ``exec`` script, many nested tool calls
+# ---------------------------------------------------------------------------
+
+_TS = "2026-09-11T17:27:02.{:03d}Z"
+
+
+class _Rollout:
+    """Builds the records of synthetic ``exec`` scripts, in file order."""
+
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def _add(self, record_type: str, payload: dict[str, Any]) -> None:
+        stamp = _TS.format(310 + len(self.records))
+        self.records.append({"timestamp": stamp, "type": record_type, "payload": payload})
+
+    def script(self, call_id: str, *, turn_id: str = "turn-1") -> None:
+        self._add(
+            "response_item",
+            {
+                "type": "custom_tool_call",
+                "id": f"ctc_{call_id}",
+                "status": "completed",
+                "call_id": call_id,
+                "name": "exec",
+                "input": "text(await tools.exec_command({cmd:'true'}));",
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id},
+            },
+        )
+
+    def command(self, item_id: str, exit_code: int, *, turn_id: str = "turn-1") -> None:
+        self._item(
+            {
+                "type": "CommandExecution",
+                "id": item_id,
+                "status": "completed" if exit_code == 0 else "failed",
+                "exit_code": exit_code,
+                "source": "unified_exec_startup",
+            },
+            turn_id,
+        )
+
+    def mcp(self, item_id: str, *, is_error: bool) -> None:
+        self._item(
+            {
+                "type": "McpToolCall",
+                "id": item_id,
+                "status": "failed" if is_error else "completed",
+                "result": {"content": [], "isError": is_error},
+            },
+            "turn-1",
+        )
+
+    def status_item(self, item_type: str, item_id: str, status: str) -> None:
+        self._item({"type": item_type, "id": item_id, "status": status}, "turn-1")
+
+    def _item(self, item: dict[str, Any], turn_id: str) -> None:
+        self._add("event_msg", {"type": "item_completed", "turn_id": turn_id, "item": item})
+
+    def script_output(self, call_id: str, header: str) -> None:
+        self._add(
+            "response_item",
+            {
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": [
+                    {"type": "input_text", "text": f"{header}\nWall time 0.1 seconds\nOutput:\n"},
+                    {"type": "input_text", "text": '{"exit_code":7,"output":"decoy"}'},
+                ],
+            },
+        )
+
+    def function(self, call_id: str, name: str, output: str) -> None:
+        self._add(
+            "response_item",
+            {"type": "function_call", "call_id": call_id, "name": name, "arguments": "{}"},
+        )
+        self._add(
+            "response_item",
+            {"type": "function_call_output", "call_id": call_id, "output": output},
+        )
+
+
+def _convert_scripts(tmp_path: Path, rollout: _Rollout) -> dict[str, Any]:
+    base = codex_rollout_records()
+    records = base[:10] + rollout.records + base[10:]
+    result, _ = convert_codex_and_audit(write_codex_rollout(tmp_path / "sessions", records))
+    assert result.validation_errors == ()
+    return result.trajectory
+
+
+def _signals(trajectory: dict[str, Any], call_id: str) -> dict[str, Any]:
+    extra = _result(trajectory, call_id).get("extra") or {}
+    return {key: extra[key] for key in ("is_error", "exit_code") if key in extra}
+
+
+class TestCodexExecScripts:
+    def test_one_command_carries_its_exit_code(self, tmp_path: Path) -> None:
+        rollout = _Rollout()
+        rollout.script("call_ok")
+        rollout.command("exec-a", 0)
+        rollout.script_output("call_ok", "Script completed")
+        rollout.script("call_bad")
+        rollout.command("exec-b", 2)
+        rollout.script_output("call_bad", "Script completed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_ok") == {"is_error": False, "exit_code": 0}
+        assert _signals(trajectory, "call_bad") == {"is_error": True, "exit_code": 2}
+
+    def test_several_commands_report_the_first_non_zero_exit(self, tmp_path: Path) -> None:
+        rollout = _Rollout()
+        rollout.script("call_mixed")
+        for item_id, code in (("exec-a", 0), ("exec-b", 3), ("exec-c", 1)):
+            rollout.command(item_id, code)
+        rollout.script_output("call_mixed", "Script completed")
+        rollout.script("call_clean")
+        rollout.command("exec-d", 0)
+        rollout.command("exec-e", 0)
+        rollout.script_output("call_clean", "Script completed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_mixed") == {"is_error": True, "exit_code": 3}
+        assert _signals(trajectory, "call_clean") == {"is_error": False, "exit_code": 0}
+
+    def test_script_header_without_commands(self, tmp_path: Path) -> None:
+        """No process ran, so no exit code; the output's own JSON is never read for one."""
+        rollout = _Rollout()
+        for call_id, header in (
+            ("call_done", "Script completed"),
+            ("call_failed", "Script failed"),
+            ("call_yield", "Script running with cell ID 4"),
+        ):
+            rollout.script(call_id)
+            rollout.script_output(call_id, header)
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_done") == {"is_error": False}
+        assert _signals(trajectory, "call_failed") == {"is_error": True}
+        assert _signals(trajectory, "call_yield") == {}
+
+    def test_failed_script_keeps_its_commands_exit_code(self, tmp_path: Path) -> None:
+        rollout = _Rollout()
+        rollout.script("call_failed")
+        rollout.command("exec-a", 0)
+        rollout.script_output("call_failed", "Script failed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_failed") == {"is_error": True, "exit_code": 0}
+
+    def test_nested_mcp_and_patch_outcomes(self, tmp_path: Path) -> None:
+        rollout = _Rollout()
+        rollout.script("call_mcp_err")
+        rollout.mcp("exec-a", is_error=True)
+        rollout.script_output("call_mcp_err", "Script completed")
+        rollout.script("call_patch")
+        rollout.status_item("FileChange", "exec-b", "completed")
+        rollout.mcp("exec-c", is_error=False)
+        rollout.script_output("call_patch", "Script completed")
+        rollout.script("call_patch_err")
+        rollout.status_item("FileChange", "exec-d", "failed")
+        rollout.script_output("call_patch_err", "Script completed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_mcp_err") == {"is_error": True}
+        assert _signals(trajectory, "call_patch") == {"is_error": False}
+        assert _signals(trajectory, "call_patch_err") == {"is_error": True}
+
+    def test_an_item_from_another_turn_is_not_the_scripts(self, tmp_path: Path) -> None:
+        rollout = _Rollout()
+        rollout.script("call_abandoned", turn_id="turn-0")
+        rollout.script("call_live")
+        rollout.command("exec-a", 1, turn_id="turn-0")
+        rollout.command("exec-b", 0)
+        rollout.script_output("call_live", "Script completed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_live") == {"is_error": False, "exit_code": 0}
+
+    def test_overlapping_scripts_claim_nothing_their_items_said(self, tmp_path: Path) -> None:
+        rollout = _Rollout()
+        rollout.script("call_one")
+        rollout.script("call_two")
+        rollout.command("exec-a", 1)
+        rollout.script_output("call_one", "Script completed")
+        rollout.script_output("call_two", "Script failed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_one") == {}
+        assert _signals(trajectory, "call_two") == {"is_error": True}
+
+    def test_status_items_keyed_by_call_id(self, tmp_path: Path) -> None:
+        """A collab call's item and a shell-run patch's item carry only a status."""
+        rollout = _Rollout()
+        rollout.function("call_wait", "wait_agent", '{"message":"done","timed_out":false}')
+        rollout.status_item("CollabAgentToolCall", "call_wait", "completed")
+        rollout.function("call_spawn", "spawn_agent", "collab spawn failed")
+        rollout.status_item("CollabAgentToolCall", "call_spawn", "failed")
+        rollout.function(
+            "call_shell_patch",
+            "exec_command",
+            "Chunk ID: 1\nWall time: 0.0 seconds\nProcess exited with code 0\nOutput:\n",
+        )
+        rollout.status_item("FileChange", "call_shell_patch", "completed")
+        trajectory = _convert_scripts(tmp_path, rollout)
+        assert _signals(trajectory, "call_wait") == {"is_error": False}
+        assert _signals(trajectory, "call_spawn") == {"is_error": True}
+        assert _signals(trajectory, "call_shell_patch") == {"is_error": False, "exit_code": 0}

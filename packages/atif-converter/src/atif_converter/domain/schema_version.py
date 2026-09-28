@@ -39,12 +39,16 @@ History:
   carries neither), and ``meta.json`` records ``harbor_version`` 0.23.0. Prices
   from litellm v1.102.0, which also prices claude-fable-5-1, so its local
   override retired and its sessions are labeled ``litellm_estimate``.
+* 4 — Codex ``is_error`` / ``exit_code`` for code-mode ``exec`` scripts, from
+  the script's own header and the items its nested commands, MCP calls and
+  patches complete; ``is_error`` from the ``status`` of ``FileChange`` and
+  ``CollabAgentToolCall`` items.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 3
+CONVERTER_SCHEMA_VERSION: Final = 4
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]
