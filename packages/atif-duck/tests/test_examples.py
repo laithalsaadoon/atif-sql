@@ -52,7 +52,7 @@ from atif_duck.infrastructure.registry import register
 EXAMPLES = build_examples()
 
 
-@pytest.fixture(scope="module", params=["per-session", "lake"])
+@pytest.fixture(scope="module", params=["per-session", "lake", "lake-every-corpus"])
 def full_con(
     request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[duckdb.DuckDBPyConnection]:
@@ -62,7 +62,9 @@ def full_con(
     pass serves every parametrized case. The corpus is rebuilt here (rather
     than via the function-scoped ``corpus_root`` fixture) to allow the wider
     scope. Parametrized over both read paths, so every example executes over
-    the per-session artifacts AND over a lake loaded from them.
+    the per-session artifacts AND over a lake loaded from them, and once more
+    over a lake of two corpora read as one (``query --all-corpora``), whose
+    analytics views read both corpora's parquets.
     """
     root = tmp_path_factory.mktemp("examples-corpus")
     corpus = build_corpus(root / "corpus")
@@ -70,14 +72,24 @@ def full_con(
     lance = _write_lance(root / "lance")
     con = duckdb.connect(":memory:")
     reader = None
-    if request.param == "lake":
+    if request.param != "per-session":
+        corpora = [LakeCorpus(root=corpus, agent="claude-code")]
+        if request.param == "lake-every-corpus":
+            second = build_corpus(root / "second-corpus")
+            _populate_analytics(second)
+            corpora.append(LakeCorpus(root=second, agent="claude-code"))
         layout = LakeLayout(root / "lake")
-        rebuild_lake(layout, [LakeCorpus(root=corpus, agent="claude-code")])
-        attached = attach_lake_for_query(con, layout, corpus_root=corpus, all_corpora=False)
+        rebuild_lake(layout, corpora)
+        attached = attach_lake_for_query(
+            con,
+            layout,
+            corpus_root=corpus,
+            all_corpora=request.param == "lake-every-corpus",
+        )
         assert isinstance(attached, LakeReader), attached
         reader = attached
     sources = register(con, corpus, lance_uri=lance, lake=reader)
-    assert sources.from_lake is (request.param == "lake")
+    assert sources.from_lake is (request.param != "per-session")
     yield con
     con.close()
 

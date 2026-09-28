@@ -86,9 +86,11 @@ from atif_duck.domain.lake import (
     LAKE_HASH_SQL,
     LAKE_INFO_TABLE,
     LAKE_METADATA_ALIAS,
+    LAKE_ROW_GROUP_SIZE,
     LAKE_TABLES,
     PARTITION_SQL,
     READER_SELECT_SQL,
+    SOURCE_ORDERED_TABLES,
     expected_lake_info,
     lake_info_mismatches,
 )
@@ -342,6 +344,26 @@ def _file_maintenance(con: duckdb.DuckDBPyConnection) -> Generator[None]:
         con.execute(f"SET threads={int(_WRITER_THREADS)}")
 
 
+@contextlib.contextmanager
+def _source_order(con: duckdb.DuckDBPyConnection, table: str) -> Generator[None]:
+    """Insert a :data:`~atif_duck.domain.lake.SOURCE_ORDERED_TABLES` table on one thread.
+
+    A parallel partitioned insert interleaves its threads' rows, and those
+    tables' within-step order exists only as insertion order (``rowid``).
+    Measured on the copied corpora, one thread makes a whole rebuild take
+    about 2.5 times as long, which a rebuild can afford and a reader cannot
+    work around.
+    """
+    if table not in SOURCE_ORDERED_TABLES:
+        yield
+        return
+    con.execute("SET threads=1")
+    try:
+        yield
+    finally:
+        con.execute(f"SET threads={int(_WRITER_THREADS)}")
+
+
 def _attach(
     con: duckdb.DuckDBPyConnection, catalog: Path, data_dir: Path, *, read_only: bool
 ) -> None:
@@ -408,6 +430,9 @@ def _create_schema(con: duckdb.DuckDBPyConnection) -> None:
     """Create every table in a fresh lake and record this code's schema identity."""
     con.execute(f"CALL {LAKE_ALIAS}.set_option('parquet_compression', 'zstd');")
     con.execute(f"CALL {LAKE_ALIAS}.set_option('data_inlining_row_limit', 0);")
+    con.execute(
+        f"CALL {LAKE_ALIAS}.set_option('parquet_row_group_size', {int(LAKE_ROW_GROUP_SIZE)});"
+    )
     # One transaction, one snapshot: each DDL statement on its own is a
     # catalog commit, which made schema creation most of a small rebuild.
     con.execute("BEGIN TRANSACTION")
@@ -498,7 +523,8 @@ def _load_batch(
                 con.execute(DELETE_CORPUS_SQL[table.name], [corpus.name])
             elif delete:
                 con.execute(DELETE_SESSIONS_SQL[table.name], [corpus.name, list(session_ids)])
-            con.execute(INSERT_SQL[table.name], [corpus.name, corpus.agent])
+            with _source_order(con, table.name):
+                con.execute(INSERT_SQL[table.name], [corpus.name, corpus.agent])
         if register_at is not None:
             _register_corpus(con, corpus, register_at)
         _commit_message(con, f"{corpus.name}: {len(session_ids)} session(s)")
@@ -775,6 +801,9 @@ class LakeReader:
     grants: tuple[Path, ...]
     #: The corpora the lake holds.
     corpora: tuple[str, ...]
+    #: Their roots, in corpus-name order: where each corpus's analytics
+    #: parquets live, which an every-corpus registration reads from all of.
+    corpus_roots: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -839,6 +868,7 @@ def attach_lake_for_query(
         corpus=None if all_corpora else corpus_root.name,
         grants=_snapshot_files(con),
         corpora=tuple(sorted(known)),
+        corpus_roots=tuple(known[name].root for name in sorted(known)),
     )
 
 

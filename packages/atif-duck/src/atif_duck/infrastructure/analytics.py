@@ -116,23 +116,31 @@ def _backing_files(path: Path) -> list[Path]:
     return [path] if path.stat().st_size > _MIN_PARQUET_BYTES else []
 
 
-def register_analytics(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> set[str]:
+def register_analytics(
+    con: duckdb.DuckDBPyConnection, corpus_root: Path, *more_roots: Path
+) -> set[str]:
     """Bind the analytics parquets as views; return the set registered.
 
     Each view is created only when its backing parquet is populated.
     Derived views (``session_goals``, ``conflicts_summary``) follow their
     upstream. Idempotent against a partially-populated corpus.
+
+    With ``more_roots`` (a query over every corpus of the lake) each view
+    reads the parquets under every root's ``analytics/``. The rows carry no
+    corpus column (the catalog's shapes do not change with the scope); join
+    ``sessions`` on ``session_id`` for it. Session ids are unique across
+    corpora, since each is its own transcript's id.
     """
-    analytics_dir = corpus_root / "analytics"
+    roots = (corpus_root, *more_roots)
     registered: set[str] = set()
 
     for view_name, rel in _ANALYTICS_SOURCES.items():
-        parts = _backing_files(analytics_dir / rel)
+        parts = [part for root in roots for part in _backing_files(root / "analytics" / rel)]
         if not parts:
             logger.debug(
-                "register_analytics: skipping {} (no parquet at {})",
+                "register_analytics: skipping {} (no parquet under {} root(s))",
                 view_name,
-                analytics_dir / rel,
+                len(roots),
             )
             continue
         projection = _VIEW_PROJECTIONS.get(view_name, "*")
@@ -163,7 +171,7 @@ def register_analytics(con: duckdb.DuckDBPyConnection, corpus_root: Path) -> set
             # register-or-fail-loud for real DDL errors — a populated parquet
             # that cannot bind is corruption, not a fresh-install state.
             logger.exception(
-                "Failed to register analytics view {} from {}", view_name, analytics_dir / rel
+                "Failed to register analytics view {} from {} file(s)", view_name, len(parts)
             )
             raise
 

@@ -497,7 +497,7 @@ def _refused_statement_kinds(con: Any, sql: str) -> list[str]:
 _QUERY_UNLOCKED_CONFIGS: tuple[str, ...] = ("TimeZone",)
 
 
-def _lazy_read_paths(corpus_root: Path) -> list[Path]:
+def _lazy_read_paths(*corpus_roots: Path) -> list[Path]:
     """Analytics parquets a registered view reads LAZILY, at caller-query time.
 
     ``register_raw`` materializes the JSON session artifacts into TEMP
@@ -509,7 +509,9 @@ def _lazy_read_paths(corpus_root: Path) -> list[Path]:
     parquets, is reported by ``register`` itself (``RawSources.lazy_read_paths``)
     because only the registry knows which sessions it bound that way.
     """
-    return sorted(p for p in (corpus_root / "analytics").rglob("*.parquet") if p.is_file())
+    return sorted(
+        p for root in corpus_roots for p in (root / "analytics").rglob("*.parquet") if p.is_file()
+    )
 
 
 def _harden_query_connection(
@@ -518,6 +520,7 @@ def _harden_query_connection(
     corpus_root: Path,
     spill_dir: Path,
     columnar_paths: Sequence[Path] = (),
+    analytics_roots: Sequence[Path] = (),
 ) -> None:
     """Sandbox a fully-registered connection before it runs caller SQL.
 
@@ -573,7 +576,8 @@ def _harden_query_connection(
     """
     con.execute(f"SET allowed_directories=[{_sql_str(str(spill_dir))}]")
     lazy_paths = ", ".join(
-        _sql_str(str(path)) for path in (*columnar_paths, *_lazy_read_paths(corpus_root))
+        _sql_str(str(path))
+        for path in (*columnar_paths, *_lazy_read_paths(*(analytics_roots or (corpus_root,))))
     )
     con.execute(f"SET allowed_paths=[{lazy_paths}]")
     unlocked = ", ".join(_sql_str(name) for name in _QUERY_UNLOCKED_CONFIGS)
@@ -1426,7 +1430,7 @@ def query(
     import duckdb
 
     from atif_cli.duck_errors import REGISTRATION_ERRORS, classify_registration_error
-    from atif_duck.infrastructure.registry import register
+    from atif_duck.infrastructure.registry import analytics_roots, register
     from atif_embed.infrastructure.settings import EmbedSettings
 
     settings = _corpus_settings(None, corpus_root, agent)
@@ -1467,6 +1471,7 @@ def query(
                     corpus_root=settings.corpus_root,
                     spill_dir=spill_dir,
                     columnar_paths=sources.lazy_read_paths,
+                    analytics_roots=analytics_roots(settings.corpus_root, lake_reader),
                 )
                 refused = _refused_statement_kinds(con, sql)
                 if refused:
@@ -1586,6 +1591,7 @@ def analyze(
     skip_friction: bool = False,
     skip_perceived: bool = False,
     corpus_root: Path | None = None,
+    lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Run the four LLM analytics pipelines: classify, conflicts, friction, perceived.
@@ -1594,6 +1600,12 @@ def analyze(
     pass ``--no-dry-run`` to execute them. ``--skip-<stage>`` subtracts
     individual stages. The deterministic surfaces (``user_steps``,
     ``human_turns``, ``session_outcomes``) are views, so they need no run.
+
+    Session data comes from the lake when it holds the corpus (a session
+    whose lake rows are not its current artifacts is read from its files),
+    and from the per-session files otherwise, after one warning. The
+    summary's ``session_source`` says which. Outputs still land under the
+    corpus's ``analytics/`` directory either way.
 
     Parameters
     ----------
@@ -1620,6 +1632,9 @@ def analyze(
         Opt out of one stage.
     corpus_root
         Override the materialized corpus root.
+    lake
+        Read session data from the lake (default). ``--no-lake`` reads the
+        per-session files.
     fmt
         Summary format; ``auto`` = JSON on a pipe.
     """
@@ -1645,17 +1660,44 @@ def analyze(
     if max_cost_usd is not None:
         settings = settings.model_copy(update={"llm_max_cost_usd_per_run": max_cost_usd})
 
-    summary = run_analyze(
-        settings,
-        since_days=since_days,
-        limit=limit,
-        dry_run=not no_dry_run,
-        skip_classify=skip_classify,
-        skip_conflicts=skip_conflicts,
-        skip_friction=skip_friction,
-        skip_perceived=skip_perceived,
-    )
+    source = _analyze_lake_source(settings.corpus_root) if lake else None
+    try:
+        summary = run_analyze(
+            settings,
+            since_days=since_days,
+            limit=limit,
+            dry_run=not no_dry_run,
+            skip_classify=skip_classify,
+            skip_conflicts=skip_conflicts,
+            skip_friction=skip_friction,
+            skip_perceived=skip_perceived,
+            source=source,
+        )
+    finally:
+        if source is not None:
+            source.close()
+    if source is not None:
+        summary["sessions_read_from_files"] = len(source.from_files)
     emit_json(summary, fmt)
+
+
+def _analyze_lake_source(corpus_root: Path) -> Any:
+    """The lake's session source for ``corpus_root``, or ``None`` (after a warning) to read the files."""
+    from loguru import logger
+
+    from atif_cli.lake_sessions import LakeSessionSource
+    from atif_duck.infrastructure.lake import LakeLayout
+    from atif_duck.infrastructure.lake_settings import LakeSettings
+
+    opened = LakeSessionSource.open(
+        LakeLayout(LakeSettings().lake_root),
+        corpus_root,
+        memory_limit_bytes=query_memory_limit_bytes(),
+    )
+    if not isinstance(opened, LakeSessionSource):
+        logger.warning("analyze: {}; reading the per-session artifacts instead", opened.reason)
+        return None
+    return opened
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,11 @@
 
 """Pure transcript rendering over materialized ATIF steps.
 
-This is the domain half of the corpus-reader seam. The infrastructure
-reader (:mod:`atif_analytics.infrastructure.corpus_reader`) parses
-``trajectory.json`` + ``edges.jsonl`` into :class:`StepEvent` rows; this
-module turns them into the byte-shape the prompts are tuned on
+This is the domain half of the corpus-reader seam. A session source
+(:mod:`atif_analytics.domain.ports`: the per-session files, or the lake)
+turns a session's steps into :class:`StepEvent` rows through
+:func:`step_event`; this module turns them into the byte-shape the prompts
+are tuned on
 (CONTRACT-V2 §Ports & state: transcript text for prompts is steps-based
 rendering under the caps below):
 
@@ -30,8 +31,12 @@ Rendering rules the prompts depend on (documented per CONTRACT-V2):
 * sidechain steps are EXCLUDED: the prompts are calibrated on transcripts
   containing no subagent content, and harbor inlines sidechains into the
   flat step list, so they must be filtered back out here.
-* timestamps are the ATIF step timestamp strings verbatim (already ISO-8601
-  ``...Z``), not a Python ``isoformat()`` round-trip.
+* timestamps are spelled by :func:`format_step_ts`: ISO-8601 UTC with
+  milliseconds and a ``Z`` (``2026-08-20T10:00:00.000Z``), which is how both
+  agents write them, so on a real transcript it is the ATIF string verbatim.
+  Both session sources spell it through the one function, because the lake
+  keeps a typed timestamp rather than the source text. Not a Python
+  ``isoformat()`` round-trip (that writes ``+00:00``).
 * empty-text steps contribute no text line — an ATIF step carrying only
   tool calls has ``message == ""`` and has nothing to render.
 
@@ -48,10 +53,16 @@ tool arguments, and tool results leave this machine on that path.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from atif_analytics.domain.authorship import SessionKind, kind_of, step_author
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 #: Default per-``tool_use`` args preview length.
 TOOL_INPUT_PREVIEW_CHARS: int = 400
@@ -136,6 +147,80 @@ class StepEvent:
         """Derive ``author`` for a user step the caller did not label."""
         if self.author is None and self.role == "user":
             self.author = "harness" if self.is_compact_summary else step_author("user", self.text)
+
+
+def format_step_ts(ts: datetime | None) -> str:
+    """Spell a step timestamp the way the transcript renders it (``...T10:00:00.000Z``).
+
+    UTC, milliseconds unless the value carries sub-millisecond precision (then
+    microseconds, so nothing is dropped), and a ``Z``. An aware value is
+    converted to UTC first; a naive one is taken as UTC, which is how the lake
+    stores it. ``None`` spells as the empty string.
+    """
+    if ts is None:
+        return ""
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(UTC).replace(tzinfo=None)
+    micros = ts.microsecond
+    fraction = f"{micros // 1000:03d}" if micros % 1000 == 0 else f"{micros:06d}"
+    return f"{ts:%Y-%m-%dT%H:%M:%S}.{fraction}Z"
+
+
+def step_event(
+    *,
+    ts: datetime | None,
+    source: str | None,
+    text: str | None,
+    source_uuids: object,
+    is_sidechain: bool,
+    is_compact_summary: bool,
+    tool_calls: Iterable[tuple[str | None, object]] = (),
+    tool_results: Iterable[tuple[str | None, object, bool]] = (),
+    has_error_result: bool = False,
+) -> StepEvent:
+    """Project one ATIF step's values into a :class:`StepEvent`: the rules both sources share.
+
+    ``tool_calls`` holds ``(function_name, arguments)`` and ``tool_results``
+    ``(source_call_id, content, is_error)``, with ``arguments`` and
+    ``content`` as parsed JSON values. The rules:
+
+    * ATIF ``source`` ``agent`` renders as ``assistant``; an absent source as
+      ``unknown``.
+    * the uuid is the FIRST ``source_uuids`` entry when it is a string.
+    * arguments render as JSON (non-ASCII kept); absent arguments as ``""``.
+    * a string result renders as itself, anything else as JSON, and an absent
+      one as ``null`` (what ``json.dumps(None)`` writes).
+    * the step carries an error when any of its results says so, or when the
+      caller says so without handing the results over (``has_error_result``).
+    * the author label is derived in :class:`StepEvent` from the role and text.
+    """
+    uuids = source_uuids if isinstance(source_uuids, list) else []
+    uuid = uuids[0] if uuids and isinstance(uuids[0], str) else None
+    raw_source = source or ""
+    calls = [
+        (
+            str(name or ""),
+            json.dumps(args, ensure_ascii=False, default=str) if args is not None else "",
+        )
+        for name, args in tool_calls
+    ]
+    results: list[tuple[str, str]] = []
+    has_error = has_error_result
+    for call_id, content, is_error in tool_results:
+        content_str = content if isinstance(content, str) else json.dumps(content, default=str)
+        results.append((str(call_id or ""), content_str or ""))
+        has_error = has_error or is_error
+    return StepEvent(
+        ts=format_step_ts(ts),
+        role="assistant" if raw_source == "agent" else (raw_source or "unknown"),
+        text=text or "",
+        uuid=uuid,
+        is_sidechain=is_sidechain,
+        is_compact_summary=is_compact_summary,
+        has_error_result=has_error,
+        tool_calls=calls,
+        tool_results=results,
+    )
 
 
 def is_human_turn(step: StepEvent) -> bool:
@@ -260,11 +345,13 @@ __all__ = [
     "UUID_HEADER_ESCAPE",
     "StepEvent",
     "escape_uuid_headers",
+    "format_step_ts",
     "human_ai_pair_count",
     "is_human_turn",
     "main_chain",
     "render_session_text",
     "session_kind",
+    "step_event",
     "tool_input_preview",
     "tool_result_preview",
 ]

@@ -1998,6 +1998,18 @@ def register_macros(
 # ---------------------------------------------------------------------------
 
 
+def analytics_roots(corpus_root: Path, lake: LakeReader | None) -> tuple[Path, ...]:
+    """The corpus roots whose ``analytics/`` parquets a registration binds.
+
+    ``corpus_root`` alone, unless ``lake`` spans every corpus: then every
+    corpus the lake holds, in name order. atif-cli grants the query sandbox
+    the same set.
+    """
+    if lake is not None and lake.corpus is None and lake.corpus_roots:
+        return lake.corpus_roots
+    return (corpus_root,)
+
+
 def register(
     con: duckdb.DuckDBPyConnection,
     corpus_root: Path,
@@ -2055,7 +2067,10 @@ def register(
         the raw relations are views over its tables (scoped as it says)
         instead of readers over ``corpus_root``'s per-session artifacts, and
         nothing is loaded eagerly. ``corpus_root`` still locates the
-        analytics parquets and the default embeddings store.
+        default embeddings store, and the analytics parquets unless the lake
+        spans every corpus: then each analytics view reads every lake
+        corpus's parquets, so ``--all-corpora`` covers them as it covers the
+        transcripts.
     lance_uris
         Several stores to bind ``message_embeddings`` over at once (one per
         corpus, for ``--all-corpora``); see :func:`register_vss_stores`.
@@ -2092,6 +2107,6 @@ def register(
         )
     register_macros(con, pricing=pricing, skip_vss=skip_vss)
     register_authorship(con)
-    registered = register_analytics(con, corpus_root)
+    registered = register_analytics(con, *analytics_roots(corpus_root, lake))
     register_analytics_macros(con, registered)
     return sources
