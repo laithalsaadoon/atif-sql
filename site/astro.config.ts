@@ -4,7 +4,10 @@ import { satteri } from "@astrojs/markdown-satteri"
 import starlight from "@astrojs/starlight"
 import { defineConfig } from "astro/config"
 /* A NAMED export, unlike every other Starlight plugin here: `starlight-base-path@0.2.1` publishes no
-   default, so a default import is `undefined` and the config load fails with "not a function". */
+   default, so a default import is `undefined` and the config load fails with "not a function".
+   It registers a `markdown.remarkPlugins` entry, which Astro 7 runs on `@astrojs/markdown-remark`'s
+   unified processor and refuses to load without it. That package used to arrive through
+   `@astrojs/mdx`; since mdx stopped depending on it, `package.json` names it directly. */
 import { starlightBasePath } from "starlight-base-path"
 import starlightLinksValidator from "starlight-links-validator"
 import starlightLlmsTxt from "starlight-llms-txt"

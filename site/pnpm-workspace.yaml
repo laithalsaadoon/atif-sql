@@ -11,6 +11,5 @@ allowBuilds:
 
 # `minimumReleaseAge` holds a fresh release out of the resolution set entirely rather than falling
 # back to an older one, so a pinned version younger than the cooldown has no installable candidate
-# and the install fails outright. This exclusion names the pin that `package.json` asks for.
-minimumReleaseAgeExclude:
-  - '@astrojs/starlight@0.41.10'
+# and the install fails outright. Such a pin goes under `minimumReleaseAgeExclude` until it ages
+# out; every pin in `package.json` is past the cooldown today, so the list is gone.
