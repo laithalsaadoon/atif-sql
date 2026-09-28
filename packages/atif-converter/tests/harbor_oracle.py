@@ -190,8 +190,64 @@ PRICING_DIVERGENCE_PATHS: frozenset[str] = frozenset(
 )
 
 
+#: The same policy at the step level (harbor 0.23.0 prices every step): a step
+#: whose model harbor prices at a fabricated $0 carries no ``cost_usd`` and no
+#: label in ours, and a step priced from a local override carries the override's
+#: price and label. ``{i}`` is the step index.
+STEP_PRICING_DIVERGENCE_PATHS: tuple[str, ...] = (
+    "$.steps[{i}].metrics.cost_usd",
+    "$.steps[{i}].metrics.extra.cost_source",
+)
+
+
 def _diff_path(diff: str) -> str:
     return diff.split(":", 1)[0]
+
+
+def _policy_prices_differently(model: object) -> bool:
+    """Whether the pricing policy prices ``model`` differently from harbor's litellm.
+
+    True for a model priced from a local override, and for one the vendored
+    table can't price (harbor writes litellm's $0 there, we write nothing).
+    """
+    from atif_converter.domain import pricing
+
+    if not isinstance(model, str):
+        return False
+    if pricing.is_local_override(model):
+        return True
+    try:
+        priced = pricing.priced_cost_per_token(
+            model=model,
+            prompt_tokens=1,
+            completion_tokens=1,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+    except Exception:  # noqa: BLE001 - a model nobody prices is not a policy divergence
+        return False
+    return priced is None
+
+
+def _step_pricing_forgiven(expected: dict[str, Any], ours: dict[str, Any]) -> frozenset[str]:
+    """The step-level :data:`STEP_PRICING_DIVERGENCE_PATHS` the pricing policy explains.
+
+    Checked per step against that step's own model, so a priced step that
+    regressed still fails parity even in a session holding an unpriced one.
+    """
+    forgiven: set[str] = set()
+    harbor_steps = expected.get("steps") or []
+    for index, step in enumerate(ours.get("steps") or []):
+        if not _policy_prices_differently(step.get("model_name")):
+            continue
+        forgiven.update(path.format(i=index) for path in STEP_PRICING_DIVERGENCE_PATHS)
+        # When the label was harbor's only metrics.extra key, ours has no extra
+        # at all, and the diff names the parent path instead.
+        harbor_step = harbor_steps[index] if index < len(harbor_steps) else {}
+        harbor_extra = (harbor_step.get("metrics") or {}).get("extra")
+        if isinstance(harbor_extra, dict) and set(harbor_extra) == {"cost_source"}:
+            forgiven.add(f"$.steps[{index}].metrics.extra")
+    return frozenset(forgiven)
 
 
 def _pricing_divergence_expected(ours: dict[str, Any]) -> bool:
@@ -233,15 +289,18 @@ def _pricing_divergence_expected(ours: dict[str, Any]) -> bool:
 def parity_diffs(expected: dict[str, Any], ours: dict[str, Any]) -> list[str]:
     """:func:`diff_paths` minus the documented deliberate divergences.
 
-    Two kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
-    pattern matches, always; and the :data:`PRICING_DIVERGENCE_PATHS`, only
-    when :func:`_pricing_divergence_expected` says the pricing policy explains
-    them.
+    Three kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
+    pattern matches, always; the :data:`PRICING_DIVERGENCE_PATHS`, only when
+    :func:`_pricing_divergence_expected` says the pricing policy explains them;
+    and a step's :data:`STEP_PRICING_DIVERGENCE_PATHS`, only when that step's
+    model is one the policy prices differently.
     """
+    step_forgiven = _step_pricing_forgiven(expected, ours)
     diffs = [
         line
         for line in diff_paths(expected, ours)
         if not any(pattern.match(line) for pattern in DELIBERATE_DIVERGENCES)
+        and _diff_path(line) not in step_forgiven
     ]
     if not _pricing_divergence_expected(ours):
         return diffs

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Vendored from harbor 0.22.0, src/harbor/models/trajectories/__init__.py
+# Vendored from harbor 0.23.0, src/harbor/models/trajectories/__init__.py
 # (Apache-2.0, Copyright the Harbor authors), with the provenance constants
 # below added.
 
@@ -22,7 +22,7 @@ is to re-vendor the changed files and move :data:`UPSTREAM_VERSION`.
 """
 
 from atif_converter.domain.atif.agent import Agent
-from atif_converter.domain.atif.content import ContentPart, ImageSource
+from atif_converter.domain.atif.content import AudioSource, ContentPart, ImageSource
 from atif_converter.domain.atif.final_metrics import FinalMetrics
 from atif_converter.domain.atif.metrics import Metrics
 from atif_converter.domain.atif.observation import Observation
@@ -35,12 +35,13 @@ from atif_converter.domain.atif.trajectory import Trajectory
 #: The distribution these files were vendored from.
 UPSTREAM_DISTRIBUTION = "harbor"
 #: The upstream release the files match; ``meta.json`` records it as ``harbor_version``.
-UPSTREAM_VERSION = "0.22.0"
+UPSTREAM_VERSION = "0.23.0"
 
 __all__ = [
     "UPSTREAM_DISTRIBUTION",
     "UPSTREAM_VERSION",
     "Agent",
+    "AudioSource",
     "ContentPart",
     "FinalMetrics",
     "ImageSource",

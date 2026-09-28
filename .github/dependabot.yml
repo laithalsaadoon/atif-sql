@@ -83,20 +83,16 @@ updates:
     # count toward it, so a CVE fix is never queued behind a routine bump.
     open-pull-requests-limit: 5
     ignore:
-      # harbor's ceiling is not a version preference, it is the boundary of what has been
-      # verified. `packages/atif-converter/pyproject.toml` pins `harbor>=0.22.0,<0.23` because
-      # atif-converter calls the PRIVATE `ClaudeCode._convert_events_to_trajectory`, verified
-      # against 0.22.0 only, and the seven known conversion gaps are encoded by hand in
-      # `atif_converter/domain/fidelity.py`. Moving past the ceiling therefore takes two things
-      # no bot can do: re-running the atif-converter unit tests as a deliberate drift alarm,
-      # and re-auditing fidelity.py against the new upstream behaviour.
+      # harbor is a dev dependency (the parity oracle and the vendored-ATIF conformance test),
+      # and a harbor minor is a decision no bot can make: re-vendor the ATIF models under
+      # `atif_converter/domain/atif/`, read the golden and parity failures as upstream-behavior
+      # reports, decide whether the port follows, and decide whether CONVERTER_SCHEMA_VERSION
+      # moves (CONTRIBUTING, "harbor and litellm are test oracles"). So minor and major are
+      # silenced here and land by hand, the way 0.23.0 did.
       #
-      # Patch updates stay in scope, and that is the point rather than an oversight: 0.22.x is
-      # inside the verified range, and a Dependabot pull request runs `mise run check`, so the
-      # drift tests fire on the bump and a private-API change announces itself. Only minor and
-      # major cross the ceiling, and only those are silenced. Measured 2026-08-28: harbor's
-      # latest release IS 0.22.0, so this entry currently suppresses nothing and exists for the
-      # day that changes.
+      # Patch updates stay in scope, and that is the point rather than an oversight: a Dependabot
+      # pull request runs `mise run check`, so the vendored-source and golden tests fire on the
+      # bump and any upstream change announces itself.
       - dependency-name: "harbor"
         update-types:
           - "version-update:semver-minor"

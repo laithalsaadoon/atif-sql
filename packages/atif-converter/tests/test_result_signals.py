@@ -20,6 +20,7 @@ import pytest
 from codex_fixtures import codex_rollout_records, write_codex_rollout
 from harbor_oracle import (
     PRICING_DIVERGENCE_PATHS,
+    STEP_PRICING_DIVERGENCE_PATHS,
     diff_paths,
     harbor_claude_code_trajectory,
     parity_diffs,
@@ -101,9 +102,15 @@ class TestSubagentAgentId:
         agent_id_lines = [line for line in raw if ".extra.agent_id: only in ours" in line]
         assert agent_id_lines, "the fixture must exercise the divergence the filter names"
         # The fixture's model has no price, so the pricing policy's own named
-        # divergence (NULL, not harbor's $0) shows up beside it; nothing else may.
+        # divergence (NULL, not harbor's $0), per session and per step, shows up
+        # beside it; nothing else may.
         others = {line.split(":", 1)[0] for line in raw if line not in agent_id_lines}
-        assert others <= {*PRICING_DIVERGENCE_PATHS, "$.final_metrics.extra"}
+        step_paths = {
+            path.format(i=index)
+            for index in range(len(ours.steps))
+            for path in (*STEP_PRICING_DIVERGENCE_PATHS, "$.steps[{i}].metrics.extra")
+        }
+        assert others <= {*PRICING_DIVERGENCE_PATHS, "$.final_metrics.extra", *step_paths}
         assert parity_diffs(theirs, ours.to_json_dict()) == []
 
 

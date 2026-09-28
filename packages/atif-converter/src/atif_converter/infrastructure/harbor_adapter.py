@@ -7,7 +7,7 @@ The ATIF validator and data classes are harbor's, vendored as
 itself isn't a runtime dependency). The raw-JSONL -> ``Trajectory`` conversion
 is ours, in :mod:`atif_converter.domain.claude_code_conversion` via
 :mod:`atif_converter.infrastructure.claude_code_converter`, ported from harbor
-0.22.0 and held to parity with it by the oracle in this package's tests.
+0.23.0 and held to parity with it by the oracle in this package's tests.
 """
 
 from __future__ import annotations

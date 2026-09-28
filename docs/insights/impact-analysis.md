@@ -87,9 +87,9 @@ The catalogs (`VIEW_NAMES`, `MACRO_NAMES`, `ANALYTICS_VIEW_NAMES`,
 
 Defined at: `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75` (Claude Code) and `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781` (Codex)
 
-Production code builds on harbor 0.22.0's ATIF data classes (`harbor.models.trajectories`) and
+Production code builds on harbor 0.23.0's ATIF data classes (`harbor.models.trajectories`) and
 `harbor.utils.trajectory_validator`, vendored in `packages/atif-converter/src/atif_converter/domain/atif/`; harbor itself is a dev
-dependency. `packages/atif-converter/tests/test_vendored_atif.py` compares the copy to the installed harbor. The conversion is a parity port of harbor 0.22.0's
+dependency. `packages/atif-converter/tests/test_vendored_atif.py` compares the copy to the installed harbor. The conversion is a parity port of harbor 0.23.0's
 private converters, and those private methods are reachable from the tests only, as the oracle
 (`packages/atif-converter/tests/harbor_oracle.py:94`, `packages/atif-converter/tests/harbor_oracle.py:111`), frozen to goldens under `packages/atif-converter/tests/goldens/`.
 

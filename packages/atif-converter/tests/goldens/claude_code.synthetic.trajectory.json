@@ -54,6 +54,10 @@
       "metrics": {
         "cached_tokens": 0,
         "completion_tokens": 2,
+        "cost_usd": 0.0,
+        "extra": {
+          "cost_source": "litellm_estimate"
+        },
         "prompt_tokens": 5
       },
       "model_name": "claude-test-1",
@@ -80,9 +84,11 @@
       "metrics": {
         "cached_tokens": 100,
         "completion_tokens": 5,
+        "cost_usd": 0.0,
         "extra": {
           "cache_creation_input_tokens": 50,
-          "cache_read_input_tokens": 100
+          "cache_read_input_tokens": 100,
+          "cost_source": "litellm_estimate"
         },
         "prompt_tokens": 160
       },
@@ -139,9 +145,11 @@
       "metrics": {
         "cached_tokens": 110,
         "completion_tokens": 3,
+        "cost_usd": 0.0,
         "extra": {
           "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 110
+          "cache_read_input_tokens": 110,
+          "cost_source": "litellm_estimate"
         },
         "prompt_tokens": 130
       },
