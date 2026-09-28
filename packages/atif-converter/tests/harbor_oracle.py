@@ -55,6 +55,13 @@ DELIBERATE_DIVERGENCES: tuple[re.Pattern[str], ...] = (
     re.compile(r"^\$\.steps\[\d+\]\.extra\.agent_id: only in ours = "),
 )
 
+#: ``agent.extra`` lists harbor builds from a Python ``set``, so its order
+#: follows the process hash seed; ours keep first-seen order (see
+#: ``_agent_extra`` in ``domain/claude_code_conversion.py``). Their element
+#: paths are forgiven only when the two lists hold the same values, so a
+#: missing, extra or changed value still fails parity.
+SET_ORDER_DIVERGENCE_KEYS: tuple[str, ...] = ("cwds", "git_branches", "agent_ids")
+
 
 def harbor_has_private_api(agent: str) -> bool:
     """Whether harbor still exposes the private converter for ``agent``."""
@@ -286,21 +293,37 @@ def _pricing_divergence_expected(ours: dict[str, Any]) -> bool:
     return False
 
 
+def _set_order_forgiven(expected: dict[str, Any], ours: dict[str, Any]) -> tuple[str, ...]:
+    """Path prefixes of the :data:`SET_ORDER_DIVERGENCE_KEYS` lists that differ only in order."""
+    harbor_extra = (expected.get("agent") or {}).get("extra") or {}
+    our_extra = (ours.get("agent") or {}).get("extra") or {}
+    forgiven: list[str] = []
+    for key in SET_ORDER_DIVERGENCE_KEYS:
+        theirs, mine = harbor_extra.get(key), our_extra.get(key)
+        if isinstance(theirs, list) and isinstance(mine, list) and sorted(theirs) == sorted(mine):
+            forgiven.append(f"$.agent.extra.{key}[")
+    return tuple(forgiven)
+
+
 def parity_diffs(expected: dict[str, Any], ours: dict[str, Any]) -> list[str]:
     """:func:`diff_paths` minus the documented deliberate divergences.
 
-    Three kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
-    pattern matches, always; the :data:`PRICING_DIVERGENCE_PATHS`, only when
+    Four kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
+    pattern matches, always; the element lines of a
+    :data:`SET_ORDER_DIVERGENCE_KEYS` list, only when both sides hold the same
+    values; the :data:`PRICING_DIVERGENCE_PATHS`, only when
     :func:`_pricing_divergence_expected` says the pricing policy explains them;
     and a step's :data:`STEP_PRICING_DIVERGENCE_PATHS`, only when that step's
     model is one the policy prices differently.
     """
     step_forgiven = _step_pricing_forgiven(expected, ours)
+    order_forgiven = _set_order_forgiven(expected, ours)
     diffs = [
         line
         for line in diff_paths(expected, ours)
         if not any(pattern.match(line) for pattern in DELIBERATE_DIVERGENCES)
         and _diff_path(line) not in step_forgiven
+        and not (order_forgiven and _diff_path(line).startswith(order_forgiven))
     ]
     if not _pricing_divergence_expected(ours):
         return diffs
