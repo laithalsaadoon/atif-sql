@@ -28,7 +28,8 @@
 #   (h) every lane runs under a real per-lane memory cap (read back from the
 #       cgroup the CLI actually ran in), `off` opts out, a malformed budget
 #       refuses the lane;
-#   (i) the compact lane runs `lake compact` once, under its own 4G scope,
+#   (i) the compact lane runs `lake compact` once, with an explicit DuckDB
+#       budget under its own 4G scope,
 #       WHILE holding the materialize lane's lock (read back from inside the
 #       shim), skips when a materialize run outlasts the wait, and skips
 #       quietly against a CLI without `lake`.
@@ -515,11 +516,14 @@ fi
 #     `lake` makes it skip without a call.
 # ---------------------------------------------------------------------------
 if printf '%s' "$top_help" | grep -qw lake; then
-  if "$ATIF_SQL" lake compact --help 2>&1 | grep -qE -- '--format\b'; then
-    ok "lake compact accepts --format"
-  else
-    fail "lake compact no longer accepts --format (passed by the compact lane)"
-  fi
+  compact_help="$("$ATIF_SQL" lake compact --help 2>&1)"
+  for flag in --memory-limit --format; do
+    if printf '%s' "$compact_help" | grep -qE -- "$flag\b"; then
+      ok "lake compact accepts $flag"
+    else
+      fail "lake compact no longer accepts $flag (passed by the compact lane)"
+    fi
+  done
 fi
 
 make_compact_shim() {
@@ -547,13 +551,20 @@ make_compact_shim "$compact_dir" with
 ATIF_SQL_CLI="$compact_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$compact_dir/run" \
   ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" compact
 rc=$?
-read -r c_sub c_verb c_flag c_fmt c_held c_cg c_max < <(head -n 1 "$compact_dir/calls.log" 2>/dev/null)
+read -r c_sub c_verb c_mflag c_budget c_flag c_fmt c_held c_cg c_max < <(head -n 1 "$compact_dir/calls.log" 2>/dev/null)
 c_calls="$(wc -l < "$compact_dir/calls.log" 2>/dev/null || echo 0)"
-if [ "$rc" = 0 ] && [ "$c_calls" = 1 ] && [ "${c_sub:-} ${c_verb:-} ${c_flag:-} ${c_fmt:-}" = "lake compact --format json" ] \
+c_argv="${c_sub:-} ${c_verb:-} ${c_mflag:-} ${c_budget:-} ${c_flag:-} ${c_fmt:-}"
+if [ "$rc" = 0 ] && [ "$c_calls" = 1 ] && [ "$c_argv" = "lake compact --memory-limit 2GiB --format json" ] \
    && grep -q '\[compact\] lake compact ok' "$compact_dir/run/atif-sql-refresh.log"; then
-  ok "compact lane: runs \`lake compact --format json\` exactly once"
+  ok "compact lane: runs \`lake compact --memory-limit 2GiB --format json\` exactly once"
 else
-  fail "compact lane: exit=$rc calls=$c_calls first='${c_sub:-} ${c_verb:-} ${c_flag:-} ${c_fmt:-}' (want 0, one lake compact call, ok line)"
+  fail "compact lane: exit=$rc calls=$c_calls argv='$c_argv' (want 0, one lake compact call with an explicit budget, ok line)"
+fi
+if [[ "${c_budget:-}" =~ ^([0-9]+)GiB$ ]] && [ -n "${c_max:-}" ] && [ "${c_max:-}" != max ] \
+   && [ $((BASH_REMATCH[1] * 1024 * 1024 * 1024)) -lt "$c_max" ]; then
+  ok "compact lane: the DuckDB budget (${c_budget}) sits under the scope's memory.max"
+else
+  fail "compact lane: budget '${c_budget:-}' is not a GiB size under memory.max '${c_max:-}'"
 fi
 if [ "${c_held:-}" = held ]; then
   ok "compact lane: the materialize lock is held while compact runs"
@@ -586,6 +597,15 @@ if [ "$rc" = 0 ] && [ ! -e "$compact_dir/calls.log" ] \
   ok "compact lane: skips (exit 0, logged) while a materialize run holds its lock past the wait"
 else
   fail "compact lane: ran or failed beside a held materialize lock (exit=$rc)"
+fi
+
+ATIF_SQL_CLI="$compact_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$compact_dir/bad-budget-run" \
+  ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT=lots ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" compact
+rc=$?
+if [ "$rc" = 64 ] && grep -q "FATAL: ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT='lots'" "$compact_dir/bad-budget-run/atif-sql-refresh.log"; then
+  ok "compact lane: a malformed DuckDB budget refuses the lane (exit 64, FATAL logged)"
+else
+  fail "compact lane: malformed budget was not refused (exit=$rc)"
 fi
 
 make_compact_shim "$shim_root/compact-without" without

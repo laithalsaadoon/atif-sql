@@ -288,7 +288,9 @@ atif-sql query 'SQL' [--format auto|json|csv]
 atif-sql lake rebuild [--corpus-root P ...]  # fresh lake, directory swap
 atif-sql lake verify                   # exit 65 lake_mismatch, 78 lake_unavailable
 atif-sql lake status                   # also folded into `atif-sql status`
-atif-sql lake compact [--expire-older-than-days N]  # default 30
+atif-sql lake compact [--expire-older-than-days N] [--memory-limit SIZE]
+                                       # default 30 days; SIZE overrides the host-derived
+                                       # DuckDB budget (the writer ceiling still applies)
 atif-sql embed --install-extension     # the ONE place the lance DuckDB extension
                                        # is downloaded (also done by a real embed run)
 atif-sql embed --dry-run               # plan; discovery reads the lake's steps changed

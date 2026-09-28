@@ -276,6 +276,7 @@ def status(
 def compact(
     *,
     expire_older_than_days: int | None = None,
+    memory_limit: str | None = None,
     lake_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
@@ -287,12 +288,22 @@ def compact(
         Expire snapshots older than this (default ``ATIF_SQL_LAKE_EXPIRE_DAYS``,
         else 30). Files only expired snapshots referenced are then removed,
         once an hour old, so a reader in flight keeps every file it names.
+    memory_limit
+        DuckDB's memory budget for the run, as a size (``2GiB``, ``1500MB``),
+        instead of the one derived from the host and cgroup. The writer's own
+        2 GiB ceiling still applies. The nightly refresh lane passes one that
+        fits its memory scope, so a sizing mistake can't shrink the budget
+        until the merge runs out of memory.
     lake_root
         The lake to compact (default ``ATIF_SQL_LAKE_ROOT``).
     fmt
         ``auto`` = human lines on a TTY, JSON on a pipe.
     """
-    from atif_duck.infrastructure.lake import LakeError, compact_lake
+    from atif_duck.infrastructure.lake import (
+        DEFAULT_WRITER_MEMORY_BYTES,
+        LakeError,
+        compact_lake,
+    )
 
     layout, settings = _layout(lake_root)
     days = (
@@ -300,15 +311,37 @@ def compact(
     )
     if days < 0:
         _fail("invalid_input", "--expire-older-than-days must be >= 0", "pass 0 or more", fmt)
+    budget = _memory_limit()
+    if memory_limit is not None:
+        from atif_cli.app import parse_size
+
+        try:
+            budget = parse_size(memory_limit)
+        except ValueError as exc:
+            _fail("invalid_input", str(exc), "pass a size such as 2GiB or 1500MB", fmt)
+        if budget <= 0:
+            _fail("invalid_input", "--memory-limit must be a positive size", "e.g. 2GiB", fmt)
+    import duckdb
+
     try:
         report = compact_lake(
             layout,
             expire_older_than_days=days,
             lock_timeout_seconds=settings.lake_lock_timeout_seconds,
-            memory_limit_bytes=_memory_limit(),
+            memory_limit_bytes=budget,
         )
     except LakeError as exc:
         _fail("lake_unavailable", str(exc), "run `atif-sql lake rebuild`", fmt)
+        return
+    except duckdb.Error as exc:
+        # An out-of-memory merge is the likely one. Nothing was published, so
+        # readers keep the previous catalog; the next run starts over.
+        _fail(
+            "runtime_error",
+            str(exc).splitlines()[0],
+            "raise --memory-limit (the writer's ceiling is 2GiB) or run it again",
+            fmt,
+        )
         return
     payload = {
         "lake_root": str(layout.root),
@@ -316,6 +349,7 @@ def compact(
         "data_files_after": report.files_after,
         "snapshots_before": report.snapshots_before,
         "snapshots_after": report.snapshots_after,
+        "memory_limit_bytes": min(budget, DEFAULT_WRITER_MEMORY_BYTES),
         "seconds": round(report.seconds, 3),
     }
     if resolve_format(fmt) is OutputFormat.TABLE:

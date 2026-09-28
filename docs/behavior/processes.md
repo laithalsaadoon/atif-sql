@@ -382,8 +382,9 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
    mtime and suppress further embeds for that corpus until the mtime changes;
    every other nonzero exit stays transient and retries next tick — `:217`,
    `:244`.
-9. The `compact` lane runs `atif-sql lake compact` once (not per corpus) under
-   a 4G scope, after taking the materialize lane's lock too (waiting up to
+9. The `compact` lane runs `atif-sql lake compact --memory-limit 2GiB` once
+   (not per corpus; `ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT` changes the
+   budget) under a 4G scope, after taking the materialize lane's lock too (waiting up to
    `ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS`), so no materialize tick writes the
    lake while it runs; a CLI without `lake` skips with one line.
 

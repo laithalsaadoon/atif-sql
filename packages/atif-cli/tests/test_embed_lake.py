@@ -565,3 +565,55 @@ class TestSearchOverTheLake:
             search, "x", corpus_root=corpus, all_corpora=True, lake=False, fmt=OutputFormat.JSON
         )
         assert code == EXIT_CODES["invalid_input"]
+
+
+class TestCompactBudget:
+    def test_an_explicit_budget_replaces_the_host_sizing(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from atif_duck.infrastructure import lake as lake_infra
+
+        del corpus
+        seen: list[object] = []
+        real = lake_infra.compact_lake
+
+        def recording(*args: Any, **kwargs: Any) -> Any:
+            seen.append(kwargs["memory_limit_bytes"])
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr("atif_duck.infrastructure.lake.compact_lake", recording)
+        monkeypatch.setattr("atif_cli.lake._memory_limit", lambda: 512 * 1024**2)
+        compact(memory_limit="1GiB", fmt=OutputFormat.JSON)
+        assert _json(capsys)["memory_limit_bytes"] == 1024**3
+        compact(fmt=OutputFormat.JSON)
+        assert _json(capsys)["memory_limit_bytes"] == 512 * 1024**2
+        assert seen == [1024**3, 512 * 1024**2]
+
+    def test_the_writer_ceiling_still_applies(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        del corpus
+        compact(memory_limit="64GiB", fmt=OutputFormat.JSON)
+        assert _json(capsys)["memory_limit_bytes"] == 2 * 1024**3
+
+    @pytest.mark.parametrize("budget", ["lots", "0GiB"])
+    def test_a_malformed_budget_exits_64(self, corpus: Path, budget: str) -> None:
+        del corpus
+        code = _exit_code(compact, memory_limit=budget, fmt=OutputFormat.JSON)
+        assert code == EXIT_CODES["invalid_input"]
+
+    def test_a_merge_that_runs_out_of_memory_exits_70(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import duckdb
+
+        del corpus
+
+        def out_of_memory(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            msg = "Out of Memory Error: could not allocate block"
+            raise duckdb.OutOfMemoryException(msg)
+
+        monkeypatch.setattr("atif_duck.infrastructure.lake.compact_lake", out_of_memory)
+        code = _exit_code(compact, memory_limit="512MiB", fmt=OutputFormat.JSON)
+        assert code == EXIT_CODES["runtime_error"]

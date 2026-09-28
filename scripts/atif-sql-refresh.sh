@@ -23,7 +23,7 @@
 #   llm          10:20 `atif-sql analyze --no-dry-run --llm-only` — REAL SPEND
 #                      (classify/conflicts/friction/perceived on Bedrock).
 #                      Deliberate and nightly. Guarded: see below.
-#   compact      03:40 `atif-sql lake compact` — zero-cost lake maintenance:
+#   compact      03:40 `atif-sql lake compact --memory-limit 2GiB` — zero-cost lake maintenance:
 #                      merges small files, rewrites delete-heavy ones, expires
 #                      old snapshots, removes unreferenced files. Nightly,
 #                      because every materialize pass adds files. It runs
@@ -186,13 +186,25 @@ esac
 # 80% of the scope's MemoryMax, and reading the corpus's 907 MB session needs
 # a limit between 16 and 20 GiB — MemoryMax=20G failed with OutOfMemory, 24G
 # passed. llm parses that same session in ~1.8 GB. Lower materialize only
-# after the embed pass stops re-reading unchanged sessions. compact runs
-# DuckDB under the lake writer's own 2 GiB cap, so 4G is that plus headroom.
+# after the embed pass stops re-reading unchanged sessions.
+#
+# compact gets an EXPLICIT DuckDB budget as well as the scope: `lake compact
+# --memory-limit` (default 2GiB, the lake writer's own ceiling; override with
+# ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT). Left to size itself from the host,
+# a cgroup full of page cache once sized it at the floor and the merge ran
+# out of memory. Merging a lake that a full re-conversion left in thousands of
+# small files peaked just above that budget in RSS, so the 4G scope is the
+# budget plus DuckDB's own overhead plus headroom.
 case "$MODE" in
   materialize) mem_max_default=24G ;;
   llm)         mem_max_default=8G ;;
   compact)     mem_max_default=4G ;;
 esac
+COMPACT_MEMORY_LIMIT="${ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT:-2GiB}"
+if [ "$MODE" = compact ] && ! [[ "$COMPACT_MEMORY_LIMIT" =~ ^[0-9]+(MiB|GiB|MB|GB)$ ]]; then
+  log "FATAL: ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT='$COMPACT_MEMORY_LIMIT' is not a size like 2GiB"
+  exit 64
+fi
 mem_max_var="ATIF_SQL_REFRESH_MEMORY_MAX_${MODE^^}"
 MEM_MAX="${!mem_max_var:-$mem_max_default}"
 # A malformed budget would make systemd-run refuse AFTER the exec, leaving the
@@ -293,7 +305,7 @@ run_compact() {
     log "skip[compact]: a materialize run held its lock for over ${wait_seconds}s; compact waits for tomorrow"
     return 0
   fi
-  if ! "$ATIF_SQL" lake compact --format json >> "$LOG" 2>&1 8>&- 9>&-; then
+  if ! "$ATIF_SQL" lake compact --memory-limit "$COMPACT_MEMORY_LIMIT" --format json >> "$LOG" 2>&1 8>&- 9>&-; then
     log "[compact] lake compact FAILED (see above)"
     return 1
   fi
