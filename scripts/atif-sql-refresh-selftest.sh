@@ -27,7 +27,11 @@
 #       ATIF_SQL_CORPUS_ROOT is pinned to the Claude corpus;
 #   (h) every lane runs under a real per-lane memory cap (read back from the
 #       cgroup the CLI actually ran in), `off` opts out, a malformed budget
-#       refuses the lane.
+#       refuses the lane;
+#   (i) the compact lane runs `lake compact` once, under its own 4G scope,
+#       WHILE holding the materialize lane's lock (read back from inside the
+#       shim), skips when a materialize run outlasts the wait, and skips
+#       quietly against a CLI without `lake`.
 #
 # Run by hand after an atif-sql upgrade, or wire into a nightly.
 # Exits the FAILURE COUNT (0 = green).
@@ -83,6 +87,13 @@ while IFS=' ' read -r subcommand flags; do
       ok "analyze absent from CLI but the refresh script carries the absence guard"
     else
       fail "analyze absent from CLI and the refresh script has NO absence guard"
+    fi
+  elif [ "$subcommand" = lake ]; then
+    # lake is allowed to be absent — but ONLY because the compact lane guards it.
+    if grep -q 'lake not yet installed, skipping' "$SCRIPT"; then
+      ok "lake absent from CLI but the refresh script carries the absence guard"
+    else
+      fail "lake absent from CLI and the refresh script has NO absence guard"
     fi
   elif [ "$subcommand" = embed ]; then
     # embed is allowed to be absent — but ONLY because the script guards it.
@@ -492,6 +503,100 @@ if [ "$rc" = 64 ] && [ ! -e "$cap_dir/calls.log" ] \
   ok "memory cap: a malformed budget refuses the lane (exit 64, FATAL logged)"
 else
   fail "memory cap: malformed budget was not refused (exit=$rc; want 64, FATAL line, no analyze call)"
+fi
+
+# ---------------------------------------------------------------------------
+# (i) THE COMPACT LANE. The shim's `lake compact` probes the materialize lane's
+#     lock with its own nonblocking flock (it inherits no descriptor: the lane
+#     closes fd 8 and 9 for every CLI call), and records the answer plus its
+#     cgroup and memory.max. The lane must run compact once, holding that
+#     lock, in an atif-sql-refresh-compact-* scope capped at 4G. Then: a held
+#     materialize lock that outlasts the wait makes it skip, and a CLI without
+#     `lake` makes it skip without a call.
+# ---------------------------------------------------------------------------
+if printf '%s' "$top_help" | grep -qw lake; then
+  if "$ATIF_SQL" lake compact --help 2>&1 | grep -qE -- '--format\b'; then
+    ok "lake compact accepts --format"
+  else
+    fail "lake compact no longer accepts --format (passed by the compact lane)"
+  fi
+fi
+
+make_compact_shim() {
+  # $1 = shim dir, $2 = "with" | "without" (lake in --help)
+  local dir="$1" mode="$2"
+  mkdir -p "$dir"
+  cat > "$dir/atif-sql" <<SHIM
+#!/usr/bin/env bash
+case "\${1:-}" in
+  --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  embed$([ "$mode" = with ] && echo '  lake')" ;;
+  lake)
+    lock="\$ATIF_SQL_REFRESH_RUN_DIR/atif-sql-refresh-materialize.lock"
+    if flock -n "\$lock" true; then held=free; else held=held; fi
+    cg="\$(sed -n 's/^0:://p' /proc/self/cgroup)"
+    echo "\$* \$held \$cg \$(cat "/sys/fs/cgroup\$cg/memory.max" 2>/dev/null)" >> "$dir/calls.log"
+    ;;
+  *) echo "\$*" >> "$dir/other.log" ;;
+esac
+SHIM
+  chmod +x "$dir/atif-sql"
+}
+
+compact_dir="$shim_root/compact"
+make_compact_shim "$compact_dir" with
+ATIF_SQL_CLI="$compact_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$compact_dir/run" \
+  ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" compact
+rc=$?
+read -r c_sub c_verb c_flag c_fmt c_held c_cg c_max < <(head -n 1 "$compact_dir/calls.log" 2>/dev/null)
+c_calls="$(wc -l < "$compact_dir/calls.log" 2>/dev/null || echo 0)"
+if [ "$rc" = 0 ] && [ "$c_calls" = 1 ] && [ "${c_sub:-} ${c_verb:-} ${c_flag:-} ${c_fmt:-}" = "lake compact --format json" ] \
+   && grep -q '\[compact\] lake compact ok' "$compact_dir/run/atif-sql-refresh.log"; then
+  ok "compact lane: runs \`lake compact --format json\` exactly once"
+else
+  fail "compact lane: exit=$rc calls=$c_calls first='${c_sub:-} ${c_verb:-} ${c_flag:-} ${c_fmt:-}' (want 0, one lake compact call, ok line)"
+fi
+if [ "${c_held:-}" = held ]; then
+  ok "compact lane: the materialize lock is held while compact runs"
+else
+  fail "compact lane: the materialize lock was '${c_held:-unknown}' during compact (want held) — a materialize tick could write the lake mid-compaction"
+fi
+if [[ "${c_cg:-}" == */atif-sql-refresh-compact-*.scope ]] && [ "${c_max:-}" = $((4 * 1024 * 1024 * 1024)) ]; then
+  ok "compact lane: ran in ${c_cg##*/} with memory.max=4G"
+else
+  fail "compact lane: memory cap missing (cgroup='${c_cg:-}' memory.max='${c_max:-}'; want atif-sql-refresh-compact-*.scope, $((4 * 1024 * 1024 * 1024)))"
+fi
+if [ ! -e "$compact_dir/other.log" ]; then
+  ok "compact lane: no materialize, embed or analyze call"
+else
+  fail "compact lane: made other CLI calls: $(tr '\n' ';' < "$compact_dir/other.log")"
+fi
+
+# A materialize run holding its lock past the wait: compact must skip, not queue forever or run beside it.
+rm -f "$compact_dir/calls.log"
+mkdir -p "$compact_dir/run"
+flock "$compact_dir/run/atif-sql-refresh-materialize.lock" sleep 5 &
+holder=$!
+sleep 0.5
+ATIF_SQL_CLI="$compact_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$compact_dir/run" \
+  ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS=1 ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" compact
+rc=$?
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+if [ "$rc" = 0 ] && [ ! -e "$compact_dir/calls.log" ] \
+   && grep -q 'skip\[compact\]: a materialize run held its lock' "$compact_dir/run/atif-sql-refresh.log"; then
+  ok "compact lane: skips (exit 0, logged) while a materialize run holds its lock past the wait"
+else
+  fail "compact lane: ran or failed beside a held materialize lock (exit=$rc)"
+fi
+
+make_compact_shim "$shim_root/compact-without" without
+ATIF_SQL_CLI="$shim_root/compact-without/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$shim_root/compact-without/run" \
+  ATIF_SQL_EXTRA_CONFIG_DIRS='' bash "$SCRIPT" compact
+rc=$?
+if [ "$rc" = 0 ] && [ ! -e "$shim_root/compact-without/calls.log" ] \
+   && grep -q 'lake not yet installed, skipping' "$shim_root/compact-without/run/atif-sql-refresh.log"; then
+  ok "compact lane: a CLI without \`lake\` skips with one line"
+else
+  fail "compact lane: absence guard did not fire (exit=$rc)"
 fi
 
 printf '\n%s\n' "selftest: $fails failure(s)"

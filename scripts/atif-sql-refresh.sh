@@ -17,9 +17,18 @@
 #                      but drift between corpus and embeddings. The explicit
 #                      --limit keeps any one tick bounded even after a bulk
 #                      re-materialize; the backlog clears across ticks.
+#                      With a lake, embed's discovery reads the lake's steps
+#                      changed since its last complete pass instead of every
+#                      session's trajectory.json (`atif-sql embed --help`).
 #   llm          10:20 `atif-sql analyze --no-dry-run --llm-only` — REAL SPEND
 #                      (classify/conflicts/friction/perceived on Bedrock).
 #                      Deliberate and nightly. Guarded: see below.
+#   compact      03:40 `atif-sql lake compact` — zero-cost lake maintenance:
+#                      merges small files, rewrites delete-heavy ones, expires
+#                      old snapshots, removes unreferenced files. Nightly,
+#                      because every materialize pass adds files. It runs
+#                      once per tick, not per corpus (one lake holds them all).
+#                      See THE COMPACT LANE below.
 #
 # THE STRUCTURAL LANE WAS REMOVED 2026-09-27 with the cluster/terms/community
 # stages it ran. `structural` (and `struct`) is still ACCEPTED: it logs one
@@ -99,6 +108,19 @@
 # block; check `crontab -l` first — no tool writes the crontab silently):
 #   */10 * * * * <repo>/scripts/atif-sql-refresh.sh materialize >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1   # Claude Code corpora + the Codex pass
 #   20  10 * * * <repo>/scripts/atif-sql-refresh.sh llm         >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
+#   40   3 * * * <repo>/scripts/atif-sql-refresh.sh compact     >> <repo>/scripts/.run/atif-sql-refresh.cron.log 2>&1
+#
+# THE COMPACT LANE takes its own lock like every lane, and then the
+# MATERIALIZE lane's lock too, waiting up to
+# ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS (default 1800) for a running
+# materialize tick to finish. Holding it keeps every materialize tick (the lake's
+# only writer) out while compact runs: a tick that fires meanwhile logs a skip
+# and the next one catches up. The CLI's own writer lock would serialize the
+# two anyway; the lane lock keeps a materialize tick from waiting inside it
+# for the whole compaction. A materialize tick still running after the wait
+# means compact skips this night (logged), never that it runs beside a writer.
+# A CLI without `lake` (it predates the lake) skips with one line, the same
+# shape as the analyze and embed absence guards.
 #
 # scripts/atif-sql-refresh-selftest.sh asserts this file's flags against the
 # installed CLI's --help; run it after every atif-sql upgrade.
@@ -138,11 +160,12 @@ log() { echo "$(date -Is) $*" >> "$LOG"; }
 case "${1:-}" in
   materialize|mat)   MODE=materialize ;;
   llm|--llm)         MODE=llm ;;
+  compact|lake-compact) MODE=compact ;;
   structural|struct)
     # Removed lane (see header): one line, exit 0, nothing else runs.
     log "[structural] lane removed 2026-09-27 (cluster/terms/community cut); delete the :17 crontab line"
     exit 0 ;;
-  *) log "FATAL: unknown mode '${1:-}' (expected: materialize | llm)"; exit 64 ;;
+  *) log "FATAL: unknown mode '${1:-}' (expected: materialize | llm | compact)"; exit 64 ;;
 esac
 
 # MEMORY CAP PER LANE. Each lane re-execs itself ONCE inside a transient
@@ -163,10 +186,12 @@ esac
 # 80% of the scope's MemoryMax, and reading the corpus's 907 MB session needs
 # a limit between 16 and 20 GiB — MemoryMax=20G failed with OutOfMemory, 24G
 # passed. llm parses that same session in ~1.8 GB. Lower materialize only
-# after the embed pass stops re-reading unchanged sessions.
+# after the embed pass stops re-reading unchanged sessions. compact runs
+# DuckDB under the lake writer's own 2 GiB cap, so 4G is that plus headroom.
 case "$MODE" in
   materialize) mem_max_default=24G ;;
   llm)         mem_max_default=8G ;;
+  compact)     mem_max_default=4G ;;
 esac
 mem_max_var="ATIF_SQL_REFRESH_MEMORY_MAX_${MODE^^}"
 MEM_MAX="${!mem_max_var:-$mem_max_default}"
@@ -253,6 +278,34 @@ echo $$ > "$PIDFILE"
 # keeps the lane locked for as long as the descendant lives — a lane that
 # stops doing work while every log line still reads like a clean single-flight.
 # The parent keeps its own fd 9, so single-flight is unaffected.
+
+# THE COMPACT LANE (see header): lake-wide, so it runs once and exits here,
+# before the per-corpus loop. fd 8 holds the materialize lane's lock for the
+# whole run; every CLI call closes it (`8>&-`) like fd 9.
+run_compact() {
+  if ! "$ATIF_SQL" --help 2>/dev/null 8>&- 9>&- | grep -qw lake; then
+    log "[compact] lake not yet installed, skipping"
+    return 0
+  fi
+  local wait_seconds="${ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS:-1800}"
+  exec 8>"$RUN_DIR/atif-sql-refresh-materialize.lock"
+  if ! flock -w "$wait_seconds" 8; then
+    log "skip[compact]: a materialize run held its lock for over ${wait_seconds}s; compact waits for tomorrow"
+    return 0
+  fi
+  if ! "$ATIF_SQL" lake compact --format json >> "$LOG" 2>&1 8>&- 9>&-; then
+    log "[compact] lake compact FAILED (see above)"
+    return 1
+  fi
+  log "[compact] lake compact ok"
+}
+
+if [ "$MODE" = compact ]; then
+  overall=0
+  run_compact || overall=1
+  log "refresh complete (mode=$MODE, exit=$overall)"
+  exit "$overall"
+fi
 
 # THE ANALYTICS GUARD (see header). Probed once — the subcommand's existence
 # does not vary per corpus.
