@@ -39,7 +39,8 @@ Resolution (the ConverterPort precedent from atif-corpus): the use case
 depends on a domain port, `TextRowsPort.iter_unembedded(corpus_root,
 exclude, limit)`, and atif-embed ships its OWN DuckDB implementation
 (`DuckDbTextRows`) that reads the CONTRACT corpus layout directly —
-`read_json` over `<corpus_root>/sessions/<id>/trajectory.json` with the
+`read_json` over each session's stored trajectory (`trajectory.json.zst`, or
+the plain `trajectory.json` of an older corpus, batched by decompressed size) with the
 meta.json torn-set gate — rather than importing `atif_duck.register`. The
 two packages are coupled through docs/CONTRACT.md's artifact shapes, not
 through code.

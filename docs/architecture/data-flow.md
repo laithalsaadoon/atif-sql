@@ -50,11 +50,11 @@ catalog copy.
    (`convert_loaded_session`, validated by harbor's public `TrajectoryValidator`), then builds
    the loss report and edges from the same records, enriches the trajectory, and refuses the result
    if any source moved since the read (`packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`).
-9. The JSON artifacts are written under `.staging/`, then the `ArtifactProducer` (atif-duck's
-   `ColumnarArtifactProducer`, plugged in by the CLI unless `--no-columnar`) writes the typed
-   parquet files beside them and hands back the `columnar_schema` key for `meta.json`; `meta.json`
-   is written last and the whole directory swaps into `sessions/<id>/`, so a reader sees one
-   complete generation or the other
+9. The artifacts are written under `.staging/`: `trajectory.json.zst`, `edges.jsonl.zst` and
+   `session_events.jsonl.zst` (zstd, each decompressing to the plain file an earlier version
+   wrote), then `loss_report.json`. No per-session parquet is written; the CLI wires no
+   `ArtifactProducer`. `meta.json` is written last and the whole directory swaps into
+   `sessions/<id>/`, so a reader sees one complete generation or the other
    (`packages/atif-corpus/src/atif_corpus/application/materialize.py:240`); the watermark advances
    only for sessions that succeeded — `:608`.
 10. Before the first swap, the pass records every session it may publish or mark in
@@ -66,6 +66,11 @@ catalog copy.
    catalog. What the sink took leaves the pending file; a failure keeps that batch and every later
    one there for the next pass and never fails this one (`_SinkLedger` in
    `packages/atif-corpus/src/atif_corpus/application/materialize.py`,
+   `packages/atif-duck/src/atif_duck/infrastructure/lake.py`).
+11. The sink reads each session into the batch by staging it: the stored trajectory is decoded in
+   Python, typed into parquet by `ColumnarArtifactProducer` under `<lake root>.load-<pid>/`, and
+   read from there, then deleted when the batch commits. A session written by an earlier version
+   that still has current parquet of its own is read from that instead (`_staged_columnar` in
    `packages/atif-duck/src/atif_duck/infrastructure/lake.py`).
 
 ```mermaid
@@ -79,7 +84,7 @@ sequenceDiagram
     participant Sink as atif-duck lake sink
     participant Lake as DuckLake
 
-    CLI->>Corpus: materialize(source_root, corpus_root, ConverterPort, ArtifactProducer)
+    CLI->>Corpus: materialize(source_root, corpus_root, ConverterPort, SessionSink)
     Corpus->>Disk: read_watermark + scan_sources
     Disk-->>Corpus: SessionSource list, prior mtimes
     Corpus->>Corpus: build_plan -> stale / current / live
@@ -88,13 +93,13 @@ sequenceDiagram
         Conv->>Harbor: pinned private converter(session_dir)
         Harbor-->>Conv: ATIF trajectory
         Conv-->>Corpus: ConversionOutput
-        Corpus->>Disk: stage trajectory, loss report, edges
-        Corpus->>Producer: ArtifactProducer.produce(staged dir, trajectory)
-        Producer->>Disk: typed parquet files (0444)
-        Corpus->>Disk: meta.json last (with columnar_schema), swap dir
+        Corpus->>Disk: stage trajectory.json.zst, loss report, edges.jsonl.zst, events
+        Corpus->>Disk: meta.json last, swap dir
     end
     loop each batch of published sessions
         Corpus->>Sink: SessionSink.sync_sessions(corpus_root, agent, ids)
+        Sink->>Producer: decode each trajectory, stage typed parquet
+        Producer->>Disk: <lake root>.load-<pid>/<id>/*.parquet
         Sink->>Lake: one transaction: DELETE + INSERT per table
         Sink->>Lake: publish catalog.reader.duckdb
     end
@@ -122,11 +127,13 @@ sequenceDiagram
    those views as it would over the per-session ones (`attach_lake_for_query` and
    `register_lake_raw` in `packages/atif-duck/src/atif_duck/infrastructure/lake.py`). Otherwise the
    command prints one warning saying why and takes the per-session path below.
-5. On the per-session path, the raw readers materialize `meta.json`, `edges.jsonl`, and `loss_report.json` as TEMP TABLEs
-   over globs into `<corpus_root>/sessions/`. The trajectory is split per session: a session whose
-   `meta.columnar_schema` is current and whose parquet files are present is read lazily with
-   `read_parquet` (typed columns, no JSON parsed at query time), and every other session is parsed
-   from `trajectory.json` into a TEMP TABLE over an explicit path list; the two sets are unioned
+5. On the per-session path, the raw readers materialize `meta.json`, the edges, and `loss_report.json` as TEMP TABLEs
+   over `<corpus_root>/sessions/`, each session's edges from its stored file (`edges.jsonl.zst`, or
+   `edges.jsonl` on an old-layout session). The trajectory is split per session: an old-layout
+   session whose `meta.columnar_schema` is current and whose parquet files are present is read
+   lazily with `read_parquet`, and every other session is parsed from its stored trajectory
+   (DuckDB's JSON reader decompresses a `.zst` file itself) into a TEMP TABLE over an explicit
+   path list; the two sets are unioned
    into one raw view per surface. The parse cost of a `query` invocation is therefore O(sessions
    without artifacts) per connection — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:402`.
 6. Trajectory, edges, and loss readers are semi-joined against the meta table, so a session
@@ -194,7 +201,7 @@ sequenceDiagram
 3. On the lake, a session whose lake rows match its current `meta.json` is read with batched
    statements over the step-level tables (`packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:71`),
    reading ahead in the newest-first walk order, and every other session from its files. Without
-   a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json` —
+   a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json.zst` (or the plain file on an old-layout session) —
    atif-analytics never imports DuckDB or atif-duck, which the `forbidden` import contract puts
    out of its reach — `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:225`.
    Either way the steps sit behind the reader's bounded memos
@@ -223,7 +230,7 @@ sequenceDiagram
     participant Bedrock as Bedrock
 
     CLI->>Ana: run_analyze(settings, dry_run=false)
-    Ana->>Disk: CorpusReader.load_steps (lake batch, or json over trajectory.json)
+    Ana->>Disk: CorpusReader.load_steps (lake batch, or json over the stored trajectory)
     Disk-->>Ana: StepEvent rows
     loop each LLM stage under one RunBudget
         Ana->>Disk: filter_unchanged against state.db

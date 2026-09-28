@@ -3,7 +3,8 @@
 The v2 analytics pipelines over the materialized ATIF corpus:
 
 * **LLM pipelines** — `classify`, `conflicts`, `friction`, `perceived` —
-  read the materialized corpus (`trajectory.json` steps + `edges.jsonl`),
+  read the materialized corpus (`trajectory.json` steps + `edges.jsonl`,
+  each stored compressed or plain),
   render session transcripts under the documented caps, and classify through
   `atif_models.LlmStructuredProvider` (GPT-5.6 strict structured outputs on
   bedrock-runtime; sizes classify=luna, conflicts=sol, friction=luna,

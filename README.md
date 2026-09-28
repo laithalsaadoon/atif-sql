@@ -77,9 +77,18 @@ corpus's store at once. `atif-sql lake verify` checks the lake against the artif
 `compact` lane runs it). The lake lives at `~/.atif-sql/lake/` (`ATIF_SQL_LAKE_ROOT` moves it)
 and holds every corpus.
 
-`materialize` also writes typed columnar artifacts (parquet files per session) beside the
-JSON ones, so `query` parses no JSON for those sessions; `--no-columnar` skips them, older corpora
-keep working from `trajectory.json`, and `status` prints which path a corpus takes as `query path`.
+Each session is stored once. `materialize` writes the ATIF document as `trajectory.json.zst`,
+and `edges.jsonl` and `session_events.jsonl` compressed the same way, beside a plain `meta.json`,
+`loss_report.json`, and the raw source archive. The lake holds the queryable rows, and it loads a
+session from its compressed trajectory. `zstd -dc trajectory.json.zst` prints the plain ATIF
+document. Without a lake, `query --no-lake` still works, but it parses every session's trajectory
+on each run, so it's slow on a large corpus.
+
+A corpus written by an earlier version also holds plain JSON files and five parquet files per
+session. It keeps working as it is, and `status` counts those sessions under `layout`. To convert
+it, run `atif-sql corpus slim`, which only reports what it would do and how many bytes it would
+free. `atif-sql corpus slim --no-dry-run` compresses the JSON files in place, then deletes the
+parquet files once `lake verify` agrees that the lake matches the compressed files.
 
 For one session at a time, `atif-sql convert <session.jsonl>` converts and audits it in place.
 

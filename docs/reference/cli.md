@@ -53,12 +53,9 @@ Flags:
 - `--format` — report format. `:346`
 
 Exit codes: `0` ok, `64` `--workers` below `1`; `78` the corpus at this root holds the other agent's sessions, refused with nothing touched; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so the pass refused to mark them source-removed and touched nothing. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
-- `--columnar` / `--no-columnar` — write the typed columnar artifacts (`session.parquet`, `steps.parquet`, `tool_calls.parquet`, `tool_results.parquet`) beside the JSON artifacts, staged and swapped with them; default `True`. `--no-columnar` writes only the contract's JSON artifacts and the source archive, and `query` reads those sessions from `trajectory.json`. `packages/atif-cli/src/atif_cli/app.py:452`
 - `--format` — report format. `:346`
 
-The report carries `convert_seconds` and `artifact_seconds` (the time spent writing the columnar files; `0.0` under `--no-columnar`), printed as `columnar: N.NNs` in the table form.
-
-What the artifacts cost, measured on a 300-session, 1.6 GB Claude Code corpus (frozen snapshot, one machine, `/usr/bin/time`): a full `--force` pass took 91 s at a 797 MB peak with them and 55 s at a 670 MB peak without, and they add 455 MB on disk. Most of the extra memory is the producer's DuckDB and pyarrow imports (about 90 MB) plus a bounded working set; most of the extra time is the typed conversion of tool results. Every `query` after that reads typed columns: the panel statements dropped from 2.5 to 8 s and 4.5 to 8.6 GB peak to about 0.9 s and 490 MB each. `--no-columnar` is the right call for a corpus that's written far more often than it's queried.
+Each session is written as `trajectory.json.zst`, `edges.jsonl.zst` and `session_events.jsonl.zst` (zstd; decompressed, each is the plain file an earlier version wrote), a plain `loss_report.json` and `meta.json`, and the raw source archive. No per-session parquet is written, so the report's `artifact_seconds` is `0.0`. A corpus written by an earlier version keeps its plain files and parquet until `atif-sql corpus slim` converts it (see below).
 
 Exit codes: `0` ok, `78` the corpus at this root holds the other agent's sessions, refused with nothing touched; `78` suspicious scan — the source scan found zero sessions while the corpus holds materialized ones, so the pass refused to mark them source-removed and touched nothing. Check `--source-root`; a retry over the same root cannot succeed. `packages/atif-cli/src/atif_cli/app.py:429-443`
 
@@ -71,7 +68,7 @@ atif-sql status [OPTIONS]
 Report corpus freshness: watermark age, counts, bytes, staleness.
 `packages/atif-cli/src/atif_cli/app.py:444`
 
-It replays the planning a default `materialize` would do, so `staleness.stale` includes sessions a converter or columnar-schema change made stale (`staleness.generation_stale` counts those alone) and `staleness.from_archive` counts source-removed sessions the next pass would re-convert from their archive. `retained_sessions` counts sessions kept without a source, `empty_sessions` the transcripts recorded as empty, and `converter_schema` / `columnar_schema` are the running versions a current session must carry.
+It replays the planning a default `materialize` would do, so `staleness.stale` includes sessions a converter change made stale (`staleness.generation_stale` counts those alone) and `staleness.from_archive` counts source-removed sessions the next pass would re-convert from their archive. `retained_sessions` counts sessions kept without a source, `empty_sessions` the transcripts recorded as empty, and `converter_schema` / `columnar_schema` are the running versions a current session must carry.
 
 Flags:
 
@@ -83,7 +80,7 @@ Flags:
 
 Both roots resolve through `_corpus_settings` (`:433`), so a `--source-root` given without `--corpus-root` re-derives the corpus root from the overridden source's slug unless `ATIF_SQL_CORPUS_ROOT` is set (`:206`).
 
-The report also says how `query` will read this corpus. The table form prints `query path: columnar|json|mixed|empty (N of M complete sessions carry typed columnar artifacts)`; the JSON form carries `query_path`, `columnar_sessions`, and `json_sessions`. `columnar` means every complete session has current parquet artifacts, `json` means none does (a corpus materialized before the artifacts existed, or with `--no-columnar`), and `mixed` means the registry will union the two. `status` applies the same per-session predicate the registry does (`meta.columnar_schema` current and all four files present and non-empty), so it can't report `columnar` for a session `query` would read from JSON. `packages/atif-cli/src/atif_cli/app.py:639`
+The report also says how the corpus is stored and how `query` reads it without the lake. `layout` counts the complete sessions still in the old layout (plain JSON files or per-session parquet) and their bytes; the table form prints one line, and `atif-sql corpus slim` converts them. `query path` is `columnar` when every complete session still carries current parquet, `json` when none does (every session written or slimmed since materialize stopped writing parquet), and `mixed` in between. `status` applies the same per-session predicate the registry does (`meta.columnar_schema` current and all five files present and non-empty). `packages/atif-cli/src/atif_cli/app.py:639`
 
 ## query
 
@@ -112,7 +109,7 @@ What caller SQL can still see: `duckdb_settings()` and `current_setting(...)` re
 
 The views themselves carry no corpus path as statement text. The registry hands its globs and file lists to `read_json(?)` as bound parameters and builds the parquet readers through DuckDB's relation API, so a corpus root such as `o'brien ?; --$1` and transcript content carrying SQL text both register as data (`packages/atif-duck/src/atif_duck/infrastructure/registry.py`). A session directory whose name fails the session id boundary (`packages/atif-duck/src/atif_duck/domain/session_id.py`) registers nothing and is logged once.
 
-Sessions that carry current columnar artifacts are served from their parquet files, so no JSON is parsed for them at query time; the rest are read from `trajectory.json`, and the views union the two. The per-session parquet files the registry bound are granted to the sandbox the same way the analytics parquets are (as individual `allowed_paths` entries, `packages/atif-cli/src/atif_cli/app.py:221`), and they're written read-only (`0444`), so a `COPY ... TO` at one of them fails at the filesystem even though DuckDB's grant is read-write. `atif-sql status` says which path a corpus takes.
+Without the lake, an old-layout session that still carries current parquet is served from it, and every other session is parsed from its stored trajectory (`trajectory.json.zst`, decompressed by DuckDB's JSON reader) on each run. That makes the fallback slow on a large corpus, and it holds each document it reads in memory, so a full scan of `tool_calls` or `tool_results` over a large corpus can run out of query memory. That error's hint says to run `atif-sql lake rebuild` (or raise `ATIF_SQL_QUERY_MEMORY_LIMIT`), because the lake answers the same query in bounded memory. The fallback stays for a corpus the lake doesn't hold yet, a lake whose schema is stale, and small corpora. The per-session parquet files the registry bound are granted to the sandbox the same way the analytics parquets are (as individual `allowed_paths` entries, `packages/atif-cli/src/atif_cli/app.py:221`), and they're written read-only (`0444`), so a `COPY ... TO` at one of them fails at the filesystem even though DuckDB's grant is read-write. `atif-sql status` says which path a corpus takes.
 
 Exit codes: `64` parse error or a malformed `ATIF_SQL_QUERY_*` override, `65` catalog error, `65` embedding mismatch, `70` runtime error, `70` `sandbox_refused` (a statement kind the sandbox never runs), `77` `root_refused`. `:550`
 
@@ -263,6 +260,32 @@ Flags:
 - `--format` — human lines on a TTY, JSON on a pipe. `:203`
 
 The lock probe acquires and releases nonblocking, so the command perturbs no running lane. `:127`
+
+## corpus slim
+
+```
+atif-sql corpus slim [--corpus-root PATH ...] [--lake-root PATH] [--no-dry-run] [--format auto|table|json|csv]
+```
+
+Converts corpora written by an earlier version to the compressed layout. Nothing else converts a corpus. A new version reads the old layout as it is. `packages/atif-cli/src/atif_cli/corpus.py`
+
+It's a dry run by default. The dry run compresses each plain file into a byte counter, so the bytes it reports are the bytes a real run frees, and it changes nothing. With `--no-dry-run`, for each corpus it does three things in order:
+
+1. It compresses every plain `trajectory.json`, `edges.jsonl` and `session_events.jsonl` into `<name>.zst`. Each copy is read back and compared with the plain file before the plain file is removed, and it keeps the plain file's mtime, because `analyze` bounds each session by its trajectory's mtime.
+2. If any session still has per-session parquet, it runs `lake verify` for that corpus, reading every session from its trajectory and ignoring the parquet.
+3. When that verify is clean, it deletes the parquet files.
+
+It never rewrites `meta.json`. A corpus the lake doesn't hold, or one whose sessions differ from their lake rows (a lake write still pending, for example), keeps its parquet, and the report says why. Run `atif-sql materialize` to retry pending lake writes, or `atif-sql lake rebuild`, then run slim again. Run it while no materialize pass is running.
+
+Flags:
+
+- `--corpus-root` — a corpus to slim; repeat for more. Default: every corpus the lake holds, plus every directory under `ATIF_SQL_CORPUS_BASE` that holds `sessions/`.
+- `--lake-root` — the lake that verifies the corpora (default `ATIF_SQL_LAKE_ROOT`).
+- `--no-dry-run` — act.
+
+The report lists, per corpus, the sessions in the old layout, the plain and compressed bytes, the parquet files and what happened to them (`deleted`, `would_delete`, `kept`, or `none`), and `bytes_before`, `bytes_after` and `bytes_freed`.
+
+Exit codes: `0` done, `64` no corpus found, `65` `lake_mismatch` (a corpus kept its parquet because its sessions differ from the lake), `70` a file couldn't be compressed, `78` `lake_unavailable` (no usable lake for a corpus). A dry run exits `0`.
 
 ## See also
 

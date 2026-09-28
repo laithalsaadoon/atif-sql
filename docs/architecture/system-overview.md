@@ -62,13 +62,17 @@ extension rather than by importing lancedb
 owner of model ids, so no other package hardcodes one (`packages/atif-models/pyproject.toml:4`).
 
 Every corpus is also loaded into one DuckLake, kept at `ATIF_SQL_LAKE_ROOT` beside the corpora.
-The per-session artifacts stay the source of truth: the lake tables are the raw reader shapes with
+The per-session artifacts stay the source of truth, stored once: materialize writes each session's
+trajectory, edges and events zstd-compressed and no per-session parquet, and the lake holds the
+queryable rows. The lake tables are the raw reader shapes with
 `corpus`, `agent` and `session_id` in front
 (`packages/atif-duck/src/atif_duck/domain/lake.py`), loaded from the same raw relations `query`
 would otherwise build. `atif-corpus` declares the `SessionSink` port that materialize hands every
 published session to, after the swaps and in the parent process only
 (`packages/atif-corpus/src/atif_corpus/domain/ports.py`); `atif-duck` implements it as
 `DuckLakeSessionSink` and `atif-cli` wires the two together, as it does for the converter. The
+sink loads a session by decoding its trajectory in Python and staging typed parquet outside the
+corpus, which keeps the writer inside its memory cap. The
 reader side attaches a published read-only copy of the lake catalog and binds the raw relations as
 views over the lake, falling back to the per-session artifacts when the lake is absent, stale, or
 doesn't hold the corpus (`packages/atif-duck/src/atif_duck/infrastructure/lake.py`).
