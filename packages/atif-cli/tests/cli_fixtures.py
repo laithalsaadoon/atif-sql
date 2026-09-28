@@ -49,6 +49,22 @@ def _quiet_loguru() -> None:  # pyright: ignore[reportUnusedFunction]
     logger.remove()
 
 
+@pytest.fixture(autouse=True)
+def isolated_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point every atif-cli test's lake (and the corpus base) into its own tmp dir.
+
+    ``materialize`` writes the lake at ``ATIF_SQL_LAKE_ROOT`` whenever one
+    exists there, and its default is the user's own ``~/.atif-sql/lake``: a
+    test that inherited the default would write its synthetic sessions into
+    the real lake. Public on purpose (``conftest.py`` re-exports this module
+    with ``import *``, which skips underscore names).
+    """
+    lake_root = tmp_path / "isolated-lake"
+    monkeypatch.setenv("ATIF_SQL_LAKE_ROOT", str(lake_root))
+    monkeypatch.setenv("ATIF_SQL_CORPUS_BASE", str(tmp_path / "isolated-corpus-base"))
+    return lake_root
+
+
 def write_synthetic_session(source_root: Path, session_id: str) -> Path:
     """Create one convertible session JSONL with a backdated mtime."""
     project_dir = source_root / "-tmp-proj"
@@ -218,3 +234,12 @@ def lance_extension_present() -> None:
         con.execute("INSTALL lance")
     finally:
         con.close()
+
+
+# The lake tests need the ducklake extension; `query` only LOADs it, so the
+# suite installs it once up front, as it does lance.
+@pytest.fixture(scope="session", autouse=True)
+def ducklake_extension_present() -> None:
+    from atif_duck.infrastructure.lake import install_ducklake_extension
+
+    install_ducklake_extension()

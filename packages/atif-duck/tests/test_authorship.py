@@ -15,6 +15,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from duck_fixtures import READ_PATHS, register_via
 
 from atif_duck.domain import authorship
 from atif_duck.domain.authorship import (
@@ -23,7 +24,6 @@ from atif_duck.domain.authorship import (
     AUTHOR_VALUES,
     INTERRUPT_PREFIXES,
 )
-from atif_duck.infrastructure.registry import register
 
 INTERACTIVE = "10000000-0000-0000-0000-000000000001"
 AUDIT_PASS = "10000000-0000-0000-0000-000000000002"
@@ -118,8 +118,11 @@ def _write(root: Path, session_id: str, turns: list[tuple[str, str, dict[str, bo
 _NONE: dict[str, bool] = {}
 
 
-@pytest.fixture(scope="module")
-def con(tmp_path_factory: pytest.TempPathFactory) -> duckdb.DuckDBPyConnection:
+@pytest.fixture(scope="module", params=READ_PATHS)
+def con(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> duckdb.DuckDBPyConnection:
+    read_path = str(request.param)
     root = tmp_path_factory.mktemp("authorship")
     _write(
         root,
@@ -179,7 +182,7 @@ def con(tmp_path_factory: pytest.TempPathFactory) -> duckdb.DuckDBPyConnection:
     )
     _write(root, NO_USER, [("agent", "Nothing asked.", _NONE)])
     connection = duckdb.connect()
-    register(connection, root)
+    register_via(connection, root, read_path)
     return connection
 
 

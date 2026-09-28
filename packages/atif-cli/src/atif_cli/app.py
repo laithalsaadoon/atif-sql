@@ -8,8 +8,8 @@ Those five may never import each other, so every cross-package seam (the
 ConverterPort adapter, the clock, version pins, the DuckDB connection) is
 wired here, per docs/CONTRACT.md §CLI.
 
-The ten registered commands — nine ``@app.command`` functions plus the
-``cron`` sub-app:
+The eleven registered commands — nine ``@app.command`` functions plus the
+``cron`` and ``lake`` sub-apps:
 
 * ``convert``      one-shot convert+audit for a single session JSONL
 * ``materialize``  sync the materialized corpus (RealConverter behind the port)
@@ -21,6 +21,8 @@ The ten registered commands — nine ``@app.command`` functions plus the
 * ``examples``     derived, test-executed example queries (also ``query --examples``)
 * ``schema``       static catalog dump, no DuckDB bind, <50ms
 * ``cron``         sub-app: ``install`` (prints, never writes) and ``status``
+* ``lake``         sub-app: ``rebuild``, ``verify``, ``status``, ``compact`` for
+  the DuckLake every corpus is queried through
 
 A command that reaches Bedrock is marked above because its spend is not
 recoverable. Each one guards itself differently: ``analyze`` defaults to a DRY
@@ -67,6 +69,7 @@ import cyclopts
 
 from atif_cli.cron import cron_app
 from atif_cli.errors import EXIT_CODES, ClassifiedError
+from atif_cli.lake import lake_app
 from atif_cli.output import (
     OutputFormat,
     emit_cursor,
@@ -96,6 +99,9 @@ app = cyclopts.App(
 # The `cron` subcommand group (install / status) — lean stdlib+cyclopts module,
 # safe to register eagerly (see atif_cli.cron's module docstring).
 app.command(cron_app)
+# The `lake` subcommand group (rebuild / verify / status / compact): lean at
+# import like `cron`, every heavy import deferred into its command bodies.
+app.command(lake_app)
 
 
 # ---------------------------------------------------------------------------
@@ -155,24 +161,82 @@ _QUERY_MEMORY_MIN_BYTES = 512 * 1024**2
 _QUERY_BYTES_PER_THREAD = 2 * 1024**3
 
 
+#: Where this process's cgroup v2 membership is listed (``0::/<path>``).
+_PROC_SELF_CGROUP = Path("/proc/self/cgroup")
+#: The cgroup v2 unified hierarchy's mount point.
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+#: /proc/meminfo, read for ``MemAvailable``.
+_PROC_MEMINFO = Path("/proc/meminfo")
+
+
+def _read_cgroup_int(path: Path) -> int | None:
+    """An integer cgroup file (``memory.max``, ``memory.current``); ``None`` for ``max`` or unreadable."""
+    try:
+        text = path.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
+
+
+def _cgroup_memory() -> tuple[int | None, int | None]:
+    """``(limit, headroom)`` bytes from this process's cgroup v2 chain; ``None`` when unlimited.
+
+    A limit can sit on any ancestor (``systemd-run --scope -p MemoryMax=``
+    sets it on the scope; a container runtime on a parent), so every level
+    from the process's own cgroup up to the root is read: the limit is the
+    smallest ``memory.max``, and the headroom the smallest ``memory.max`` minus
+    that level's ``memory.current``. A host without cgroup v2 (macOS, a v1
+    host) has no ``0::`` line and answers ``(None, None)``.
+    """
+    try:
+        lines = _PROC_SELF_CGROUP.read_text(encoding="ascii").splitlines()
+    except OSError:
+        return None, None
+    relative = next((line[3:] for line in lines if line.startswith("0::")), None)
+    if relative is None:
+        return None, None
+    level = _CGROUP_ROOT / relative.lstrip("/")
+    limit: int | None = None
+    headroom: int | None = None
+    while True:
+        level_max = _read_cgroup_int(level / "memory.max")
+        if level_max is not None:
+            limit = level_max if limit is None else min(limit, level_max)
+            used = _read_cgroup_int(level / "memory.current") or 0
+            room = max(0, level_max - used)
+            headroom = room if headroom is None else min(headroom, room)
+        if level == _CGROUP_ROOT or _CGROUP_ROOT not in level.parents:
+            break
+        level = level.parent
+    return limit, headroom
+
+
 def _host_memory() -> tuple[int, int]:
-    """``(physical, available)`` bytes on this host.
+    """``(physical, available)`` bytes this process can use.
 
     Physical comes from ``os.sysconf``. Available is Linux's ``MemAvailable``
     from ``/proc/meminfo`` (what a new allocation can really get, reclaimable
     page cache included); where that file is absent (macOS) available is
-    taken as physical.
+    taken as physical. A cgroup v2 ``memory.max`` below either one lowers it
+    (:func:`_cgroup_memory`): /proc/meminfo describes the host, and a query
+    capped by its cgroup that sized itself from the host would be OOM-killed
+    instead of spilling.
     """
     physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     available = physical
     try:
-        with Path("/proc/meminfo").open(encoding="ascii") as handle:
+        with _PROC_MEMINFO.open(encoding="ascii") as handle:
             for line in handle:
                 if line.startswith("MemAvailable:"):
                     available = int(line.split()[1]) * 1024
                     break
     except (OSError, ValueError, IndexError):
         pass
+    limit, headroom = _cgroup_memory()
+    if limit is not None:
+        physical = min(physical, limit)
+    if headroom is not None:
+        available = min(available, headroom)
     return physical, min(physical, available)
 
 
@@ -190,6 +254,11 @@ def _query_memory_limit_bytes() -> int:
     target = max(int(physical * 0.5), _QUERY_MEMORY_TARGET_BYTES)
     ceiling = min(int(physical * 0.8), int(available * 0.8))
     return max(_QUERY_MEMORY_MIN_BYTES, min(target, ceiling))
+
+
+def query_memory_limit_bytes() -> int:
+    """The host- and cgroup-derived DuckDB cap; the ``lake`` commands open their writers under it."""
+    return _query_memory_limit_bytes()
 
 
 def _query_threads(memory_limit_bytes: int) -> int:
@@ -694,6 +763,11 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         "convert_seconds": round(report.convert_seconds, 3),
         "workers": report.workers,
         "artifact_seconds": round(report.artifact_seconds, 3),
+        "lake_synced": report.sink_synced_count,
+        "lake_pending": len(report.sink_pending_session_ids),
+        "lake_pending_session_ids": list(report.sink_pending_session_ids),
+        "lake_error": report.sink_error,
+        "lake_seconds": round(report.sink_seconds, 3),
     }
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(
@@ -711,8 +785,15 @@ def _print_report(report: MaterializationReport, fmt: OutputFormat) -> None:
         print(
             f"total: {report.total_seconds:.2f}s  "
             f"(convert: {report.convert_seconds:.2f}s summed over {report.workers} worker(s), "
-            f"columnar: {report.artifact_seconds:.2f}s)"
+            f"columnar: {report.artifact_seconds:.2f}s, "
+            f"lake: {report.sink_synced_count} synced in {report.sink_seconds:.2f}s)"
         )
+        if report.sink_error is not None:
+            print(
+                f"  LAKE PENDING {len(report.sink_pending_session_ids)} session(s): "
+                f"{report.sink_error}",
+                file=sys.stderr,
+            )
         for failure in report.failures:
             print(f"  FAILED {failure.session_id}: {failure.error}", file=sys.stderr)
         for session_id in report.unreadable_session_ids:
@@ -752,6 +833,7 @@ def materialize(
     sessions: str | None = None,
     workers: int | None = None,
     columnar: Annotated[bool, cyclopts.Parameter(negative="--no-columnar")] = True,
+    lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Sync the materialized corpus with the raw transcript corpus.
@@ -799,6 +881,14 @@ def materialize(
         ``--no-columnar`` writes only the contract artifacts and the
         raw source archive (``source/``), and ``query`` then takes the JSON
         path for those sessions.
+    lake
+        After the sessions are swapped into place, replace their rows in the
+        DuckLake at ``ATIF_SQL_LAKE_ROOT`` (default ``~/.atif-sql/lake``), one
+        transaction per batch, in this process. Does nothing until ``atif-sql
+        lake rebuild`` has created the lake. A failed lake write leaves the
+        sessions in ``<corpus>/sink_pending.json`` and the next pass retries
+        them; the report's ``lake_pending`` counts them. ``--no-lake`` skips the
+        lake and leaves that file alone.
     fmt
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
@@ -813,8 +903,11 @@ def materialize(
     from atif_corpus.domain.source_layout import layout_for
     from atif_duck.domain.columnar import COLUMNAR_SCHEMA_VERSION, META_COLUMNAR_KEY
     from atif_duck.infrastructure.columnar import ColumnarArtifactProducer
+    from atif_duck.infrastructure.lake import DuckLakeSessionSink, LakeLayout
+    from atif_duck.infrastructure.lake_settings import LakeSettings
 
     settings = _corpus_settings(source_root, corpus_root, agent)
+    lake_settings = LakeSettings()
     source_layout = layout_for(settings.agent)
     session_filter = (
         [s for s in (part.strip() for part in sessions.split(",")) if s]
@@ -862,6 +955,17 @@ def materialize(
             workers=worker_count,
             worker_setup=_materialize_worker_setup,
             artifact_producer=ColumnarArtifactProducer() if columnar else None,
+            session_sink=(
+                DuckLakeSessionSink(
+                    LakeLayout(lake_settings.lake_root),
+                    lock_timeout_seconds=lake_settings.lake_lock_timeout_seconds,
+                    load_batch_size=lake_settings.lake_load_batch_size,
+                    memory_limit_bytes=_query_memory_limit_bytes(),
+                )
+                if lake
+                else None
+            ),
+            sink_batch_size=lake_settings.lake_sync_batch_size,
         )
     except CorpusAgentMismatchError as exc:
         # One corpus holds one agent. Nothing was removed and nothing written —
@@ -935,6 +1039,45 @@ def _vector_surface(corpus_root: Path) -> dict[str, Any]:
         "embeddings_store_present": store_present,
         "vector_search": state,
         "note": note,
+    }
+
+
+def _lake_surface(corpus_root: Path) -> dict[str, Any]:
+    """Whether ``query`` will read this corpus from the lake, and the lake's vitals.
+
+    ``state`` is ``ready`` (query reads the lake), ``absent``, ``stale``,
+    ``extension_missing``, or ``corpus_missing`` (the lake does not hold this
+    corpus yet; the next materialize loads it). ``pending`` counts this
+    corpus's sessions waiting for a lake write.
+    """
+    from atif_corpus.application.materialize import read_sink_pending
+    from atif_corpus.domain.layout import CorpusLayout
+    from atif_duck.infrastructure.lake import LakeLayout, lake_status
+    from atif_duck.infrastructure.lake_settings import LakeSettings
+
+    state = lake_status(LakeLayout(LakeSettings().lake_root)).as_dict()
+    registered = {c["corpus"]: c for c in state["corpora"]}
+    mine = registered.get(corpus_root.name)
+    if not state["present"]:
+        name, note = "absent", "no lake; run `atif-sql lake rebuild`"
+    elif not state["extension_installed"]:
+        name, note = "extension_missing", "the ducklake extension is not installed"
+    elif not state["schema_current"]:
+        name, note = "stale", f"schema {', '.join(state['stale']) or state['error']}"
+    elif mine is None or Path(mine["corpus_root"]).resolve() != corpus_root.resolve():
+        name, note = "corpus_missing", "the lake does not hold this corpus"
+    else:
+        name, note = "ready", f"{mine['sessions']} sessions, last write {state['last_write']}"
+    return {
+        "state": name,
+        "note": note,
+        "root": state["root"],
+        "schema": state["schema"],
+        "snapshots": state["snapshots"],
+        "data_files": state["data_files"],
+        "last_write": state["last_write"],
+        "sessions": mine["sessions"] if mine else 0,
+        "pending": len(read_sink_pending(CorpusLayout(corpus_root=corpus_root).sink_pending_path)),
     }
 
 
@@ -1038,6 +1181,7 @@ def status(
     }
     coverage = columnar_coverage(settings.corpus_root)
     vector = _vector_surface(settings.corpus_root)
+    lake_block = _lake_surface(settings.corpus_root)
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(f"agent:        {settings.agent.value}")
         print(f"source root:  {settings.source_root}")
@@ -1064,6 +1208,7 @@ def status(
             "carry typed columnar artifacts)"
         )
         print(f"vector search: {vector['vector_search']}  ({vector['note']})")
+        print(f"lake:         {lake_block['state']}  ({lake_block['note']})")
     else:
         emit_json(
             {
@@ -1086,6 +1231,7 @@ def status(
                 "lance_extension_installed": vector["lance_extension_installed"],
                 "embeddings_store_present": vector["embeddings_store_present"],
                 "vector_search": vector["vector_search"],
+                "lake": lake_block,
             },
             fmt,
         )
@@ -1106,6 +1252,8 @@ def query(
     requires: str | None = None,
     agent: str | None = None,
     corpus_root: Path | None = None,
+    all_corpora: bool = False,
+    lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Run one SQL statement against the atif-duck catalog and emit results.
@@ -1117,6 +1265,19 @@ def query(
     ``--examples`` short-circuits to the ``examples`` listing (same output,
     same ``--category`` / ``--requires`` filters) without opening DuckDB —
     the natural discovery path when an agent is already composing a query.
+
+    Where the rows come from
+    ------------------------
+    When the DuckLake at ``ATIF_SQL_LAKE_ROOT`` exists, its schema is current
+    and it holds the requested corpus, every view reads the lake, scoped to
+    that corpus (``--agent`` / ``--corpus-root`` pick it, as before), and
+    nothing is loaded before the statement runs. ``--all-corpora`` scopes the
+    views to every corpus the lake holds instead; ``sessions.corpus`` tells
+    them apart (the analytics views and the embeddings store stay the
+    selected corpus's). Otherwise, or with ``--no-lake``, ``query`` reads the
+    per-session artifacts as it always has, after a one-line warning saying
+    why. ``--all-corpora`` has no per-session fallback and exits 78
+    (``lake_unavailable``) without a usable lake.
 
     Sandbox
     -------
@@ -1242,18 +1403,33 @@ def query(
     embed_settings = EmbedSettings()
     expected_model, expected_dim = embed_settings.expected_embedding_identity()
     lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)
+    if all_corpora and not lake:
+        err = ClassifiedError(
+            kind="invalid_input",
+            exit_code=EXIT_CODES["invalid_input"],
+            message="--all-corpora reads the lake, and --no-lake turns it off",
+            hint="drop one of the two flags",
+        )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code)
 
     with _private_spill_dir() as spill_dir:
         con = duckdb.connect()
         try:
             try:
                 _configure_query_resources(con, resources, spill_dir)
+                lake_reader = (
+                    _attach_query_lake(con, settings.corpus_root, all_corpora=all_corpora, fmt=fmt)
+                    if lake
+                    else None
+                )
                 sources = register(
                     con,
                     settings.corpus_root,
                     lance_uri=lance_uri,
                     expected_model=expected_model,
                     expected_dim=expected_dim,
+                    lake=lake_reader,
                 )
                 _harden_query_connection(
                     con,
@@ -1286,6 +1462,49 @@ def query(
                 raise SystemExit(err.exit_code) from exc
         finally:
             con.close()
+
+
+def _attach_query_lake(con: Any, corpus_root: Path, *, all_corpora: bool, fmt: OutputFormat) -> Any:
+    """Attach the lake for ``query``, or warn once and return ``None`` for the per-session path.
+
+    With ``all_corpora`` there is no per-session equivalent, so an unusable
+    lake exits 78 instead. A corpus whose last pass left sessions pending
+    for the lake still reads the lake, after a warning naming how many.
+    """
+    from loguru import logger
+
+    from atif_corpus.application.materialize import read_sink_pending
+    from atif_corpus.domain.layout import CorpusLayout
+    from atif_duck.infrastructure.lake import LakeLayout, LakeReader, attach_lake_for_query
+    from atif_duck.infrastructure.lake_settings import LakeSettings
+
+    attached = attach_lake_for_query(
+        con,
+        LakeLayout(LakeSettings().lake_root),
+        corpus_root=corpus_root,
+        all_corpora=all_corpora,
+    )
+    if not isinstance(attached, LakeReader):
+        if all_corpora:
+            err = ClassifiedError(
+                kind="lake_unavailable",
+                exit_code=EXIT_CODES["lake_unavailable"],
+                message=f"--all-corpora needs the lake: {attached.reason}",
+                hint="run `atif-sql lake rebuild`",
+            )
+            emit_error(err, fmt)
+            raise SystemExit(err.exit_code)
+        logger.warning("query: {}; reading the per-session artifacts instead", attached.reason)
+        return None
+    if attached.corpus is not None:
+        pending = read_sink_pending(CorpusLayout(corpus_root=corpus_root).sink_pending_path)
+        if pending:
+            logger.warning(
+                "query: {} session(s) of this corpus are pending a lake write; "
+                "their rows show the previous materialize until the next pass lands",
+                len(pending),
+            )
+    return attached
 
 
 # ---------------------------------------------------------------------------

@@ -16,10 +16,9 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from duck_fixtures import CODEX_SESSION_ID, write_codex_session
+from duck_fixtures import CODEX_SESSION_ID, register_via, write_codex_session
 
 from atif_duck.domain.catalog import VIEW_SCHEMA
-from atif_duck.infrastructure.registry import register
 
 
 @pytest.fixture
@@ -30,9 +29,9 @@ def codex_corpus_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def codex_con(codex_corpus_root: Path) -> duckdb.DuckDBPyConnection:
+def codex_con(codex_corpus_root: Path, read_path: str) -> duckdb.DuckDBPyConnection:
     connection = duckdb.connect(":memory:")
-    register(connection, codex_corpus_root)
+    register_via(connection, codex_corpus_root, read_path)
     return connection
 
 

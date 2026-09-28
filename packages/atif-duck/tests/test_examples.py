@@ -40,26 +40,44 @@ from atif_duck.domain.examples import (
     build_examples,
 )
 from atif_duck.infrastructure import analytics as analytics_mod, registry as registry_mod
+from atif_duck.infrastructure.lake import (
+    LakeCorpus,
+    LakeLayout,
+    LakeReader,
+    attach_lake_for_query,
+    rebuild_lake,
+)
 from atif_duck.infrastructure.registry import register
 
 EXAMPLES = build_examples()
 
 
-@pytest.fixture(scope="module")
-def full_con(tmp_path_factory: pytest.TempPathFactory) -> Iterator[duckdb.DuckDBPyConnection]:
+@pytest.fixture(scope="module", params=["per-session", "lake"])
+def full_con(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[duckdb.DuckDBPyConnection]:
     """One connection over the COMPLETE fixture surface: core + analytics + vss.
 
     Module-scoped: the examples are read-only SELECTs, so one registration
     pass serves every parametrized case. The corpus is rebuilt here (rather
     than via the function-scoped ``corpus_root`` fixture) to allow the wider
-    scope.
+    scope. Parametrized over both read paths, so every example executes over
+    the per-session artifacts AND over a lake loaded from them.
     """
     root = tmp_path_factory.mktemp("examples-corpus")
     corpus = build_corpus(root / "corpus")
     _populate_analytics(corpus)
     lance = _write_lance(root / "lance")
     con = duckdb.connect(":memory:")
-    register(con, corpus, lance_uri=lance)
+    reader = None
+    if request.param == "lake":
+        layout = LakeLayout(root / "lake")
+        rebuild_lake(layout, [LakeCorpus(root=corpus, agent="claude-code")])
+        attached = attach_lake_for_query(con, layout, corpus_root=corpus, all_corpora=False)
+        assert isinstance(attached, LakeReader), attached
+        reader = attached
+    sources = register(con, corpus, lance_uri=lance, lake=reader)
+    assert sources.from_lake is (request.param == "lake")
     yield con
     con.close()
 

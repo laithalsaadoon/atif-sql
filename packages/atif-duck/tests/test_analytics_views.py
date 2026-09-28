@@ -14,7 +14,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from duck_fixtures import SESSION_IDS
+from duck_fixtures import SESSION_IDS, register_via
 
 from atif_duck.domain.catalog import (
     ANALYTICS_MACRO_SIGNATURES,
@@ -110,11 +110,11 @@ def _populate_analytics(corpus_root: Path) -> None:
 
 
 @pytest.fixture
-def analytics_con(corpus_root: Path) -> duckdb.DuckDBPyConnection:
+def analytics_con(corpus_root: Path, read_path: str) -> duckdb.DuckDBPyConnection:
     """Full registration (base + analytics) over a populated fixture corpus."""
     _populate_analytics(corpus_root)
     con = duckdb.connect()
-    register(con, corpus_root)
+    register_via(con, corpus_root, read_path)
     return con
 
 

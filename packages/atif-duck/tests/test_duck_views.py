@@ -22,7 +22,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from duck_fixtures import EDGE_COUNTS, SESSION_IDS
+from duck_fixtures import EDGE_COUNTS, SESSION_IDS, register_via
 from loguru import logger
 
 from atif_duck.domain.catalog import (
@@ -37,9 +37,9 @@ from atif_duck.infrastructure.registry import register, register_macros
 
 
 @pytest.fixture
-def con(corpus_root: Path) -> duckdb.DuckDBPyConnection:
+def con(corpus_root: Path, read_path: str) -> duckdb.DuckDBPyConnection:
     connection = duckdb.connect(":memory:")
-    register(connection, corpus_root)
+    register_via(connection, corpus_root, read_path)
     return connection
 
 

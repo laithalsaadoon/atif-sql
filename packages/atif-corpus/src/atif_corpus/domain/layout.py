@@ -25,6 +25,9 @@ META_FILENAME = "meta.json"
 WATERMARK_FILENAME = "watermark.json"
 #: Corpus-level record of sessions whose source converted to nothing.
 EMPTY_SESSIONS_FILENAME = "empty_sessions.json"
+#: Corpus-level record of published sessions a ``SessionSink`` has not yet
+#: taken (a failed or interrupted sync); retried on the next pass.
+SINK_PENDING_FILENAME = "sink_pending.json"
 #: Per-session directory holding the zstd copy of the raw source files.
 SOURCE_ARCHIVE_DIRNAME = "source"
 
@@ -80,6 +83,17 @@ class CorpusLayout:
         re-materialization on any version that predates this file.
         """
         return self.corpus_root / EMPTY_SESSIONS_FILENAME
+
+    @property
+    def sink_pending_path(self) -> Path:
+        """``{"session_ids": [...]}``: published sessions the session sink still owes.
+
+        Written BEFORE a pass publishes anything (every session it may
+        publish, plus what was already pending) and rewritten after the sink
+        ran, so a pass that dies between a session's swap and its sync still
+        leaves the session recorded.
+        """
+        return self.corpus_root / SINK_PENDING_FILENAME
 
     @property
     def blobs_dir(self) -> Path:
