@@ -15,9 +15,12 @@ On every ``observation.results[]`` entry, under ``extra``:
 ``is_error``
     Claude Code: the ``is_error`` flag of the ``tool_result`` block, the flag
     the harness sent the model. The Messages API defaults it to false, so an
-    absent flag is ``false``. Codex: ``true`` when the command failed (a
-    ``failed`` status, a non-zero exit code, an MCP ``isError``), ``false``
-    when it completed cleanly, absent when the rollout says neither.
+    absent flag is ``false``. Codex: ``true`` when the call failed (a
+    ``failed`` status on its item, a non-zero exit code, an MCP ``isError``),
+    ``false`` when it completed cleanly, absent when the rollout says neither.
+    A code-mode ``exec`` script is ``true`` when its output says ``Script
+    failed`` or a command, MCP call or patch it ran failed, and absent while
+    it's still running.
 ``exit_code``
     The process exit code, only where the transcript states one. Claude Code
     states it for a failed ``Bash`` call alone, as the fixed ``Exit code N``
@@ -26,7 +29,11 @@ On every ``observation.results[]`` entry, under ``extra``:
     is not an error yet exited non-zero), so it stays absent rather than being
     guessed as 0. Codex states it structurally on the ``CommandExecution``
     item, and in the ``Process exited with code N`` / ``Exit code: N`` header
-    of an output that has no item.
+    of an output that has no item. An ``exec`` script's commands complete
+    items of their own, with no link back to the script, so they're matched
+    to it by position (between its call and its output, in the same turn); its
+    exit code is the first non-zero one they report, else 0, and absent when
+    it ran no command.
 ``interrupted``
     Claude Code's ``toolUseResult.interrupted`` (``Bash`` reports it).
 ``images``
@@ -57,7 +64,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -75,6 +82,22 @@ _CODEX_EXIT_RE = re.compile(r"^(?:Process exited with code|Exit code:) (-?\d+)\b
 #: first few lines; bounding the search keeps an exit code printed deep inside
 #: the command's own output from being taken for the process's.
 _CODEX_HEADER_CHARS = 512
+
+#: The first line of an ``exec`` script's output: how the script itself ended.
+_CODEX_SCRIPT_RE = re.compile(r"\AScript (completed|failed|running)\b")
+
+#: Codex's code-mode tool: one JavaScript script that calls other tools.
+_EXEC_TOOL = "exec"
+
+#: Where a Codex call record names its turn.
+_PASSTHROUGH_KEY = "internal_chat_message_metadata_passthrough"
+
+#: Response items that open a tool call, and the ones that answer it.
+_CODEX_CALL_TYPES: frozenset[str] = frozenset({"function_call", "custom_tool_call"})
+_CODEX_OUTPUT_TYPES: frozenset[str] = frozenset({"function_call_output", "custom_tool_call_output"})
+
+#: Completed items whose only outcome signal is a ``status``.
+_STATUS_ITEM_TYPES: frozenset[str] = frozenset({"FileChange", "CollabAgentToolCall"})
 
 #: Claude Code tools whose failed result leads with ``Exit code N``.
 _EXIT_CODE_TOOLS: frozenset[str] = frozenset({"Bash"})
@@ -367,14 +390,79 @@ def _mcp_outcome(item: dict[str, Any]) -> _CodexOutcome | None:
     return None
 
 
+def _status_outcome(item: dict[str, Any]) -> _CodexOutcome | None:
+    """A ``FileChange`` / ``CollabAgentToolCall`` item's ``status``, the only signal it carries."""
+    status = item.get("status")
+    if status == "failed":
+        return _CodexOutcome(is_error=True, exit_code=None)
+    if status == "completed":
+        return _CodexOutcome(is_error=False, exit_code=None)
+    return None
+
+
 def _item_outcome(item: dict[str, Any]) -> _CodexOutcome | None:
-    """What a completed ``CommandExecution`` / ``McpToolCall`` item says about its call."""
+    """What a completed tool item says about the call it belongs to."""
     item_type = item.get("type")
     if item_type == "CommandExecution":
         return _command_outcome(item)
     if item_type == "McpToolCall":
         return _mcp_outcome(item)
+    if item_type in _STATUS_ITEM_TYPES:
+        return _status_outcome(item)
     return None
+
+
+def _combine(primary: _CodexOutcome, fallback: _CodexOutcome) -> _CodexOutcome:
+    """Two statements about one call: any failure wins, ``primary``'s exit code first."""
+    if primary.is_error is True or fallback.is_error is True:
+        is_error: bool | None = True
+    else:
+        is_error = primary.is_error if primary.is_error is not None else fallback.is_error
+    exit_code = primary.exit_code if primary.exit_code is not None else fallback.exit_code
+    return _CodexOutcome(is_error=is_error, exit_code=exit_code)
+
+
+@dataclass(slots=True)
+class _ExecWindow:
+    """One ``exec`` script call, from its call record to its output record.
+
+    The items a script's nested tool calls complete carry ids of their own and
+    no link to the script, so they're attributed by position: an item that
+    completes while exactly one script of its turn is open belongs to it. An
+    item that could belong to more than one open script makes each of them
+    ``ambiguous``, and an ambiguous script claims nothing its items said.
+    """
+
+    turn_id: str | None
+    nested: list[_CodexOutcome] = field(default_factory=list)
+    ambiguous: bool = False
+
+
+def _exec_outcome(output: Any, window: _ExecWindow | None) -> _CodexOutcome | None:
+    """An ``exec`` script's outcome: its header, then the items its nested calls completed.
+
+    ``Script failed`` is an error. ``Script completed`` is an error when a
+    nested command, MCP call or patch failed. ``Script running`` (the script
+    yielded) states nothing yet. The exit code describes the processes the
+    script ran: the first non-zero one, else 0 when every one exited 0, absent
+    when it ran none.
+    """
+    text = _output_text(output)
+    match = _CODEX_SCRIPT_RE.match(text) if text is not None else None
+    if match is None or match.group(1) == "running":
+        return None
+    failed = match.group(1) == "failed"
+    if window is None or window.ambiguous:
+        return _CodexOutcome(is_error=True, exit_code=None) if failed else None
+    codes = [outcome.exit_code for outcome in window.nested if outcome.exit_code is not None]
+    exit_code = next((code for code in codes if code != 0), 0 if codes else None)
+    is_error = failed or any(outcome.is_error is True for outcome in window.nested)
+    return _CodexOutcome(is_error=is_error, exit_code=exit_code)
+
+
+def _turn_id(holder: Any) -> str | None:
+    value = holder.get("turn_id") if isinstance(holder, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _legacy_metadata_outcome(output: str) -> _CodexOutcome | None:
@@ -411,9 +499,73 @@ def _output_outcome(output: Any) -> _CodexOutcome | None:
     )
 
 
+class _CodexIndex:
+    """The outcome per call id, built in one pass over a rollout's records."""
+
+    def __init__(self) -> None:
+        self.items: dict[str, _CodexOutcome] = {}
+        self.outputs: dict[str, _CodexOutcome] = {}
+        self.call_ids: set[str] = set()
+        self.exec_calls: dict[str, _ExecWindow] = {}
+        self.open_exec: dict[str, _ExecWindow] = {}
+
+    def call(self, payload: dict[str, Any]) -> None:
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return
+        self.call_ids.add(call_id)
+        if payload.get("type") == "custom_tool_call" and payload.get("name") == _EXEC_TOOL:
+            window = _ExecWindow(turn_id=_turn_id(payload.get(_PASSTHROUGH_KEY)))
+            self.exec_calls.setdefault(call_id, window)
+            self.open_exec[call_id] = window
+
+    def item(self, payload: dict[str, Any]) -> None:
+        item = payload.get("item")
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return
+        outcome = _item_outcome(item)
+        if outcome is None:
+            return
+        item_id = item["id"]
+        known = self.items.get(item_id)
+        self.items[item_id] = outcome if known is None else _combine(known, outcome)
+        if item_id in self.call_ids:
+            return
+        turn_id = _turn_id(payload)
+        candidates = [
+            window
+            for window in self.open_exec.values()
+            if turn_id is None or window.turn_id is None or window.turn_id == turn_id
+        ]
+        if len(candidates) == 1:
+            candidates[0].nested.append(outcome)
+        else:
+            for window in candidates:
+                window.ambiguous = True
+
+    def output(self, payload: dict[str, Any]) -> None:
+        call_id = payload.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return
+        self.open_exec.pop(call_id, None)
+        if call_id in self.exec_calls:
+            outcome = _exec_outcome(payload.get("output"), self.exec_calls[call_id])
+        else:
+            outcome = _output_outcome(payload.get("output"))
+        if outcome is not None:
+            self.outputs.setdefault(call_id, outcome)
+
+    def outcomes(self) -> dict[str, _CodexOutcome]:
+        """A structured item outranks a parsed header for the same call's exit code."""
+        merged = dict(self.outputs)
+        for call_id, outcome in self.items.items():
+            known = merged.get(call_id)
+            merged[call_id] = outcome if known is None else _combine(outcome, known)
+        return merged
+
+
 def _index_codex_records(records: Iterable[Any]) -> dict[str, _CodexOutcome]:
-    items: dict[str, _CodexOutcome] = {}
-    outputs: dict[str, _CodexOutcome] = {}
+    index = _CodexIndex()
     for record in records:
         if not isinstance(record, dict):
             continue
@@ -421,23 +573,14 @@ def _index_codex_records(records: Iterable[Any]) -> dict[str, _CodexOutcome]:
         if not isinstance(payload, dict):
             continue
         payload_type = payload.get("type")
-        if record.get("type") == "event_msg" and payload_type == "item_completed":
-            item = payload.get("item")
-            if isinstance(item, dict) and isinstance(item.get("id"), str):
-                outcome = _item_outcome(item)
-                if outcome is not None:
-                    items.setdefault(item["id"], outcome)
-        elif record.get("type") == "response_item" and payload_type in {
-            "function_call_output",
-            "custom_tool_call_output",
-        }:
-            call_id = payload.get("call_id")
-            if isinstance(call_id, str) and call_id:
-                outcome = _output_outcome(payload.get("output"))
-                if outcome is not None:
-                    outputs.setdefault(call_id, outcome)
-    # A structured item outranks a parsed header for the same call.
-    return {**outputs, **items}
+        record_type = record.get("type")
+        if record_type == "event_msg" and payload_type == "item_completed":
+            index.item(payload)
+        elif record_type == "response_item" and payload_type in _CODEX_CALL_TYPES:
+            index.call(payload)
+        elif record_type == "response_item" and payload_type in _CODEX_OUTPUT_TYPES:
+            index.output(payload)
+    return index.outcomes()
 
 
 def annotate_codex_trajectory(
