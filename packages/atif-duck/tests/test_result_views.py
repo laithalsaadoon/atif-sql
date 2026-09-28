@@ -20,12 +20,14 @@ from atif_duck.infrastructure.registry import register
 
 
 @pytest.fixture(params=["json", "columnar", "lake"])
-def con(request: pytest.FixtureRequest, corpus_root: Path) -> duckdb.DuckDBPyConnection:
+def con(
+    request: pytest.FixtureRequest, corpus_root: Path, shared_lakes_dir: Path
+) -> duckdb.DuckDBPyConnection:
     if request.param in {"columnar", "lake"}:
         add_columnar(corpus_root, session_ids=tuple(SESSION_IDS))
     connection = duckdb.connect(":memory:")
     if request.param == "lake":
-        register_via(connection, corpus_root, "lake")
+        register_via(connection, corpus_root, "lake", lakes_dir=shared_lakes_dir)
         return connection
     sources = register(connection, corpus_root)
     assert bool(sources.columnar_session_ids) == (request.param == "columnar")

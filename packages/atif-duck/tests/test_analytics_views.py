@@ -28,6 +28,11 @@ from atif_duck.infrastructure.analytics import (
 )
 from atif_duck.infrastructure.registry import register
 
+#: The four views the pipelines' parquets back directly.
+_ANALYTICS_SOURCE_VIEWS = frozenset(
+    {"session_classifications", "session_conflicts", "user_friction", "perceived_errors"}
+)
+
 
 def _write_parquet(con: duckdb.DuckDBPyConnection, sql: str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,11 +115,13 @@ def _populate_analytics(corpus_root: Path) -> None:
 
 
 @pytest.fixture
-def analytics_con(corpus_root: Path, read_path: str) -> duckdb.DuckDBPyConnection:
+def analytics_con(
+    corpus_root: Path, read_path: str, shared_lakes_dir: Path
+) -> duckdb.DuckDBPyConnection:
     """Full registration (base + analytics) over a populated fixture corpus."""
     _populate_analytics(corpus_root)
     con = duckdb.connect()
-    register_via(con, corpus_root, read_path)
+    register_via(con, corpus_root, read_path, lakes_dir=shared_lakes_dir)
     return con
 
 
@@ -307,3 +314,44 @@ def test_removed_analytics_surfaces_stay_unbound(corpus_root: Path) -> None:
     ):
         assert removed not in names, f"{removed} is still registered"
     con.close()
+
+
+def test_an_every_corpus_registration_reads_every_corpus_analytics(tmp_path: Path) -> None:
+    """``query --all-corpora`` covers the analytics views as it covers the transcripts."""
+    from duck_fixtures import build_corpus
+
+    from atif_duck.infrastructure.lake import (
+        LakeCorpus,
+        LakeLayout,
+        LakeReader,
+        attach_lake_for_query,
+        rebuild_lake,
+    )
+
+    first = build_corpus(tmp_path / "first")
+    second = build_corpus(tmp_path / "second")
+    _populate_analytics(first)
+    _populate_analytics(second)
+    layout = LakeLayout(tmp_path / "lake")
+    rebuild_lake(
+        layout,
+        [LakeCorpus(root=first, agent="claude-code"), LakeCorpus(root=second, agent="claude-code")],
+    )
+    views = sorted(_ANALYTICS_SOURCE_VIEWS)
+
+    def counts(*, every_corpus: bool) -> dict[str, int]:
+        con = duckdb.connect()
+        attached = attach_lake_for_query(con, layout, corpus_root=first, all_corpora=every_corpus)
+        assert isinstance(attached, LakeReader), attached
+        register(con, first, lake=attached, skip_vss=True)
+        out: dict[str, int] = {}
+        for view in views:
+            row = con.execute(f"SELECT count(*) FROM {view}").fetchone()  # nosec B608 - view names are module constants
+            assert row is not None
+            out[view] = int(row[0])
+        con.close()
+        return out
+
+    one, every = counts(every_corpus=False), counts(every_corpus=True)
+    assert all(one[view] > 0 for view in views)
+    assert every == {view: 2 * n for view, n in one.items()}

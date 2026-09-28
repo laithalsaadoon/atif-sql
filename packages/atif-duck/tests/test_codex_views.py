@@ -29,9 +29,11 @@ def codex_corpus_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def codex_con(codex_corpus_root: Path, read_path: str) -> duckdb.DuckDBPyConnection:
+def codex_con(
+    codex_corpus_root: Path, read_path: str, shared_lakes_dir: Path
+) -> duckdb.DuckDBPyConnection:
     connection = duckdb.connect(":memory:")
-    register_via(connection, codex_corpus_root, read_path)
+    register_via(connection, codex_corpus_root, read_path, lakes_dir=shared_lakes_dir)
     return connection
 
 

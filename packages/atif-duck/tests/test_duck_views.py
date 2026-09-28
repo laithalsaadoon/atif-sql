@@ -37,9 +37,9 @@ from atif_duck.infrastructure.registry import register, register_macros
 
 
 @pytest.fixture
-def con(corpus_root: Path, read_path: str) -> duckdb.DuckDBPyConnection:
+def con(corpus_root: Path, read_path: str, shared_lakes_dir: Path) -> duckdb.DuckDBPyConnection:
     connection = duckdb.connect(":memory:")
-    register_via(connection, corpus_root, read_path)
+    register_via(connection, corpus_root, read_path, lakes_dir=shared_lakes_dir)
     return connection
 
 
