@@ -1,27 +1,34 @@
 # atif-duck
 
 DuckDB views and macros over the materialized ATIF corpus
-(`<corpus_root>/sessions/<id>/{trajectory.json, edges.jsonl,
-loss_report.json, meta.json}` per `docs/CONTRACT.md`, plus the optional typed
-columnar artifacts `session.parquet`, `steps.parquet`, `tool_calls.parquet`,
-`tool_results.parquet`).
+(`<corpus_root>/sessions/<id>/{trajectory.json.zst, edges.jsonl.zst,
+session_events.jsonl.zst, loss_report.json, meta.json}` per `docs/CONTRACT.md`).
+A corpus written by an earlier version holds the plain `trajectory.json`,
+`edges.jsonl` and `session_events.jsonl` and the typed columnar artifacts
+`session.parquet`, `steps.parquet`, `tool_calls.parquet`, `tool_results.parquet`
+and `session_events.parquet` until `atif-sql corpus slim` converts it; every
+reader takes either layout, a session at a time
+(`atif_duck.infrastructure.stored_artifacts`).
 
 `atif_duck.register(con, corpus_root)` wires a connection to the corpus and
 exposes the whole query surface: the core views and macros, the vector-search
 view, and the v2 analytics views and macros. It returns a `RawSources` naming
-which sessions were read from their parquet artifacts and which from
-`trajectory.json`; the views union the two and return the same rows either way.
+which sessions were read from parquet and which from their trajectory; the
+views union the two and return the same rows either way. DuckDB decompresses a
+`.zst` file itself, and the path columns name the logical `trajectory.json` and
+`edges.jsonl` whichever file is on disk.
 
 ## Columnar artifacts
 
-`ColumnarArtifactProducer` implements atif-corpus's `ArtifactProducer` port
-(atif-cli plugs it into `materialize`). Given a session's trajectory it writes
-the parquet files with the views' own projection expressions
-(`atif_duck.infrastructure.projections`), so a query over them is exactly the
-query over the JSON, with no JSON parsed at query time. The file names and the
-`columnar_schema` version they're claimed under live in
-`atif_duck.domain.columnar`; `columnar_coverage(corpus_root)` is what
-`atif-sql status` reports as the query path.
+`ColumnarArtifactProducer` writes a session's parquet files with the views'
+own projection expressions (`atif_duck.infrastructure.projections`), so a query
+over them is exactly the query over the JSON. materialize no longer runs it.
+The lake loader does: it decodes each trajectory in Python, stages the parquet
+in a scratch directory beside the lake, loads it, and removes it. DuckDB's JSON
+reader needs several times a large document's size in memory, and the staged
+path doesn't. `ATIF_SQL_LAKE_STAGE_WORKERS` sets how many processes stage in
+parallel. The file names and the `columnar_schema` version live in
+`atif_duck.domain.columnar`.
 
 ## SQL text and the session id boundary
 

@@ -72,6 +72,10 @@ layers contract among the members (`pyproject.toml:462`).
   `SessionSink` implementation materialize writes through), the published read-only catalog copy,
   the query-side attach and fallback, and `rebuild_lake`, `verify_lake`, `lake_status` and
   `compact_lake`.
+- `packages/atif-duck/src/atif_duck/domain/artifacts.py` and
+  `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py` — which artifacts may be
+  stored as `<name>.zst`, and how a reader finds a session's stored file (compressed first), reads
+  it, and sizes it from its zstd frame header.
 - `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py` — one corpus's step texts and
   primary uuids read from the published lake for the embedding store: the full read, the read of
   the uuids `ducklake_table_changes` names after a snapshot, and the corpus's lineage and snapshot
@@ -124,6 +128,8 @@ for catalog, 70 for runtime, split between a pure taxonomy module
   between them (`packages/atif-cli/src/atif_cli/app.py:52`).
 - `packages/atif-cli/src/atif_cli/lake.py` — the `lake` sub-app: `rebuild`, `verify`,
   `status` and `compact`, each deferring atif-duck's imports into the command body.
+- `packages/atif-cli/src/atif_cli/corpus.py` — the `corpus` sub-app: `slim` converts an
+  old-layout corpus to the compressed layout, and `storage_layout` is the scan `status` reports.
 - `packages/atif-cli/src/atif_cli/embed_lake.py` — `DuckLakeSteps`, atif-embed's `LakeStepsPort`
   implemented over atif-duck's `lake_steps`, the one place the two meet.
 - `packages/atif-cli/src/atif_cli/cron.py` — `cron install` prints a crontab block and never
@@ -225,8 +231,10 @@ forbids the import (`packages/atif-corpus/src/atif_corpus/domain/agents.py:25`).
   (`packages/atif-corpus/src/atif_corpus/domain/sessions.py:42`), `QuiescencePolicy` (`:71`),
   `MaterializationPlan` (`:108`), and `build_plan` (`:159`).
 - `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py` — tmp-sibling write,
-  fsync, rename, for files (`packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:64`) and
-  whole directories (`:98`).
+  fsync, rename, for files (plain and zstd-compressed) and whole directories.
+- `packages/atif-corpus/src/atif_corpus/infrastructure/compress_artifacts.py` — compresses an
+  old-layout session's plain JSON artifacts in place for `corpus slim`, reading each copy back
+  before the plain file is removed and keeping its mtime.
 - `packages/atif-corpus/src/atif_corpus/domain/watermark.py` — `diff_source_mtimes` partitions
   two mtime maps into added, modified, and removed
   (`packages/atif-corpus/src/atif_corpus/domain/watermark.py:58`).

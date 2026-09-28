@@ -22,12 +22,13 @@ proofs are out of scope for the workspace.
 ## Materialized corpus layout (atif-corpus writes, atif-duck reads)
 <corpus_root>/                     # default: ~/.atif-sql/corpus/<corpus-slug>/
   sessions/<session_id>/
-    trajectory.json                # compact JSON (separators=(',',':')), ATIF-v1.7
+    trajectory.json.zst            # compact JSON (separators=(',',':')), ATIF-v1.7,
+                                   #  one zstd frame with its content size in the header
     loss_report.json               # atif_converter LossReport.to_json()
-    edges.jsonl                    # one line per RAW record: {uuid, parent_uuid,
+    edges.jsonl.zst                # one line per RAW record: {uuid, parent_uuid,
                                    #  message_id, type, ts, is_sidechain,
                                    #  is_compact_summary, source_file, tool_use_ids: [..]}
-    session_events.jsonl           # one line per KEPT non-message record: {seq, ts,
+    session_events.jsonl.zst       # one line per KEPT non-message record: {seq, ts,
                                    #  event_type, subtype, uuid, parent_uuid,
                                    #  tool_use_id, is_sidechain, source_file, payload,
                                    #  payload_bytes, payload_truncated}; may be empty
@@ -35,14 +36,13 @@ proofs are out of scope for the workspace.
                                    #  harbor_version, converter_version, converter_schema,
                                    #  materialized_at,
                                    #  agent, source_present, source_removed_at?,
-                                   #  source_archive?, columnar_schema}
+                                   #  source_archive?, columnar_schema? (old layout)}
     source/<path>.zst              # raw source archive: one zstd file per source file,
                                    #  <path> relative to the main transcript's parent
-    session.parquet                # typed columnar artifacts (optional, see below):
-    steps.parquet                  #  the trajectory header and the steps, tool_calls,
-    tool_calls.parquet             #  tool_results views' rows for this one session,
-    tool_results.parquet           #  written 0444, claimed by meta.columnar_schema
-    session_events.parquet         #  (schema 2+: the session_events view's rows)
+    (old layout only, until `atif-sql corpus slim` converts it:)
+    trajectory.json, edges.jsonl, session_events.jsonl   # the same files, plain
+    session.parquet, steps.parquet, tool_calls.parquet,  # per-session columnar
+    tool_results.parquet, session_events.parquet         #  artifacts, see below
   blobs/sha256/<ab>/<sha256>.<ext> # inline attachments (images, PDFs), content-addressed,
                                    #  shared by every session, written 0444
   watermark.json                   # {path: mtime_ns} across source corpus
@@ -101,10 +101,9 @@ proofs are out of scope for the workspace.
 - Generation: meta.converter_schema is the converter's CONVERTER_SCHEMA_VERSION
   (atif_converter.domain.schema_version), and a session recording a different
   one, or none, is stale even when no source byte moved. meta.converter_version
-  is the atif-sql release that converted it: provenance only. A columnar pass
-  also expects meta.columnar_schema to equal the reader's schema version, so a
-  schema bump or a --no-columnar session re-converts. Keys are compared only
-  when expected; a missing expected key is stale.
+  is the atif-sql release that converted it: provenance only. The storage
+  layout is not part of the generation: a session stored the old way is as
+  current as one stored compressed.
 - Retention: a session is NEVER deleted. When its main transcript vanishes from
   the scan (a genuine FileNotFoundError, not a stat failure, and not during a
   pass that couldn't list a source directory), its artifacts are kept and its
@@ -135,20 +134,29 @@ proofs are out of scope for the workspace.
   .staging/ dir and atomic rename, so a session is still the crash-safety
   unit, and the watermark still advances only for sessions that succeeded.
   --workers 1 is the single-process reference path.
-- Columnar artifacts: the parquet files are a query-time cache of what the
-  views compute from trajectory.json and session_events.jsonl, never a source
-  of truth. materialize
-  writes them by default through the ArtifactProducer port (atif-corpus
-  declares the port, atif-duck implements it, atif-cli plugs them together);
-  they're staged and swapped with the JSON artifacts, so a session has all of
-  them or none. meta.columnar_schema names the schema version they were
-  written against (currently 2; 2 added session_events.parquet). A reader takes
-  the columnar path for a session only when meta.columnar_schema equals its own
-  version AND all of those files are
-  present and non-empty; otherwise it reads trajectory.json for that session.
-  A corpus written before this key existed, or with --no-columnar, stays valid
-  and answers every query from JSON. Whatever the path, every view and macro
-  returns the same rows. `atif-sql status` reports which path a corpus takes.
+- Compressed artifacts: trajectory.json, edges.jsonl and session_events.jsonl
+  are stored as <name>.zst, one zstd frame each, recording the decompressed
+  size in its header. Decompressed, each is byte for byte the plain file an
+  earlier version wrote. A reader resolves each session's stored file,
+  compressed first, then plain, so a corpus holding both layouts (or one
+  session holding both spellings, midway through `corpus slim`) reads to the
+  same rows. Path columns name the logical file (sessions.trajectory_path is
+  <session>/trajectory.json either way).
+- Columnar artifacts (old layout): an earlier materialize also wrote five
+  parquet files per session, a cache of what the views compute from
+  trajectory.json and session_events.jsonl, claimed by meta.columnar_schema.
+  materialize no longer writes them. A reader takes the columnar path for a
+  session only when meta.columnar_schema equals its own version AND all of
+  those files are present and non-empty; otherwise it reads the session's
+  trajectory. Whatever the path, every view and macro returns the same rows.
+  `atif-sql status` reports the layout and which path a corpus takes without
+  the lake.
+- corpus slim: the one operation that rewrites existing artifacts. It
+  compresses each plain JSON artifact in place (read back and compared before
+  the plain file is removed, keeping its mtime), then deletes the parquet
+  files only after `lake verify` for that corpus, reading every session from
+  its trajectory, is clean. Dry run unless --no-dry-run. It never rewrites
+  meta.json.
 - Blob store: the converter replaces every inline base64 attachment with the
   placeholder `[image sha256:<hash> <media_type> <n> bytes]` (`[file ...]` for
   a non-image) and hands the bytes to the writer, which stores each under
@@ -225,11 +233,15 @@ proofs are out of scope for the workspace.
 4. Validation: TrajectoryValidator MUST pass post-enrichment (extra is free-form).
 
 ## atif-duck (reads corpus_root; NEVER imports atif-corpus/atif-converter)
-- register(con, corpus_root): TEMP-table raw readers over trajectory.json
-  (read_json), edges.jsonl, loss_report.json, meta.json + derived views above.
-  Sessions carrying current columnar artifacts are read with read_parquet
-  instead of read_json, per session, and the two sets are unioned; the
-  returned RawSources says which sessions took which path.
+- register(con, corpus_root): TEMP-table raw readers over each session's
+  stored trajectory (read_json, which decompresses a .zst file itself),
+  edges, loss_report.json, meta.json + derived views above. Sessions carrying
+  current columnar artifacts are read with read_parquet instead of read_json,
+  per session, and the two sets are unioned; the returned RawSources says
+  which sessions took which path. The lake loader passes stage_columnar:
+  every session without current parquet of its own is decoded in Python and
+  typed into parquet staged outside the corpus, and read from there
+  (RawSources.staged_session_ids), which bounds the loader's memory.
 - No corpus path is statement text. The read_json readers take their glob or
   file list as a bound parameter; the read_parquet readers are relations
   built through the connection's own API and registered as views (CREATE
@@ -240,10 +252,11 @@ proofs are out of scope for the workspace.
   (ATTACH for the Lance store and the lake, the producer's one-row session
   projection, the lake reader's corpus filter)
   are the only places `sql_literal` still escapes a value.
-- ColumnarArtifactProducer(session_dir, session_id, trajectory) is the
-  ArtifactProducer implementation: a pure function of the trajectory (and of
-  the staged session_events.jsonl beside it) that writes the parquet files with the views' own projection expressions,
-  so the JSON columns are normalized exactly as read_json would.
+- ColumnarArtifactProducer(session_dir, session_id, trajectory, events_path?)
+  is a pure function of the trajectory (and of the session's events file,
+  plain or compressed) that writes the parquet files with the views' own
+  projection expressions, so the JSON columns are normalized exactly as
+  read_json would. The lake loader stages each session through it.
 - sessions view carries `agent` and `agent_version` from trajectory.agent, and
   coalesces the shapes harbor emits for working directory and git branch
   (cwds[0]/cwd, git_branches[0]/git.branch). Claude Code's lists are in
@@ -288,6 +301,9 @@ atif-sql query 'SQL' [--format auto|json|csv]
 atif-sql lake rebuild [--corpus-root P ...]  # fresh lake, directory swap
 atif-sql lake verify                   # exit 65 lake_mismatch, 78 lake_unavailable
 atif-sql lake status                   # also folded into `atif-sql status`
+atif-sql corpus slim [--corpus-root P ...] [--no-dry-run]
+                                       # old layout -> compressed; dry run by default;
+                                       # exit 65 / 78 when a corpus kept its parquet
 atif-sql lake compact [--expire-older-than-days N] [--memory-limit SIZE]
                                        # default 30 days; SIZE overrides the host-derived
                                        # DuckDB budget (the writer ceiling still applies)
@@ -326,8 +342,9 @@ override query's host-derived cap and thread count; ATIF_SQL_ALLOW_ROOT=1 lets
 query/search/analyze run as uid 0 (a warning is logged).
 lake_root (default ~/.atif-sql/lake), corpus_base (default ~/.atif-sql/corpus;
 where `lake rebuild` looks for corpora), lake_sync_batch_size=64 and
-lake_load_batch_size=512 (sessions per lake transaction), lake_lock_timeout_seconds,
-lake_expire_days=30.
+lake_load_batch_size=512 (sessions per lake transaction), lake_stage_workers
+(processes that stage a batch from its trajectories; default min(4, cpu_count)),
+lake_lock_timeout_seconds, lake_expire_days=30.
 _default_*() factories read env at call time. With agent=codex the two roots re-derive to $CODEX_HOME (default
 ~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that
