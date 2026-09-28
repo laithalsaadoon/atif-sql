@@ -12,8 +12,10 @@ test's tmp dir.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
+import shutil
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -21,7 +23,7 @@ from typing import Any
 
 import duckdb
 import pytest
-from cli_fixtures import write_synthetic_session
+from cli_fixtures import write_analytics_parquets, write_synthetic_session
 from loguru import logger
 
 from atif_cli import app as app_mod
@@ -120,6 +122,45 @@ def lake_corpus(source_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture
     _materialize(source_root, corpus, capsys)
     rebuild(corpus_root=[corpus], fmt="json")  # type: ignore[arg-type]
     capsys.readouterr()
+    return corpus
+
+
+@pytest.fixture(scope="module")
+def built_lake(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
+    """``(source, corpus, lake)`` materialized and rebuilt ONCE for the module.
+
+    What :func:`lake_corpus` builds per test, for the tests that leave the
+    corpus alone. Nothing may write to these paths: :func:`shared_lake_corpus`
+    hands each test a copy of the lake and the corpus itself, read-only.
+    """
+    base = tmp_path_factory.mktemp("built-lake")
+    source = base / "src-one" / "projects"
+    write_synthetic_session(source, SESSION_A)
+    write_synthetic_session(source, SESSION_B)
+    corpus = base / "corpus-one"
+    lake_root = base / "lake"
+    with pytest.MonkeyPatch.context() as patch:
+        for var in ("ATIF_SQL_CORPUS_ROOT", "ATIF_SQL_LANCE_URI", "ATIF_SQL_EMBED_MODEL_ID"):
+            patch.delenv(var, raising=False)
+        patch.setenv("ATIF_SQL_LAKE_ROOT", str(lake_root))
+        patch.setenv("ATIF_SQL_CORPUS_BASE", str(base / "corpus-base"))
+        with contextlib.redirect_stdout(io.StringIO()):
+            materialize(source_root=source, corpus_root=corpus, fmt="json")  # type: ignore[arg-type]
+            rebuild(corpus_root=[corpus], fmt="json")  # type: ignore[arg-type]
+    return source, corpus, lake_root
+
+
+@pytest.fixture
+def shared_lake_corpus(built_lake: tuple[Path, Path, Path]) -> Path:
+    """The module's corpus, with a private copy of its lake at this test's lake root.
+
+    For a test that may write the lake (or try to) but never the corpus: the
+    copy is the test's own, the corpus is shared. A copied lake still serves
+    the corpus because the catalog names the corpus by its root, which is the
+    same path, and its data path is overridden on every attach.
+    """
+    _, corpus, lake_root = built_lake
+    shutil.copytree(lake_root, _lake_root())
     return corpus
 
 
@@ -250,12 +291,12 @@ class TestPoolAndSingleWorkerWriteTheSameLake:
 
 class TestQueryReadsTheLake:
     def test_query_takes_the_lake_path_and_grants_only_its_files(
-        self, lake_corpus: Path, capsys: pytest.CaptureFixture[str], warnings: list[str]
+        self, shared_lake_corpus: Path, capsys: pytest.CaptureFixture[str], warnings: list[str]
     ) -> None:
         rows = _query(
             "SELECT current_setting('allowed_paths') AS paths, "
             "current_setting('allowed_directories') AS dirs",
-            lake_corpus,
+            shared_lake_corpus,
             capsys,
         )
         paths, dirs = rows[0]["paths"], rows[0]["dirs"]
@@ -268,16 +309,20 @@ class TestQueryReadsTheLake:
         assert all(p.startswith((data_dir, catalog)) for p in paths), paths
         assert not any(d.startswith(str(_lake_root())) for d in dirs)
         assert not [line for line in warnings if "per-session artifacts" in line]
-        same = _query("SELECT count(*) AS n FROM steps", lake_corpus, capsys)
-        assert same == _query("SELECT count(*) AS n FROM steps", lake_corpus, capsys, lake=False)
+        same = _query("SELECT count(*) AS n FROM steps", shared_lake_corpus, capsys)
+        assert same == _query(
+            "SELECT count(*) AS n FROM steps", shared_lake_corpus, capsys, lake=False
+        )
 
     def test_every_panel_query_agrees_between_the_two_paths(
-        self, lake_corpus: Path, capsys: pytest.CaptureFixture[str]
+        self, shared_lake_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from test_columnar_cli import PANEL_QUERIES
 
         for sql in PANEL_QUERIES:
-            assert _query(sql, lake_corpus, capsys) == _query(sql, lake_corpus, capsys, lake=False)
+            assert _query(sql, shared_lake_corpus, capsys) == _query(
+                sql, shared_lake_corpus, capsys, lake=False
+            )
 
     def test_without_a_lake_query_warns_once_and_reads_the_artifacts(
         self,
@@ -298,7 +343,7 @@ class TestQueryReadsTheLake:
         assert not [line for line in warnings if "per-session artifacts" in line]
 
     def test_a_stale_lake_falls_back(
-        self, lake_corpus: Path, capsys: pytest.CaptureFixture[str], warnings: list[str]
+        self, shared_lake_corpus: Path, capsys: pytest.CaptureFixture[str], warnings: list[str]
     ) -> None:
         layout = LakeLayout(_lake_root())
         con = duckdb.connect()
@@ -310,13 +355,15 @@ class TestQueryReadsTheLake:
         con.execute(f"DETACH {LAKE_ALIAS}")
         con.close()
         lake_mod._publish_reader_catalog(layout)
-        assert _query("SELECT count(*) AS n FROM sessions", lake_corpus, capsys) == [{"n": 2}]
+        assert _query("SELECT count(*) AS n FROM sessions", shared_lake_corpus, capsys) == [
+            {"n": 2}
+        ]
         assert any("schema is stale" in line for line in warnings)
 
     def test_all_corpora_spans_every_corpus_and_needs_the_lake(
         self,
         source_root: Path,
-        lake_corpus: Path,
+        shared_lake_corpus: Path,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -328,7 +375,7 @@ class TestQueryReadsTheLake:
         assert report["lake_synced"] == 1
         rows = _query(
             "SELECT corpus, count(*) AS n FROM sessions GROUP BY 1 ORDER BY 1",
-            lake_corpus,
+            shared_lake_corpus,
             capsys,
             all_corpora=True,
         )
@@ -352,6 +399,27 @@ class TestQueryReadsTheLake:
         )
 
 
+class TestEveryCorpusCoversTheAnalytics:
+    def test_all_corpora_reads_and_grants_every_corpus_analytics(
+        self, lake_corpus: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        second_source = tmp_path / "src-two" / "projects"
+        write_synthetic_session(second_source, SESSION_C)
+        second = tmp_path / "corpus-two"
+        _materialize(second_source, second, capsys)
+        write_analytics_parquets(lake_corpus, SESSION_A)
+        write_analytics_parquets(second, SESSION_C)
+        sql = (
+            "SELECT s.corpus, count(*) AS n FROM user_friction f "
+            "JOIN sessions s USING (session_id) GROUP BY 1 ORDER BY 1"
+        )
+        assert _query(sql, lake_corpus, capsys, all_corpora=True) == [
+            {"corpus": "corpus-one", "n": 1},
+            {"corpus": "corpus-two", "n": 1},
+        ]
+        assert _query(sql, lake_corpus, capsys) == [{"corpus": "corpus-one", "n": 1}]
+
+
 class TestTheSandboxHoldsOnTheLakePath:
     @pytest.mark.parametrize(
         ("sql", "kind"),
@@ -368,20 +436,20 @@ class TestTheSandboxHoldsOnTheLakePath:
         ],
     )
     def test_refused(
-        self, lake_corpus: Path, capsys: pytest.CaptureFixture[str], sql: str, kind: str
+        self, shared_lake_corpus: Path, capsys: pytest.CaptureFixture[str], sql: str, kind: str
     ) -> None:
-        code = _exit_code(query, sql, corpus_root=lake_corpus, fmt="json")
+        code = _exit_code(query, sql, corpus_root=shared_lake_corpus, fmt="json")
         assert code == EXIT_CODES[kind]
         assert json.loads(capsys.readouterr().err)["error"]["kind"] == kind
 
     def test_copy_over_a_granted_lake_file_is_refused(
-        self, lake_corpus: Path, capsys: pytest.CaptureFixture[str]
+        self, shared_lake_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         target = next((_lake_root() / "data").rglob("*.parquet"))
         before = target.read_bytes()
         sql = f"COPY (SELECT 1 AS a) TO '{target}' (FORMAT PARQUET, USE_TMP_FILE false)"
         assert (
-            _exit_code(query, sql, corpus_root=lake_corpus, fmt="json")
+            _exit_code(query, sql, corpus_root=shared_lake_corpus, fmt="json")
             == EXIT_CODES["sandbox_refused"]
         )
         assert target.read_bytes() == before

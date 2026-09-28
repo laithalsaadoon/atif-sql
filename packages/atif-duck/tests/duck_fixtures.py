@@ -22,7 +22,9 @@ The corpus contains two sessions:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -856,13 +858,69 @@ def ducklake_extension_present() -> None:
 # Both read paths. The view tests take their connection through
 # ``register_via`` so each one runs over the per-session artifacts AND over a
 # lake loaded from them: the lake path must return the same rows.
+#
+# Building a lake costs most of a second, and the lake path doubles every view
+# test, so lakes are shared: one per distinct corpus CONTENT, built the first
+# time a test registers that content and reused by every later test that
+# registers the same bytes. The key is a digest of the corpus's ``sessions/``
+# tree (paths and bytes), taken at registration, so a test that edits its
+# corpus first gets a lake of its own. Isolation holds because nothing reaches
+# a shared lake but a READ_ONLY attach: the test's corpus stays its own (the
+# analytics parquets and the embeddings store are read from it, not from the
+# template), and the template corpus the lake was loaded from is a private
+# copy no test is handed. A test that writes a lake builds its own (test_lake).
 # ---------------------------------------------------------------------------
 
 READ_PATHS: tuple[str, ...] = ("per-session", "lake")
 
+#: ``{sessions-tree digest: (template corpus root, its lake)}`` for this run.
+_SHARED_LAKES: dict[str, tuple[Path, Any]] = {}
 
-def register_via(con: Any, corpus_root: Path, read_path: str, **kwargs: Any) -> Any:
-    """``register`` over ``corpus_root``, through a lake built from it when ``read_path`` says so."""
+
+def _sessions_digest(corpus_root: Path) -> str:
+    """sha256 over every file under ``sessions/``: relative path, then bytes."""
+    digest = hashlib.sha256()
+    sessions = corpus_root / "sessions"
+    for path in sorted(p for p in sessions.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(sessions).as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def shared_lake(corpus_root: Path, lakes_dir: Path) -> tuple[Path, Any]:
+    """``(template corpus, lake layout)`` holding exactly ``corpus_root``'s sessions.
+
+    Built under ``lakes_dir`` (a session-scoped directory) on first use of this
+    content; later calls with the same content get the same lake.
+    """
+    from atif_duck.infrastructure.lake import LakeCorpus, LakeLayout, corpus_agent, rebuild_lake
+
+    key = _sessions_digest(corpus_root)
+    cached = _SHARED_LAKES.get(key)
+    if cached is not None:
+        return cached
+    template = lakes_dir / key[:16] / "corpus"
+    shutil.copytree(corpus_root / "sessions", template / "sessions")
+    layout = LakeLayout(template.parent / "lake")
+    rebuild_lake(layout, [LakeCorpus(root=template, agent=corpus_agent(template))])
+    _SHARED_LAKES[key] = (template, layout)
+    return template, layout
+
+
+@pytest.fixture(scope="session")
+def shared_lakes_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Where this run's shared lakes live."""
+    return tmp_path_factory.mktemp("shared-lakes")
+
+
+def register_via(
+    con: Any, corpus_root: Path, read_path: str, *, lakes_dir: Path | None = None, **kwargs: Any
+) -> Any:
+    """``register`` over ``corpus_root``, through a lake holding its sessions when ``read_path`` says so.
+
+    ``lakes_dir`` shares the lake with every other registration of the same
+    content (see above); without it the lake is built beside the corpus.
+    """
     from atif_duck.infrastructure.lake import (
         LakeCorpus,
         LakeLayout,
@@ -875,9 +933,13 @@ def register_via(con: Any, corpus_root: Path, read_path: str, **kwargs: Any) -> 
 
     lake = None
     if read_path == "lake":
-        layout = LakeLayout(corpus_root / ".test-lake")
-        rebuild_lake(layout, [LakeCorpus(root=corpus_root, agent=corpus_agent(corpus_root))])
-        attached = attach_lake_for_query(con, layout, corpus_root=corpus_root, all_corpora=False)
+        if lakes_dir is None:
+            template = corpus_root
+            layout = LakeLayout(corpus_root / ".test-lake")
+            rebuild_lake(layout, [LakeCorpus(root=corpus_root, agent=corpus_agent(corpus_root))])
+        else:
+            template, layout = shared_lake(corpus_root, lakes_dir)
+        attached = attach_lake_for_query(con, layout, corpus_root=template, all_corpora=False)
         assert isinstance(attached, LakeReader), attached
         lake = attached
     sources = register(con, corpus_root, lake=lake, **kwargs)
