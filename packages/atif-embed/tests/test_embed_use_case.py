@@ -461,9 +461,15 @@ class _CountingTextRows:
     count observed after pulling k rows is the property under test.
     """
 
+    discovery = "test"
+
     def __init__(self, uuids: list[str]) -> None:
         self._uuids = uuids
         self.yielded = 0
+        self.commits: list[int] = []
+
+    def commit(self, *, stored_rows: int) -> None:
+        self.commits.append(stored_rows)
 
     def iter_unembedded(
         self,

@@ -35,11 +35,13 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from atif_embed.domain.text_stamp import PendingText, text_hash
+from atif_embed.domain.discovery import PendingSelection
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    from atif_embed.domain.text_stamp import PendingText
 
 #: Minimum characters for a step text to be worth embedding.
 MIN_TEXT_CHARS = 32
@@ -159,6 +161,9 @@ def _batch_by_bytes(paths: list[tuple[str, int]], *, max_bytes: int) -> list[lis
 class DuckDbTextRows:
     """:class:`~atif_embed.domain.ports.TextRowsPort` over the contract corpus."""
 
+    #: This reader has one path: every complete session's trajectory.
+    discovery = "corpus"
+
     def iter_unembedded(
         self,
         corpus_root: Path,
@@ -196,49 +201,35 @@ class DuckDbTextRows:
         de-duplicated on uuid (first occurrence wins) so the Lance store
         never receives two vectors for one key.
         """
-        import duckdb
-
         paths = _complete_trajectory_paths(corpus_root)
         if not paths:
             logger.info("No complete sessions under {} — nothing to embed", corpus_root)
             return
+        selection = PendingSelection(embedded=embedded, limit=limit)
+        yield from selection.select(_step_rows(paths))
 
-        already = embedded or {}
-        seen: set[str] = set()
-        yielded = 0
-        batches = _batch_by_bytes(paths, max_bytes=_BATCH_MAX_BYTES)
-        con = duckdb.connect(":memory:")
-        try:
-            for batch in batches:
-                if limit is not None and yielded >= limit:
-                    return
-                result = con.execute(_step_texts_sql(), [batch])
-                while True:
-                    if limit is not None and yielded >= limit:
-                        return
-                    page = result.fetchmany(_FETCH_PAGE_ROWS)
-                    if not page:
-                        break
-                    for row in page:
-                        if limit is not None and yielded >= limit:
-                            return
-                        uuid, text = str(row[0]), str(row[1])
-                        if uuid in seen:
-                            continue
-                        seen.add(uuid)
-                        stamp = text_hash(text)
-                        stored = already.get(uuid)
-                        if stored == stamp:
-                            continue
-                        yielded += 1
-                        yield PendingText(
-                            uuid=uuid,
-                            text=text,
-                            text_hash=stamp,
-                            replaces_existing=stored is not None,
-                        )
-        finally:
-            con.close()
+    def commit(self, *, stored_rows: int) -> None:
+        """Nothing to record: this reader has no watermark and re-reads every session."""
+        del stored_rows
+
+
+def _step_rows(paths: list[tuple[str, int]]) -> Iterator[tuple[str, str]]:
+    """``(uuid, text)`` for every qualifying step, one byte-bounded batch per statement.
+
+    A generator, so a consumer that stops early (``--limit``) stops the
+    reads too: no batch past the one it's in is ever executed.
+    """
+    import duckdb
+
+    con = duckdb.connect(":memory:")
+    try:
+        for batch in _batch_by_bytes(paths, max_bytes=_BATCH_MAX_BYTES):
+            result = con.execute(_step_texts_sql(), [batch])
+            while page := result.fetchmany(_FETCH_PAGE_ROWS):
+                for row in page:
+                    yield str(row[0]), str(row[1])
+    finally:
+        con.close()
 
 
 __all__ = ["MIN_TEXT_CHARS", "DuckDbTextRows"]
