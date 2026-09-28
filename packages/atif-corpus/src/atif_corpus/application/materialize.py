@@ -105,7 +105,9 @@ Clock discipline: ``materialized_at`` / ``harbor_version`` /
 ``converter_version`` are passed IN by the caller (atif-cli owns the wall
 clock and the version pins); the only clocks read here are ``time.time_ns``
 for the quiescence "now" when the caller does not supply one, and
-``time.perf_counter`` for durations. The domain reads no clock at all. "Now"
+``time.perf_counter`` for durations (the per-session convert timer can be
+swapped for another clock, ``convert_clock``, which is how a test pins the
+report's sum without timing a real pool). The domain reads no clock at all. "Now"
 is read AFTER the scan: read before it, a transcript written while a long
 scan ran carries an mtime later than "now" and trips the future-mtime clock
 warning for a host whose clock is fine.
@@ -616,6 +618,7 @@ def _write_session(
     converter_schema: int | None = None,
     agent: str,
     artifact_producer: ArtifactProducer | None = None,
+    convert_clock: Callable[[], float] = time.perf_counter,
 ) -> tuple[float, float]:
     """Convert one session and write its artifacts; returns (convert, artifact) seconds.
 
@@ -658,16 +661,16 @@ def _write_session(
                 layout.session_dir(job.session_id), restore_root
             )
             _link_or_copy_tree(layout.source_archive_dir(job.session_id), archive_dir)
-            convert_started = time.perf_counter()
+            convert_started = convert_clock()
             output = converter.convert(session_jsonl)
-            convert_elapsed = time.perf_counter() - convert_started
+            convert_elapsed = convert_clock() - convert_started
             archive_meta = {META_SOURCE_ARCHIVE_KEY: dict(job.previous_archive or {})}
         else:
             session_jsonl = Path(job.session_jsonl)
             archive_dir.mkdir()
-            convert_started = time.perf_counter()
+            convert_started = convert_clock()
             output = converter.convert(session_jsonl, archive_dir=archive_dir)
-            convert_elapsed = time.perf_counter() - convert_started
+            convert_elapsed = convert_clock() - convert_started
             if output.source_archive:
                 verify_archive_on_disk(archive_dir, output.source_archive)
                 archive_meta = {
@@ -760,6 +763,7 @@ def _attempt_session(
     converter_schema: int | None = None,
     agent: str,
     artifact_producer: ArtifactProducer | None = None,
+    convert_clock: Callable[[], float] = time.perf_counter,
 ) -> _SessionOutcome:
     """Run :func:`_write_session` and fold any exception into the outcome."""
     try:
@@ -773,6 +777,7 @@ def _attempt_session(
             converter_schema=converter_schema,
             agent=agent,
             artifact_producer=artifact_producer,
+            convert_clock=convert_clock,
         )
     except EmptySourceError:
         return _SessionOutcome(
@@ -829,6 +834,7 @@ def _worker_attempt(
     converter_version: str,
     converter_schema: int | None = None,
     agent: str,
+    convert_clock: Callable[[], float] = time.perf_counter,
 ) -> _SessionOutcome:
     """Pool task: convert and write one session with this worker's converter."""
     if _worker_converter is None:
@@ -844,6 +850,7 @@ def _worker_attempt(
         converter_schema=converter_schema,
         agent=agent,
         artifact_producer=_worker_artifact_producer,
+        convert_clock=convert_clock,
     )
 
 
@@ -870,6 +877,7 @@ def _attempt_sessions(
     converter_schema: int | None = None,
     agent: str,
     artifact_producer: ArtifactProducer | None = None,
+    convert_clock: Callable[[], float] = time.perf_counter,
 ) -> tuple[list[_SessionOutcome], int]:
     """Convert and write every planned session; return outcomes in PLAN order.
 
@@ -904,7 +912,12 @@ def _attempt_sessions(
     if pool_size <= 1:
         return [
             _attempt_session(
-                layout, job, converter, artifact_producer=artifact_producer, **provenance
+                layout,
+                job,
+                converter,
+                artifact_producer=artifact_producer,
+                convert_clock=convert_clock,
+                **provenance,
             )
             for job in jobs
         ], 1
@@ -914,7 +927,10 @@ def _attempt_sessions(
         initializer=_worker_init,
         initargs=(converter, worker_setup, artifact_producer),
     ) as pool:
-        futures = [pool.submit(_worker_attempt, layout, job, **provenance) for job in jobs]
+        futures = [
+            pool.submit(_worker_attempt, layout, job, convert_clock=convert_clock, **provenance)
+            for job in jobs
+        ]
         return [future.result() for future in futures], pool_size
 
 
@@ -1492,6 +1508,7 @@ def materialize(
     converter_schema: int | None = None,
     session_sink: SessionSink | None = None,
     sink_batch_size: int = DEFAULT_SINK_BATCH_SIZE,
+    convert_clock: Callable[[], float] = time.perf_counter,
 ) -> MaterializationReport:
     """Run one materialization pass; see the module docstring for the shape.
 
@@ -1555,6 +1572,10 @@ def materialize(
         picklable) and writing through the same per-session staging dir and
         atomic swap. Artifacts are byte-identical to the inline path; the
         report's ``convert_seconds`` is the per-session sum either way.
+    convert_clock
+        The clock each session's conversion is timed with (``time.perf_counter``
+        by default). Read in whichever process converts, so on a pool it must
+        be picklable, which a module-level function is.
     worker_setup
         Optional picklable callable each pool worker runs once before it
         builds its converter — the composition root's hook for per-process
@@ -1696,6 +1717,7 @@ def materialize(
         converter_schema=converter_schema,
         agent=source_layout.agent.value,
         artifact_producer=artifact_producer,
+        convert_clock=convert_clock,
     )
     live_outcomes = outcomes[: len(live_jobs)]
     archive_outcomes = outcomes[len(live_jobs) :]

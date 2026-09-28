@@ -26,7 +26,7 @@ from corpus_fixtures import NOW_NS, STALE_NS, write_session
 
 from atif_corpus.application.materialize import MaterializationReport, materialize
 from atif_corpus.domain.layout import CorpusLayout
-from atif_corpus.infrastructure.fake_converter import FakeConverter
+from atif_corpus.infrastructure.fake_converter import FakeConverter, simulated_clock
 
 SESSIONS = tuple(f"{i:08d}-aaaa-bbbb-cccc-{i:012d}" for i in range(1, 7))
 ARTIFACTS = ("trajectory.json", "edges.jsonl", "loss_report.json", "meta.json")
@@ -49,6 +49,7 @@ class _RunOverrides(TypedDict, total=False):
     """The `materialize` keywords these tests vary, with `materialize`'s types."""
 
     worker_setup: Callable[[], None]
+    convert_clock: Callable[[], float]
 
 
 def _run(
@@ -166,15 +167,27 @@ class TestFailures:
         assert retry.up_to_date_count == len(SESSIONS) - 2
         assert retry.failures == ()
 
-    def test_convert_seconds_is_the_per_session_sum(self, tmp_path: Path) -> None:
-        """Three workers sleeping 0.2s each: the sum beats the wall clock."""
+    @pytest.mark.parametrize("workers", [1, 3])
+    def test_convert_seconds_is_the_per_session_sum(self, tmp_path: Path, workers: int) -> None:
+        """Every conversion takes 10 s on the injected clock: the report says 10 s x sessions.
+
+        No real time is compared. A pass that timed the pool, or the whole
+        pass, on the wall clock would report about a second, never sixty.
+        """
         source_root = tmp_path / "projects"
         _write_fixture(source_root)
 
-        report = _run(source_root, tmp_path / "corpus", FakeConverter(delay_seconds=0.2), workers=3)
+        report = _run(
+            source_root,
+            tmp_path / "corpus",
+            FakeConverter(simulated_seconds=10.0),
+            workers=workers,
+            convert_clock=simulated_clock,
+        )
 
-        assert report.convert_seconds >= 0.2 * len(SESSIONS)
-        assert report.convert_seconds > report.total_seconds
+        assert report.workers == workers
+        assert report.materialized_count == len(SESSIONS)
+        assert report.convert_seconds == 10.0 * len(SESSIONS)
 
 
 class TestTheWorkLeavesThisProcess:
