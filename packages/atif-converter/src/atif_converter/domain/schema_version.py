@@ -43,12 +43,15 @@ History:
   the script's own header and the items its nested commands, MCP calls and
   patches complete; ``is_error`` from the ``status`` of ``FileChange`` and
   ``CollabAgentToolCall`` items.
+* 5 — Claude Code ``agent.extra`` lists (``cwds``, ``git_branches``,
+  ``agent_ids``) in first-seen order instead of set order, so a session
+  converts to the same bytes in every process.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 4
+CONVERTER_SCHEMA_VERSION: Final = 5
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

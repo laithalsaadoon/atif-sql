@@ -564,22 +564,26 @@ def _collect_events(
     return deduped_raw_events
 
 
+def _first_seen(events: list[dict[str, Any]], key: str) -> list[str]:
+    """Every distinct non-empty string ``event[key]``, in the order events carry it."""
+    values = (event.get(key) for event in events)
+    return list(dict.fromkeys(value for value in values if isinstance(value, str) and value))
+
+
 def _agent_extra(events: list[dict[str, Any]]) -> dict[str, Any] | None:
-    cwds = {
-        event.get("cwd")
-        for event in events
-        if isinstance(event.get("cwd"), str) and event.get("cwd")
-    }
-    git_branches = {
-        event.get("gitBranch")
-        for event in events
-        if isinstance(event.get("gitBranch"), str) and event.get("gitBranch")
-    }
-    agent_ids = {
-        event.get("agentId")
-        for event in events
-        if isinstance(event.get("agentId"), str) and event.get("agentId")
-    }
+    """``agent.extra``: the session's working dirs, branches and subagent ids.
+
+    harbor collects each into a ``set`` and dumps it as a list, so its order
+    follows the process hash seed and two conversions of one session disagree.
+    Here each list keeps FIRST-SEEN order over ``events``, which are already in
+    timestamp order (:func:`_collect_events`): the first ``cwds`` entry is where
+    the session started, later ones are where it moved, and the same holds for
+    branch switches and for the order subagents first spoke. The parity oracle
+    forgives the reordering only when the two lists hold the same values.
+    """
+    cwds = _first_seen(events, "cwd")
+    git_branches = _first_seen(events, "gitBranch")
+    agent_ids = _first_seen(events, "agentId")
 
     agent_extra: dict[str, Any] = {}
     if cwds:
@@ -1002,12 +1006,9 @@ def convert_claude_code_records(
         ``None`` exactly when harbor returns ``None``: no records at all, or no
         record produced a step.
     """
-    # The three collections below are SETS, dumped as lists: with two or more
-    # distinct values their order follows the process hash seed, so the same
-    # session can serialize differently per process. That is harbor's behavior,
-    # kept on purpose — sorting here would diverge from the live oracle on every
-    # multi-element set. A deliberate divergence later is a fidelity-policy
-    # decision, not a drive-by.
+    # harbor builds agent.extra's lists from SETS, so their order follows the
+    # process hash seed. Ours keep first-seen order (``_agent_extra``), a
+    # deliberate divergence the oracle forgives only for a reordering.
     events = _collect_events(main_records, side_records)
     if not events:
         return None

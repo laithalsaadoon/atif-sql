@@ -44,10 +44,11 @@ def synthetic_session(tmp_path: Path) -> Path:
     """Return the path to the synthetic session's main JSONL file."""
     # KEEP cwd / gitBranch / agentId single-valued across these events. harbor
     # collects them into Python SETS and dumps the sets as lists, so with two or
-    # more distinct values the order follows the process hash seed and the
-    # frozen golden would flake between pytest runs. That is harbor's behavior
-    # and the port keeps it (sorting would diverge from the live oracle); the
-    # fixture just stays out of the nondeterministic case.
+    # more distinct values its order follows the process hash seed and the
+    # frozen golden would flake between pytest runs. The port keeps first-seen
+    # order instead (the oracle forgives the reordering, see
+    # harbor_oracle.SET_ORDER_DIVERGENCE_KEYS); the multi-valued case is
+    # covered in test_deterministic_output.py.
     project_dir = tmp_path / "projects" / "-tmp-proj"
     main_jsonl = project_dir / f"{SESSION_ID}.jsonl"
 
