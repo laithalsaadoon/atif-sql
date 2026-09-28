@@ -533,6 +533,20 @@ class TestCgroupSizing:
         _write_level(fake_cgroup / "user.slice", str(8 * GIB), 6 * GIB)
         assert app_mod._host_memory() == (8 * GIB, 2 * GIB)
 
+    def test_reclaimable_page_cache_counts_as_room(self, fake_cgroup: Path) -> None:
+        # A slice at 7 GiB of an 8 GiB cap, 5 GiB of it page cache: 6 GiB of room,
+        # not the 1 GiB memory.current alone implies.
+        level = fake_cgroup / "user.slice"
+        _write_level(level, str(8 * GIB), 7 * GIB)
+        (level / "memory.stat").write_text(
+            f"anon {2 * GIB}\nfile {5 * GIB}\nactive_file {3 * GIB}\ninactive_file {2 * GIB}\n"
+        )
+        assert app_mod._host_memory() == (8 * GIB, 6 * GIB)
+
+    def test_a_missing_memory_stat_keeps_current_as_usage(self, fake_cgroup: Path) -> None:
+        _write_level(fake_cgroup / "user.slice", str(8 * GIB), 7 * GIB)
+        assert app_mod._host_memory() == (8 * GIB, GIB)
+
     def test_no_cgroup_v2_line_means_no_cap(self, fake_cgroup: Path, tmp_path: Path) -> None:
         (tmp_path / "proc-self-cgroup").write_text("12:memory:/legacy\n")
         assert app_mod._host_memory() == (128 * GIB, 64 * GIB)

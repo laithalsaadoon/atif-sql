@@ -178,6 +178,24 @@ def _read_cgroup_int(path: Path) -> int | None:
     return int(text) if text.isdigit() else None
 
 
+def _reclaimable_file_bytes(level: Path) -> int:
+    """Page cache the kernel can reclaim from this cgroup: ``active_file`` plus ``inactive_file``.
+
+    Read from ``memory.stat``; 0 when the file is missing or unreadable, which
+    leaves ``memory.current`` as the (conservative) usage.
+    """
+    try:
+        text = (level / "memory.stat").read_text(encoding="ascii")
+    except OSError:
+        return 0
+    total = 0
+    for line in text.splitlines():
+        key, _, value = line.partition(" ")
+        if key in {"active_file", "inactive_file"} and value.strip().isdigit():
+            total += int(value)
+    return total
+
+
 def _cgroup_memory() -> tuple[int | None, int | None]:
     """``(limit, headroom)`` bytes from this process's cgroup v2 chain; ``None`` when unlimited.
 
@@ -185,8 +203,13 @@ def _cgroup_memory() -> tuple[int | None, int | None]:
     sets it on the scope; a container runtime on a parent), so every level
     from the process's own cgroup up to the root is read: the limit is the
     smallest ``memory.max``, and the headroom the smallest ``memory.max`` minus
-    that level's ``memory.current``. A host without cgroup v2 (macOS, a v1
-    host) has no ``0::`` line and answers ``(None, None)``.
+    what that level holds and cannot give back. ``memory.current`` counts page
+    cache, which the kernel reclaims under pressure, so the level's
+    ``active_file`` and ``inactive_file`` from ``memory.stat`` are subtracted
+    first, the same way ``MemAvailable`` counts reclaimable cache as free on
+    the host. Without that, a slice full of cache reports almost no room and
+    every query and lake command drops to the floor. A host without cgroup v2
+    (macOS, a v1 host) has no ``0::`` line and answers ``(None, None)``.
     """
     try:
         lines = _PROC_SELF_CGROUP.read_text(encoding="ascii").splitlines()
@@ -203,6 +226,7 @@ def _cgroup_memory() -> tuple[int | None, int | None]:
         if level_max is not None:
             limit = level_max if limit is None else min(limit, level_max)
             used = _read_cgroup_int(level / "memory.current") or 0
+            used = max(0, used - _reclaimable_file_bytes(level))
             room = max(0, level_max - used)
             headroom = room if headroom is None else min(headroom, room)
         if level == _CGROUP_ROOT or _CGROUP_ROOT not in level.parents:
