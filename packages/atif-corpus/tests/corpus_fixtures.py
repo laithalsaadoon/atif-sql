@@ -36,6 +36,22 @@ STALE_NS = NOW_NS - 3_600 * 1_000_000_000
 LIVE_NS = NOW_NS - 10 * 1_000_000_000
 
 
+def read_artifact_bytes(path: Path) -> bytes:
+    """A stored artifact's bytes, decompressed when it is a ``.zst`` file."""
+    import zstandard
+
+    data = path.read_bytes()
+    if path.name.endswith(".zst"):
+        with zstandard.ZstdDecompressor().stream_reader(data) as reader:
+            return reader.readall()
+    return data
+
+
+def read_artifact_text(path: Path) -> str:
+    """A stored artifact's text, decompressed when it is a ``.zst`` file."""
+    return read_artifact_bytes(path).decode("utf-8")
+
+
 def write_session(
     source_root: Path,
     session_id: str,

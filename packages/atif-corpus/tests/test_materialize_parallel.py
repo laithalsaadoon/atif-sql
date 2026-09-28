@@ -22,14 +22,20 @@ from pathlib import Path
 from typing import TypedDict, Unpack
 
 import pytest
-from corpus_fixtures import NOW_NS, STALE_NS, write_session
+from corpus_fixtures import NOW_NS, STALE_NS, read_artifact_text, write_session
 
 from atif_corpus.application.materialize import MaterializationReport, materialize
 from atif_corpus.domain.layout import CorpusLayout
 from atif_corpus.infrastructure.fake_converter import FakeConverter, simulated_clock
 
 SESSIONS = tuple(f"{i:08d}-aaaa-bbbb-cccc-{i:012d}" for i in range(1, 7))
-ARTIFACTS = ("trajectory.json", "edges.jsonl", "loss_report.json", "meta.json")
+ARTIFACTS = (
+    "trajectory.json.zst",
+    "edges.jsonl.zst",
+    "session_events.jsonl.zst",
+    "loss_report.json",
+    "meta.json",
+)
 
 
 class _Provenance(TypedDict):
@@ -92,7 +98,7 @@ def _worker_pids(corpus_root: Path) -> dict[str, int]:
     layout = CorpusLayout(corpus_root=corpus_root)
     return {
         session_dir.name: int(
-            json.loads(layout.trajectory_path(session_dir.name).read_text())["worker_pid"]
+            json.loads(read_artifact_text(layout.trajectory_path(session_dir.name)))["worker_pid"]
         )
         for session_dir in sorted(layout.sessions_dir.iterdir())
     }

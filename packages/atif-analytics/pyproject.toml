@@ -26,6 +26,8 @@ dependencies = [
     "pyarrow>=23.0.1",
     "pydantic>=2.13.2",
     "pydantic-settings>=2.13.1",
+    # The per-session file source reads compressed artifacts (*.zst).
+    "zstandard>=0.25.0",
 ]
 
 [project.urls]

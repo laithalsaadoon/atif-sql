@@ -171,6 +171,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -181,6 +182,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=23.0.1" },
     { name = "pydantic", specifier = ">=2.13.2" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
 [[package]]
@@ -259,6 +261,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pytz" },
+    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -269,6 +272,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.2" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "pytz", specifier = ">=2024.1" },
+    { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
 [[package]]
@@ -285,6 +289,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "tenacity" },
+    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -298,6 +303,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.13.2" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "tenacity", specifier = ">=9.1.4" },
+    { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
 [[package]]

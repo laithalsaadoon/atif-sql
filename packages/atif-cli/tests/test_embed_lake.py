@@ -582,7 +582,7 @@ class TestCompactBudget:
             return real(*args, **kwargs)
 
         monkeypatch.setattr("atif_duck.infrastructure.lake.compact_lake", recording)
-        monkeypatch.setattr("atif_cli.lake._memory_limit", lambda: 512 * 1024**2)
+        monkeypatch.setattr("atif_cli.lake.writer_memory_limit", lambda: 512 * 1024**2)
         compact(memory_limit="1GiB", fmt=OutputFormat.JSON)
         assert _json(capsys)["memory_limit_bytes"] == 1024**3
         compact(fmt=OutputFormat.JSON)

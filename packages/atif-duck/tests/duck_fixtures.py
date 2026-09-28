@@ -30,6 +30,8 @@ from typing import Any
 
 import pytest
 
+from atif_duck.domain.artifacts import COMPRESSED_ARTIFACTS
+
 SESSION_IDS = [
     "11111111-1111-1111-1111-111111111111",
     "22222222-2222-2222-2222-222222222222",
@@ -871,7 +873,29 @@ def ducklake_extension_present() -> None:
 # copy no test is handed. A test that writes a lake builds its own (test_lake).
 # ---------------------------------------------------------------------------
 
-READ_PATHS: tuple[str, ...] = ("per-session", "lake")
+#: ``compressed`` is the per-session path over the same corpus with its
+#: ``trajectory.json`` / ``edges.jsonl`` / ``session_events.jsonl`` stored as
+#: ``<name>.zst``, the layout materialize writes now: every view must read it
+#: to the same rows.
+READ_PATHS: tuple[str, ...] = ("per-session", "compressed", "lake")
+
+
+def compress_artifacts(corpus_root: Path) -> None:
+    """Store every session's compressible JSON artifacts as ``<name>.zst``, as materialize does.
+
+    The frame records the content size, like the corpus writer's; the plain
+    file is removed.
+    """
+    import zstandard
+
+    compressor = zstandard.ZstdCompressor(level=3, write_content_size=True)
+    for session_dir in sorted((corpus_root / "sessions").iterdir()):
+        for name in COMPRESSED_ARTIFACTS:
+            plain = session_dir / name
+            if plain.is_file():
+                (session_dir / f"{name}.zst").write_bytes(compressor.compress(plain.read_bytes()))
+                plain.unlink()
+
 
 #: ``{sessions-tree digest: (template corpus root, its lake)}`` for this run.
 _SHARED_LAKES: dict[str, tuple[Path, Any]] = {}
@@ -932,6 +956,8 @@ def register_via(
     from atif_duck.infrastructure.registry import register
 
     lake = None
+    if read_path == "compressed":
+        compress_artifacts(corpus_root)
     if read_path == "lake":
         if lakes_dir is None:
             template = corpus_root

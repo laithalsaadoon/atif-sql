@@ -13,7 +13,16 @@ from pathlib import Path
 from typing import Any, TypedDict, Unpack, override
 
 import pytest
-from corpus_fixtures import LIVE_NS, NOW_NS, SESSION_A, SESSION_B, STALE_NS, write_session
+from corpus_fixtures import (
+    LIVE_NS,
+    NOW_NS,
+    SESSION_A,
+    SESSION_B,
+    STALE_NS,
+    read_artifact_bytes,
+    read_artifact_text,
+    write_session,
+)
 
 from atif_corpus.application.materialize import (
     MaterializationReport,
@@ -22,7 +31,7 @@ from atif_corpus.application.materialize import (
     materialize,
     read_watermark,
 )
-from atif_corpus.domain.layout import SESSION_EVENTS_FILENAME, CorpusLayout
+from atif_corpus.domain.layout import SESSION_EVENTS_FILENAME, CorpusLayout, stored_filename
 from atif_corpus.domain.ports import ConversionOutput
 from atif_corpus.infrastructure.fake_converter import FakeConverter
 from atif_corpus.infrastructure.scanner import scan_source_root
@@ -82,13 +91,13 @@ class TestFirstPass:
         assert report.materialized_count == 1
         assert report.failed_count == 0
         layout = CorpusLayout(corpus_root=corpus_root)
-        trajectory = json.loads(layout.trajectory_path(SESSION_A).read_text())
+        trajectory = json.loads(read_artifact_text(layout.trajectory_path(SESSION_A)))
         assert trajectory["session_id"] == SESSION_A
         # Compact separators per contract: no spaces after , or :
-        raw = layout.trajectory_path(SESSION_A).read_text()
+        raw = read_artifact_text(layout.trajectory_path(SESSION_A))
         assert '", "' not in raw
         assert json.loads(layout.loss_report_path(SESSION_A).read_text())
-        edges = layout.edges_path(SESSION_A).read_text().splitlines()
+        edges = read_artifact_text(layout.edges_path(SESSION_A)).splitlines()
         assert len(edges) == 1
         assert json.loads(edges[0])["uuid"] == f"{SESSION_A}-u1"
 
@@ -286,7 +295,7 @@ class TestSourceRemovalRetention:
         write_session(source_root, SESSION_B, mtime_ns=STALE_NS)
         run(source_root, corpus_root, FakeConverter())
         layout = CorpusLayout(corpus_root=corpus_root)
-        trajectory_before = layout.trajectory_path(SESSION_A).read_bytes()
+        trajectory_before = read_artifact_bytes(layout.trajectory_path(SESSION_A))
         assert _meta(corpus_root, SESSION_A)["source_present"] is True
 
         main.unlink()
@@ -295,7 +304,7 @@ class TestSourceRemovalRetention:
         assert report.sessions_removed == 1
         assert report.removed_session_ids == (SESSION_A,)
         assert report.retained_count == 1
-        assert layout.trajectory_path(SESSION_A).read_bytes() == trajectory_before
+        assert read_artifact_bytes(layout.trajectory_path(SESSION_A)) == trajectory_before
         meta = _meta(corpus_root, SESSION_A)
         assert meta["source_present"] is False
         assert meta["source_removed_at"] == VERSIONS["materialized_at"]
@@ -434,8 +443,8 @@ class TestTornArtifactSets:
         main = write_session(source_root, SESSION_A, mtime_ns=STALE_NS)
         run(source_root, corpus_root, FakeConverter())
         layout = CorpusLayout(corpus_root=corpus_root)
-        old_trajectory = layout.trajectory_path(SESSION_A).read_text()
-        old_edges = layout.edges_path(SESSION_A).read_text()
+        old_trajectory = read_artifact_text(layout.trajectory_path(SESSION_A))
+        old_edges = read_artifact_text(layout.edges_path(SESSION_A))
         old_meta = layout.meta_path(SESSION_A).read_text()
 
         # Touch the source so the session replans, then crash the edges
@@ -447,15 +456,15 @@ class TestTornArtifactSets:
             msg = "simulated crash between trajectory and edges"
             raise OSError(msg)
 
-        monkeypatch.setattr(mat_mod, "write_text_atomic", _boom)
+        monkeypatch.setattr(mat_mod, "write_text_zstd_atomic", _boom)
         report = run(source_root, corpus_root, FakeConverter())
 
         assert report.failed_count == 1
         # The published dir is byte-identical to the old generation —
         # complete and internally consistent, never a new-trajectory/
         # old-edges mix.
-        assert layout.trajectory_path(SESSION_A).read_text() == old_trajectory
-        assert layout.edges_path(SESSION_A).read_text() == old_edges
+        assert read_artifact_text(layout.trajectory_path(SESSION_A)) == old_trajectory
+        assert read_artifact_text(layout.edges_path(SESSION_A)) == old_edges
         assert layout.meta_path(SESSION_A).read_text() == old_meta
         # No staging litter under sessions/ where readers glob.
         assert sorted(p.name for p in layout.sessions_dir.iterdir()) == [SESSION_A]
@@ -475,7 +484,7 @@ class TestTornArtifactSets:
             msg = "simulated crash"
             raise OSError(msg)
 
-        monkeypatch.setattr(mat_mod, "write_text_atomic", _boom)
+        monkeypatch.setattr(mat_mod, "write_text_zstd_atomic", _boom)
         run(source_root, corpus_root, FakeConverter())
         monkeypatch.undo()
 
@@ -1025,12 +1034,12 @@ class _StagedEventsReader:
         self, session_dir: Path, *, session_id: str, trajectory: Mapping[str, Any]
     ) -> Mapping[str, Any]:
         del session_id, trajectory
-        self.seen.append(layout_events(session_dir).read_text())
+        self.seen.append(read_artifact_text(layout_events(session_dir)))
         return {}
 
 
 def layout_events(session_dir: Path) -> Path:
-    return session_dir / SESSION_EVENTS_FILENAME
+    return session_dir / stored_filename(SESSION_EVENTS_FILENAME)
 
 
 class TestSessionEventsArtifact:
@@ -1048,7 +1057,9 @@ class TestSessionEventsArtifact:
             **VERSIONS,
         )
         assert report.materialized_count == 1
-        written = CorpusLayout(corpus_root=corpus_root).session_events_path(SESSION_A).read_text()
+        written = read_artifact_text(
+            CorpusLayout(corpus_root=corpus_root).session_events_path(SESSION_A)
+        )
         assert written == '{"seq":0,"event_type":"mode"}\n{"seq":1,"event_type":"cost-state"}\n'
         # The producer runs after the file is staged, so it can build from it.
         assert producer.seen == [written]
@@ -1060,4 +1071,4 @@ class TestSessionEventsArtifact:
         run(source_root, corpus_root, FakeConverter())
         path = CorpusLayout(corpus_root=corpus_root).session_events_path(SESSION_A)
         assert path.is_file()
-        assert path.read_text() == ""
+        assert read_artifact_text(path) == ""

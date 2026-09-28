@@ -33,7 +33,8 @@ lake_app = cyclopts.App(
 )
 
 
-def _layout(lake_root: Path | None) -> tuple[LakeLayout, LakeSettings]:
+def lake_layout(lake_root: Path | None) -> tuple[LakeLayout, LakeSettings]:
+    """The lake at ``lake_root`` (default ``ATIF_SQL_LAKE_ROOT``), and the settings it came from."""
     from atif_duck.infrastructure.lake import LakeLayout
     from atif_duck.infrastructure.lake_settings import LakeSettings
 
@@ -41,7 +42,7 @@ def _layout(lake_root: Path | None) -> tuple[LakeLayout, LakeSettings]:
     return LakeLayout(lake_root if lake_root is not None else settings.lake_root), settings
 
 
-def _memory_limit() -> int:
+def writer_memory_limit() -> int:
     """The same host- and cgroup-derived cap ``query`` runs under."""
     from atif_cli.app import query_memory_limit_bytes
 
@@ -54,10 +55,10 @@ def _fail(kind: str, message: str, hint: str, fmt: OutputFormat) -> None:
     raise SystemExit(err.exit_code)
 
 
-def _discover(
+def discover_corpora(
     layout: LakeLayout, settings: LakeSettings, roots: list[Path] | None
 ) -> list[LakeCorpus]:
-    """The corpora to load: the named roots, else what the lake holds plus every corpus under the base."""
+    """The corpora to act on: the named roots, else what the lake holds plus every corpus under the base."""
     from atif_duck.infrastructure.lake import LakeCorpus, corpus_agent, registered_corpora
 
     if roots:
@@ -107,8 +108,8 @@ def rebuild(
         rebuild_lake,
     )
 
-    layout, settings = _layout(lake_root)
-    corpora = _discover(layout, settings, corpus_root)
+    layout, settings = lake_layout(lake_root)
+    corpora = discover_corpora(layout, settings, corpus_root)
     if not corpora:
         _fail(
             "invalid_input",
@@ -123,7 +124,8 @@ def rebuild(
             corpora,
             batch_size=settings.lake_load_batch_size,
             lock_timeout_seconds=settings.lake_lock_timeout_seconds,
-            memory_limit_bytes=_memory_limit(),
+            memory_limit_bytes=writer_memory_limit(),
+            stage_workers=settings.lake_stage_workers,
         )
     except LakeCorpusConflictError as exc:
         _fail("invalid_input", str(exc), "give each corpus a distinct directory name", fmt)
@@ -178,14 +180,20 @@ def verify(
         verify_lake,
     )
 
-    layout, _ = _layout(lake_root)
+    layout, settings = lake_layout(lake_root)
     corpora = (
         [LakeCorpus(root=root, agent=corpus_agent(root)) for root in corpus_root]
         if corpus_root
         else None
     )
     try:
-        report = verify_lake(layout, corpora, memory_limit_bytes=_memory_limit())
+        report = verify_lake(
+            layout,
+            corpora,
+            memory_limit_bytes=writer_memory_limit(),
+            batch_size=settings.lake_load_batch_size,
+            stage_workers=settings.lake_stage_workers,
+        )
     except LakeError as exc:
         _fail("lake_unavailable", str(exc), "run `atif-sql lake rebuild`", fmt)
         return
@@ -248,7 +256,7 @@ def status(
     """
     from atif_duck.infrastructure.lake import lake_status
 
-    layout, _ = _layout(lake_root)
+    layout, _ = lake_layout(lake_root)
     state = lake_status(layout).as_dict()
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(f"lake root:    {state['root']}")
@@ -305,13 +313,13 @@ def compact(
         compact_lake,
     )
 
-    layout, settings = _layout(lake_root)
+    layout, settings = lake_layout(lake_root)
     days = (
         expire_older_than_days if expire_older_than_days is not None else settings.lake_expire_days
     )
     if days < 0:
         _fail("invalid_input", "--expire-older-than-days must be >= 0", "pass 0 or more", fmt)
-    budget = _memory_limit()
+    budget = writer_memory_limit()
     if memory_limit is not None:
         from atif_cli.app import parse_size
 

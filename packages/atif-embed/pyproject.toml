@@ -26,6 +26,9 @@ dependencies = [
     "pydantic>=2.13.2",
     "pydantic-settings>=2.13.1",
     "tenacity>=9.1.4",
+    # The per-session reader sizes its batches from a compressed trajectory's
+    # frame header.
+    "zstandard>=0.25.0",
 ]
 
 [project.urls]

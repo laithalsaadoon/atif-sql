@@ -31,6 +31,26 @@ SINK_PENDING_FILENAME = "sink_pending.json"
 #: Per-session directory holding the zstd copy of the raw source files.
 SOURCE_ARCHIVE_DIRNAME = "source"
 
+#: The suffix a compressed artifact carries after its logical name.
+COMPRESSED_SUFFIX = ".zst"
+#: The artifacts materialize stores zstd-compressed, as ``<name>.zst``: the
+#: bulk of a corpus's bytes. ``meta.json`` and ``loss_report.json`` stay plain
+#: (small, and ``meta.json`` is what every reader and the writer check first).
+#: A session written before this keeps its plain files until ``atif-sql corpus
+#: slim`` compresses them; readers accept either spelling. atif-duck carries
+#: the twin names (``atif_duck.domain.artifacts``), pinned by atif-cli's tests.
+COMPRESSED_ARTIFACT_FILENAMES: tuple[str, ...] = (
+    TRAJECTORY_FILENAME,
+    EDGES_FILENAME,
+    SESSION_EVENTS_FILENAME,
+)
+
+
+def stored_filename(name: str) -> str:
+    """The name a NEW session stores the artifact ``name`` under."""
+    return f"{name}{COMPRESSED_SUFFIX}" if name in COMPRESSED_ARTIFACT_FILENAMES else name
+
+
 #: A blob's name: the lowercase hex SHA-256 of its bytes.
 _BLOB_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 #: A blob's extension: short, lowercase alphanumeric (``png``, ``jpg``, ``bin``).
@@ -124,20 +144,20 @@ class CorpusLayout:
         return self.sessions_dir / session_id
 
     def trajectory_path(self, session_id: str) -> Path:
-        """Compact ATIF-v1.7 trajectory JSON for one session."""
-        return self.session_dir(session_id) / TRAJECTORY_FILENAME
+        """Compact ATIF-v1.7 trajectory JSON for one session, as materialize stores it (zstd)."""
+        return self.session_dir(session_id) / stored_filename(TRAJECTORY_FILENAME)
 
     def loss_report_path(self, session_id: str) -> Path:
         """``atif_converter`` LossReport JSON for one session."""
         return self.session_dir(session_id) / LOSS_REPORT_FILENAME
 
     def edges_path(self, session_id: str) -> Path:
-        """One line per RAW record: uuid/parent_uuid edge list."""
-        return self.session_dir(session_id) / EDGES_FILENAME
+        """One line per RAW record: uuid/parent_uuid edge list, as materialize stores it (zstd)."""
+        return self.session_dir(session_id) / stored_filename(EDGES_FILENAME)
 
     def session_events_path(self, session_id: str) -> Path:
-        """One line per kept non-message record: hooks, errors, cost-state, modes."""
-        return self.session_dir(session_id) / SESSION_EVENTS_FILENAME
+        """One line per kept non-message record, as materialize stores it (zstd)."""
+        return self.session_dir(session_id) / stored_filename(SESSION_EVENTS_FILENAME)
 
     def meta_path(self, session_id: str) -> Path:
         """Provenance record: source files, mtimes, versions, materialized_at."""
