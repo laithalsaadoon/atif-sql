@@ -328,6 +328,12 @@ class TestSink:
         with pytest.raises(LakeCorpusConflictError):
             rebuild_lake(layout, [corpus, LakeCorpus(other, "claude-code")])
 
+    def test_the_lock_file_is_private_to_its_owner(self, tmp_path: Path) -> None:
+        layout = LakeLayout(tmp_path / "lake")
+        with writer_lock(layout, timeout_seconds=1):
+            pass
+        assert layout.lock_path.stat().st_mode & 0o077 == 0
+
     def test_a_held_writer_lock_times_the_sink_out(self, tmp_path: Path) -> None:
         corpus = _corpus(tmp_path / "corpus")
         layout = _lake(tmp_path, corpus)
