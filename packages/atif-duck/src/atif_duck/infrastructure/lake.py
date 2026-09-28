@@ -255,7 +255,7 @@ def corpus_session_ids(corpus_root: Path) -> list[str]:
 def writer_lock(layout: LakeLayout, *, timeout_seconds: float) -> Generator[None]:
     """Hold the lake's writer lock (``flock`` on ``<root>.lock``), waiting up to the timeout."""
     layout.lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(layout.lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    fd = os.open(layout.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         deadline = time.monotonic() + timeout_seconds
         while True:
