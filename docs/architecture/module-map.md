@@ -72,6 +72,10 @@ layers contract among the members (`pyproject.toml:462`).
   `SessionSink` implementation materialize writes through), the published read-only catalog copy,
   the query-side attach and fallback, and `rebuild_lake`, `verify_lake`, `lake_status` and
   `compact_lake`.
+- `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py` — one corpus's step texts and
+  primary uuids read from the published lake for the embedding store: the full read, the read of
+  the uuids `ducklake_table_changes` names after a snapshot, and the corpus's lineage and snapshot
+  range.
 - `packages/atif-duck/src/atif_duck/infrastructure/lake_settings.py` — `LakeSettings`, the
   `ATIF_SQL_`-prefixed lake root, corpus base, batch sizes, lock timeout and snapshot expiry.
 - `packages/atif-duck/src/atif_duck/domain/catalog.py` — `VIEW_NAMES`
@@ -120,6 +124,8 @@ for catalog, 70 for runtime, split between a pure taxonomy module
   between them (`packages/atif-cli/src/atif_cli/app.py:52`).
 - `packages/atif-cli/src/atif_cli/lake.py` — the `lake` sub-app: `rebuild`, `verify`,
   `status` and `compact`, each deferring atif-duck's imports into the command body.
+- `packages/atif-cli/src/atif_cli/embed_lake.py` — `DuckLakeSteps`, atif-embed's `LakeStepsPort`
+  implemented over atif-duck's `lake_steps`, the one place the two meet.
 - `packages/atif-cli/src/atif_cli/cron.py` — `cron install` prints a crontab block and never
   writes one; `cron status` reports per-lane lock and last-run state from injected probes
   (`packages/atif-cli/src/atif_cli/cron.py:7`).
@@ -153,7 +159,11 @@ provider switch fails loud instead of corrupting kNN
 a row was built from, so a re-conversion under a stable uuid reads as stale
 (`packages/atif-embed/src/atif_embed/domain/text_stamp.py:3`). Additive schema columns migrate online
 through a metadata-only `add_columns`, keyed on a `SCHEMA_VERSION` sidecar file
-(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:61`).
+(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:61`). Discovery reads the lake's
+`steps` through `LakeStepsPort` when a lake holds the corpus, only the rows changed since a watermark
+kept in the store directory
+(`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py`), and falls back to the
+per-session reader otherwise.
 
 - `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py` — connect, open or
   create, online-migrate, delete by predicate, append, index, and compact
