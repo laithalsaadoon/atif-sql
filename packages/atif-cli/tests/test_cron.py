@@ -43,18 +43,20 @@ class TestCrontabBlock:
     def test_one_line_per_lane_with_schedule_script_and_log(self) -> None:
         block = crontab_block(Path("/repo/scripts/atif-sql-refresh.sh"), Path("/repo/log"))
         lines = block.splitlines()
-        assert len(lines) == len(LANES) == 2
+        assert len(lines) == len(LANES) == 3
         for line, (lane, schedule) in zip(lines, LANES, strict=True):
             assert line.startswith(schedule)
             assert f"/repo/scripts/atif-sql-refresh.sh {lane} " in line
             assert line.endswith(">> /repo/log 2>&1")
 
     def test_schedules_match_contract(self) -> None:
-        # CONTRACT-V2 §Cron: materialize */10, llm nightly 10:20Z (the
-        # structural :17 lane was removed 2026-09-27).
+        # CONTRACT-V2 §Cron: materialize */10, llm nightly 10:20Z, lake
+        # compact nightly 03:40 (the structural :17 lane was removed
+        # 2026-09-27).
         assert dict(LANES) == {
             "materialize": "*/10 * * * *",
             "llm": "20 10 * * *",
+            "compact": "40 3 * * *",
         }
 
     def test_removed_lanes_are_not_scheduled(self) -> None:
@@ -156,7 +158,7 @@ class TestStatusCommand:
         status(script=scripts_tree, fmt=OutputFormat.JSON)
         payload = json.loads(capsys.readouterr().out)
         lanes = {lane["lane"]: lane for lane in payload["lanes"]}
-        assert set(lanes) == {"materialize", "llm"}
+        assert set(lanes) == {"materialize", "llm", "compact"}
         # No lock files exist in the tmp tree -> every lane idle.
         assert all(not lane["lock_held"] for lane in lanes.values())
         assert lanes["materialize"]["last_complete"] == {

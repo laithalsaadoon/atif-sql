@@ -43,10 +43,11 @@ cron_app = cyclopts.App(
 #: The lanes and their crontab schedules — the single source the
 #: ``install`` block is rendered from. Cadence rationale lives in the
 #: refresh script's header (materialize is the cheap incremental lane; llm
-#: is the one that spends).
+#: is the one that spends; compact is the nightly lake maintenance).
 LANES: tuple[tuple[str, str], ...] = (
     ("materialize", "*/10 * * * *"),
     ("llm", "20 10 * * *"),
+    ("compact", "40 3 * * *"),
 )
 
 #: Lanes cut from the refresh script, with the date. The script still accepts
