@@ -236,19 +236,17 @@ name = "atif-converter"
 version = "0.1.0"
 source = { editable = "packages/atif-converter" }
 dependencies = [
-    { name = "harbor" },
     { name = "imagesize" },
-    { name = "litellm" },
     { name = "loguru" },
+    { name = "pydantic" },
     { name = "zstandard" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "harbor", specifier = ">=0.22.0,<1" },
     { name = "imagesize", specifier = ">=2.0" },
-    { name = "litellm", specifier = ">=1.92.0" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "pydantic", specifier = ">=2.13.2" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
@@ -351,10 +349,8 @@ dependencies = [
     { name = "boto3" },
     { name = "cyclopts" },
     { name = "duckdb" },
-    { name = "harbor" },
     { name = "imagesize" },
     { name = "lancedb" },
-    { name = "litellm" },
     { name = "loguru" },
     { name = "polars" },
     { name = "pyarrow" },
@@ -368,9 +364,11 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "commitizen" },
+    { name = "harbor" },
     { name = "hypothesis" },
     { name = "import-linter" },
     { name = "lefthook" },
+    { name = "litellm" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -383,10 +381,8 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.42.91" },
     { name = "cyclopts", specifier = ">=4.10.2" },
     { name = "duckdb", specifier = ">=1.5.2,<2" },
-    { name = "harbor", specifier = ">=0.22.0,<1" },
     { name = "imagesize", specifier = ">=2.0" },
     { name = "lancedb", specifier = ">=0.30,<0.38" },
-    { name = "litellm", specifier = ">=1.92.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "polars", specifier = ">=1.40.0" },
     { name = "pyarrow", specifier = ">=23.0.1" },
@@ -400,9 +396,11 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "commitizen", specifier = ">=4.13.10" },
+    { name = "harbor", specifier = ">=0.22.0,<1" },
     { name = "hypothesis", specifier = ">=6.157.0" },
     { name = "import-linter", specifier = ">=2.3" },
     { name = "lefthook", specifier = ">=2.1.6" },
+    { name = "litellm", specifier = ">=1.92.0" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.15.11" },

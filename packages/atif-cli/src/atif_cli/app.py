@@ -31,8 +31,8 @@ string per invocation.
 Two agents
 ----------
 ``convert``, ``materialize`` and ``status`` take ``--agent claude-code|codex``.
-The flag picks three things at once and they must move together: which harbor
-adapter converts a transcript, which discovery layout finds one, and which
+The flag picks three things at once and they must move together: which
+converter reads a transcript, which discovery layout finds one, and which
 source root and corpus slug the settings default to. One corpus root therefore
 holds exactly one agent's sessions, which is what lets everything downstream —
 the DuckDB views, the analytics pipelines, the embedding store — stay unaware
@@ -44,7 +44,7 @@ Agent-friendly defaults
 * DuckDB errors classify into parse/catalog/runtime -> exit 64/65/70 with a
   JSON error envelope on non-TTY (see :mod:`atif_cli.errors`).
 
-Heavy imports (duckdb, harbor via atif_converter, pydantic via atif_corpus)
+Heavy imports (duckdb, the ATIF models via atif_converter, pydantic via atif_corpus)
 are DEFERRED into the command bodies that use them so the fast path
 (``schema`` / ``--help`` / ``--version``) stays on a lean import graph —
 pinned by the fresh-interpreter lean-import test in ``tests/test_lean_import``.
@@ -545,8 +545,9 @@ def _resolve_agent(value: str, agent_enum: Any) -> Any:
     """Parse an ``--agent`` value, or exit 64 naming the accepted spellings.
 
     cyclopts would coerce a StrEnum parameter itself, but the enum lives behind
-    a DEFERRED import (it comes from atif-converter, which drags harbor), and
-    the lean-import test pins that harbor stays out of the fast path. So the
+    a DEFERRED import (it comes from atif-converter, which builds the ATIF
+    models), and the lean-import test pins that atif_converter stays out of
+    the fast path. So the
     flag is typed ``str`` at the signature and parsed here, inside the command
     body, with the same exit code an unparseable path would get.
     """
@@ -802,6 +803,7 @@ def materialize(
         Report format; ``auto`` = human lines on TTY, JSON on a pipe.
     """
     from atif_cli.converter_adapter import RealConverter
+    from atif_converter.domain.atif import UPSTREAM_VERSION as ATIF_MODELS_VERSION
     from atif_converter.domain.schema_version import CONVERTER_SCHEMA_VERSION
     from atif_corpus.application.materialize import (
         CorpusAgentMismatchError,
@@ -838,7 +840,9 @@ def materialize(
             converter=RealConverter(agent=settings.agent),
             source_layout=source_layout,
             materialized_at=_now_iso(),
-            harbor_version=_version_of("harbor"),
+            # The harbor release the vendored ATIF models match; harbor itself
+            # isn't installed with atif-sql, so this is provenance, not a lookup.
+            harbor_version=ATIF_MODELS_VERSION,
             # The release that did the converting, looked up under the ONE
             # published distribution. `atif-converter` isn't a distribution in the
             # bundled wheel, so looking it up answered "unknown" for every

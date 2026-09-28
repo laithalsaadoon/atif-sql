@@ -21,8 +21,9 @@ is `uv sync --all-packages` and depends on `hooks:install`, so it also installs
 the lefthook git hooks in the same step.
 
 Python is 3.13 rather than 3.14 on purpose: `mise.toml`'s header records that
-`harbor==0.22.0` floors at `Requires-Python >=3.12` and 3.13 is the safe pick
-while harbor's dependency chain settles on 3.14.
+`harbor==0.22.0` (a dev dependency, for the test oracles) floors at
+`Requires-Python >=3.12` and 3.13 is the safe pick while harbor's dependency chain
+settles on 3.14.
 
 Drive every command through `mise run <task>` rather than calling `uv`, `ruff`,
 or `ty` directly. The mise `[env]` block sets `PYTHONDONTWRITEBYTECODE=1` and
@@ -135,38 +136,65 @@ name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and a derived
 example that actually executes — or a documented `EXCLUSIONS` entry. The tests
 in `packages/atif-duck/tests/` fail until that is true.
 
-## harbor is a public-API dependency, and the parity oracle is how we know
+## harbor and litellm are test oracles, not dependencies
 
-`packages/atif-converter/pyproject.toml` pins `harbor>=0.22.0,<1`. Production code
-imports only its public surface: the ATIF data classes in
-`harbor.models.trajectories` (RFC 0001) and `harbor.utils.trajectory_validator`.
-The conversion from a Claude Code session or a Codex rollout to a `Trajectory`
-is ours, in `atif_converter.domain.claude_code_conversion` and
-`atif_converter.domain.codex_conversion`, ported from harbor 0.22.0 under
-Apache-2.0 so that the upstream files that used to be private dependencies
-(each busy upstream between June and September 2026) can change without moving us.
+Neither is installed with atif-sql. Both sit in the root `[dependency-groups] dev`,
+and `packages/atif-converter/tests/test_dev_only_imports_guard.py` fails if any
+member's `src/` imports either one.
 
-harbor's private converters still exist in one place: the tests.
-`packages/atif-converter/tests/harbor_oracle.py` reaches them as the PARITY
-ORACLE, and these hang off it:
+**The ATIF models are vendored.** The data classes from `harbor.models.trajectories`
+(RFC 0001) and `harbor.utils.trajectory_validator` live in
+`atif_converter.domain.atif`, copied from harbor 0.22.0 under Apache-2.0. Each file
+carries an attribution header and is otherwise upstream's file byte for byte, with
+the import path rewritten; ruff and ty skip the directory so nobody reformats it
+into ours. `UPSTREAM_VERSION` in its `__init__` records the release, and `meta.json`
+stamps it as `harbor_version`. The conversion from a Claude Code session or a Codex
+rollout to a `Trajectory` is ours, in `atif_converter.domain.claude_code_conversion`
+and `atif_converter.domain.codex_conversion`, ported from harbor 0.22.0.
 
-- `tests/goldens/*.trajectory.json` — the oracle's output for each synthetic
-  fixture, frozen. `test_harbor_oracle.py` asserts the live oracle still equals
-  the frozen one, so an upstream behavior change under the pin surfaces as a
-  named JSON-path diff, not as a port that mysteriously "fails parity".
-- `test_parity_claude_code.py` / `test_parity_codex.py` — our converters equal
-  the oracle on the fixtures AND the goldens. The golden half never skips, so
-  parity stays checkable the day harbor removes the private method.
-- `test_parity_live.py` — the newest `ATIF_PARITY_LIMIT` local sessions of each
-  agent (`0` = all), converted both ways and diffed. Skips in CI; run it with
-  `ATIF_PARITY_LIMIT=0` before a release, and after any harbor bump.
+harbor itself is used in two places, both tests:
 
-So a harbor version bump is a lockfile edit plus one reading: run the
-atif-converter suite and read its failures as upstream-behavior reports. A model
-shape change fails the drift tests; a conversion behavior change fails the golden
-test. Each is a decision about whether the port follows upstream. Re-freeze the
-goldens only after that decision: `ATIF_FREEZE_GOLDENS=1 uv run pytest
-packages/atif-converter/tests/test_harbor_oracle.py -k freeze`.
+- `tests/test_vendored_atif.py` compares every vendored file to the installed
+  harbor's source, compares the two JSON Schemas, and round-trips the goldens and
+  the converter's enriched output through both sets of models and both validators,
+  valid and broken inputs alike.
+- `tests/harbor_oracle.py` reaches harbor's private converters as the PARITY
+  ORACLE, and three things hang off it:
+  - `tests/goldens/*.trajectory.json`: the oracle's output for each synthetic
+    fixture, frozen. `test_harbor_oracle.py` asserts the live oracle still equals
+    the frozen one, so an upstream behavior change surfaces as a named JSON-path
+    diff, not as a port that mysteriously "fails parity".
+  - `test_parity_claude_code.py` / `test_parity_codex.py`: our converters equal the
+    oracle on the fixtures AND the goldens. The golden half never skips, so parity
+    stays checkable the day harbor removes the private method.
+  - `test_parity_live.py`: the newest `ATIF_PARITY_LIMIT` local sessions of each
+    agent (`0` = all), converted both ways and diffed. Skips in CI; run it with
+    `ATIF_PARITY_LIMIT=0` before a release, and after any harbor bump.
+
+So a harbor bump is a lockfile edit plus one reading: run the atif-converter suite
+and read its failures as upstream-behavior reports. A model change fails
+`test_vendored_atif.py`, naming the file; re-vendor it (copy upstream's file under
+the existing header, rewrite the import path) and move `UPSTREAM_VERSION`. A
+conversion behavior change fails the golden test. Each is a decision about whether
+the port follows upstream. Re-freeze the goldens only after that decision:
+`ATIF_FREEZE_GOLDENS=1 uv run pytest packages/atif-converter/tests/test_harbor_oracle.py -k freeze`.
+
+**Prices are vendored data.** `atif_converter/domain/model_prices.json` is a filtered
+copy of litellm's public `model_prices_and_context_window.json` (MIT; the notice and
+the source ref travel in its `meta` block), holding only the Claude and OpenAI text
+models our transcripts name, plus local overrides for models litellm doesn't price
+yet. Refresh it by hand, never by editing the JSON:
+
+```bash
+uv run scripts/update_prices.py --ref v1.100.1   # a litellm tag, branch, or commit
+```
+
+The script drops an override once upstream prices the same key and says so; delete
+that override from the script then. Move the dev `litellm` pin to the same release
+when you can, because `tests/test_pricing_identity.py` compares arithmetic only over
+entries the installed litellm shares with the table and fails when too few do. Every
+changed rate changes `total_cost_usd` for that model's sessions on their next
+materialize, so read the diff as a pricing change.
 
 ## Never spend money in a test
 

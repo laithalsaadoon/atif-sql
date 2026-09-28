@@ -27,7 +27,7 @@ from typing import Any
 #: Exit codes agents can rely on. Add keys freely; never renumber one.
 EXIT_CODES: dict[str, int] = {
     "ok": 0,
-    "empty_session": 2,  # convert: session parsed but harbor produced no trajectory
+    "empty_session": 2,  # convert: session parsed but produced no trajectory
     "no_embeddings": 2,  # search: store empty — run `atif-sql embed --all --no-dry-run`
     "invalid_input": 64,  # malformed user-supplied flags / paths
     "parse_error": 64,  # malformed SQL

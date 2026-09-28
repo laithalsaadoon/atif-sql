@@ -1,7 +1,7 @@
 [project]
 name = "atif-converter"
 version = "0.1.0"
-description = "Harbor ClaudeCode adapter wrapper + fidelity policy for Claude Code -> ATIF conversion."
+description = "Claude Code and Codex transcripts -> ATIF conversion, with the fidelity policy per agent."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -16,18 +16,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # harbor is here for its PUBLIC surface only: the ATIF data classes in
-    # harbor.models.trajectories (RFC 0001) and harbor.utils.trajectory_validator.
-    # The conversion itself is ours (domain/claude_code_conversion.py,
-    # domain/codex_conversion.py, ported from 0.22.0 under Apache-2.0), so the
-    # pin no longer has to hold a private method still. The model shapes we
-    # write are pinned by tests instead: a harbor release that changes them
-    # fails the suite, which is the alarm a version ceiling used to stand in for.
-    "harbor>=0.22.0,<1",
-    # Same lazy import harbor's own converters make for per-call cost: the port
-    # keeps it, so it is our dependency now rather than one we reached through
-    # harbor. Floor matches harbor 0.22.0's own requirement.
-    "litellm>=1.92.0",
+    # pydantic for the ATIF models vendored from harbor 0.22.0 under
+    # atif_converter.domain.atif; harbor itself and litellm are dev-only (the
+    # root's [dependency-groups] dev), kept for the parity oracle and the
+    # pricing identity test.
+    "pydantic>=2.13.2",
     "loguru>=0.7.3",
     "zstandard>=0.25.0",
     # Width and height of an inline image, read from its header in memory when

@@ -31,5 +31,5 @@ atif-sql cron install | status         # print the refresh crontab block, or
 
 Conventions: `--format auto` resolves to a table on a TTY and JSON on a pipe;
 DuckDB errors classify to stable exit codes (64 parse / 65 catalog / 70
-runtime) with JSON error envelopes on non-TTY; heavy imports (duckdb, harbor,
+runtime) with JSON error envelopes on non-TTY; heavy imports (duckdb, the ATIF models,
 boto3) are deferred into command bodies (pinned by the lean-import test).

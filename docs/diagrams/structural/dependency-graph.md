@@ -34,7 +34,6 @@ flowchart LR
     anyio[(anyio)]:::external
     cyclopts[(cyclopts)]:::external
     boto3[(boto3)]:::external
-    harbor[(harbor)]:::external
 
     cli --> analytics
     cli --> converter
@@ -44,7 +43,7 @@ flowchart LR
     analytics --> models
 
     cli --> cyclopts
-    converter --> harbor
+    converter --> pydantic
     duck --> duckdb
     converter -->|all members| loguru
     analytics --> polars
@@ -66,7 +65,6 @@ grepping every `*.py` under `packages/*/src` for a `from X` or `import X` line a
 
 | elided node | importing module | declared at | import site |
 | --- | --- | --- | --- |
-| litellm | atif-converter | `packages/atif-converter/pyproject.toml:30` | `packages/atif-converter/src/atif_converter/domain/pricing.py:353`, a lazy import behind the bundled pricing table |
 | pytz | none | `packages/atif-duck/pyproject.toml:29` | no import site; DuckDB's own client imports it to materialize TIMESTAMPTZ, per the comment at `:26-28` |
 
 ## Internal edges
@@ -113,7 +111,6 @@ on import-site count, then on the member's own src line count, descending.
 | anyio | atif-models | `packages/atif-models/pyproject.toml:19` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:29` |
 | cyclopts | atif-cli | `packages/atif-cli/pyproject.toml:37` | `packages/atif-cli/src/atif_cli/app.py:35` |
 | boto3 | atif-embed | `packages/atif-embed/pyproject.toml:20` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:136` |
-| harbor | atif-converter | `packages/atif-converter/pyproject.toml:23` | `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:161` |
 
 What the drawn edge deliberately compresses:
 
@@ -129,24 +126,21 @@ What the drawn edge deliberately compresses:
   imported more often, or in more sites, by another member, so the attribution rule sources all of them
   elsewhere. Its own import sites are real: `packages/atif-corpus/src/atif_corpus/infrastructure/settings.py:19`
   and `packages/atif-corpus/src/atif_corpus/domain/sessions.py:29`.
-- **harbor is a public-API edge now.** `packages/atif-converter/pyproject.toml:26` pins
-  `harbor>=0.22.0,<1`, and production code imports only its public surface: the ATIF data classes
-  (`harbor.models.trajectories`, e.g. `packages/atif-converter/src/atif_converter/infrastructure/codex_converter.py:36`)
-  and the validator (`packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:68`).
+- **harbor is a dev dependency now.** Production code builds on harbor 0.22.0's ATIF data classes
+  and validator, vendored in `packages/atif-converter/src/atif_converter/domain/atif/`, and imports nothing from harbor itself.
   The conversion itself is ours, ported from 0.22.0
   (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`,
-  `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781`). An `ast` guard pins
-  the allowlist (`packages/atif-converter/tests/test_harbor_public_surface_guard.py:29`), and
+  `packages/atif-converter/src/atif_converter/domain/codex_conversion.py:781`). An `ast` guard keeps
+  `harbor` and `litellm` out of every `src/` tree (`packages/atif-converter/tests/test_dev_only_imports_guard.py`), and
   harbor's private converters are reachable from the parity oracle in the tests only
-  (`packages/atif-converter/tests/harbor_oracle.py:94`). harbor ships no `py.typed` marker, so each
-  import site carries an `import-untyped` ignore.
+  (`packages/atif-converter/tests/harbor_oracle.py:94`).
 
 ## Declared dependencies are not the installed closure
 
 The diagram's external nodes are what a member asks for, and that is a strictly smaller set than what
-`uv sync` installs. The gap includes a web stack this system never runs: harbor's own dependency block
-at `uv.lock:1139-1164` lists `fastapi` (`:1082`), `supabase` (`:1097`), and `uvicorn` (`:1101`), so all
-of them are in the installed closure. No member declares any of them, and
+`uv sync` installs. The gap used to include a web stack this system never runs: harbor's own dependency block
+lists `fastapi`, `supabase`, and `uvicorn`, and harbor was a runtime dependency until it moved to the
+dev group. No member declares any of them, and
 `grep -rnE "^[[:space:]]*(from|import) +(fastapi|uvicorn|starlette|supabase)(\.| |$)" --include='*.py' packages/`
 returns no matches across every source and test file. atif-sql exposes no HTTP surface; it is one
 console script, `atif-sql = "atif_cli.app:main"` (`packages/atif-cli/pyproject.toml:42`), over a set of
