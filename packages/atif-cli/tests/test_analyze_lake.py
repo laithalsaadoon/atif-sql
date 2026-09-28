@@ -330,6 +330,7 @@ class TestAnalyzeCommand:
         on_files = self._analyze(built, capsys, lake=False)
         assert on_lake.pop("session_source") == "lake"
         assert on_lake.pop("sessions_read_from_files") == 0
+        assert on_lake.pop("lake_read_failed") is False
         assert on_files.pop("session_source") == "files"
         assert "sessions_read_from_files" not in on_files
         assert on_lake == on_files
@@ -356,26 +357,30 @@ class TestAnalyzeCommand:
         assert "no lake" in fallbacks[0]
 
 
+def _own_lake(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """``(source, corpus, lake root)`` for a test that writes the corpus or the lake."""
+    source, corpus, lake = tmp_path / "projects", tmp_path / "corpus", tmp_path / "lake"
+    write_rich_session(source, RICH_A, day=20)
+    write_rich_session(source, RICH_B, day=21)
+    with _env(lake, tmp_path), contextlib.redirect_stdout(io.StringIO()):
+        materialize(source_root=source, corpus_root=corpus, fmt="json")  # type: ignore[arg-type]
+        rebuild(corpus_root=[corpus], fmt="json")  # type: ignore[arg-type]
+    return source, corpus, lake
+
+
+def _open(lake: Path, corpus: Path) -> LakeSessionSource:
+    opened = LakeSessionSource.open(LakeLayout(lake), corpus)
+    assert isinstance(opened, LakeSessionSource), opened
+    return opened
+
+
 class TestALaggingLakeNeverServesAnOldWrite:
     def test_a_session_written_without_the_lake_is_read_from_its_files(
         self, tmp_path: Path
     ) -> None:
-        """``materialize --no-lake`` rewrites a session; the lake still holds the old rows.
-
-        Its own corpus and lake: this test writes both.
-        """
-        copy_source, copy_corpus, copy_lake = (
-            tmp_path / "projects",
-            tmp_path / "corpus",
-            tmp_path / "lake",
-        )
-        base = tmp_path
-        write_rich_session(copy_source, RICH_A, day=20)
-        write_rich_session(copy_source, RICH_B, day=21)
-        with _env(copy_lake, base), contextlib.redirect_stdout(io.StringIO()):
-            materialize(source_root=copy_source, corpus_root=copy_corpus, fmt="json")  # type: ignore[arg-type]
-            rebuild(corpus_root=[copy_corpus], fmt="json")  # type: ignore[arg-type]
-        main = copy_source / "-work-proj" / f"{RICH_B}.jsonl"
+        """``materialize --no-lake`` rewrites a session; the lake still holds the old rows."""
+        source, corpus, lake = _own_lake(tmp_path)
+        main = source / "-work-proj" / f"{RICH_B}.jsonl"
         extra = _record(
             RICH_B,
             11,
@@ -387,19 +392,36 @@ class TestALaggingLakeNeverServesAnOldWrite:
             handle.write(json.dumps(extra) + "\n")
         stale = time.time_ns() - _STALE_NS + 1_000_000_000
         os.utime(main, ns=(stale, stale))
-        with _env(copy_lake, base), contextlib.redirect_stdout(io.StringIO()):
-            materialize(source_root=copy_source, corpus_root=copy_corpus, lake=False, fmt="json")  # type: ignore[arg-type]
+        with _env(lake, tmp_path), contextlib.redirect_stdout(io.StringIO()):
+            materialize(source_root=source, corpus_root=corpus, lake=False, fmt="json")  # type: ignore[arg-type]
 
-        opened = LakeSessionSource.open(LakeLayout(copy_lake), copy_corpus)
-        assert isinstance(opened, LakeSessionSource), opened
+        opened = _open(lake, corpus)
         try:
-            files = TrajectoryFileSource(copy_corpus)
+            files = TrajectoryFileSource(corpus)
             assert opened.session_bounds() == files.session_bounds()
             assert opened.from_files == (RICH_B,)
             ids = [RICH_A, RICH_B]
             assert opened.load_steps(ids) == files.load_steps(ids)
             assert opened.load_steps([RICH_B])[RICH_B][-1].text == "one more thing"
             assert opened.edges_uuids(RICH_B) == files.edges_uuids(RICH_B)
+            # The fallback is parsed only on request, and its turns drop the
+            # payloads like the lake's do.
+            assert (opened.batchable(RICH_A), opened.batchable(RICH_B)) == (True, False)
+            turns = opened.load_turns([RICH_B])[RICH_B]
+            assert turns and all(not s.tool_calls and not s.tool_results for s in turns)
+            # And through the reader, a batch mixing the two reads as the files do.
+            on_files, on_lake = CorpusReader(corpus), CorpusReader(corpus, source=opened)
+            assert list(on_lake.session_bounds(since_days=None)) == list(
+                on_files.session_bounds(since_days=None)
+            )
+            for sid in ids:
+                assert on_lake.load_steps(sid) == [
+                    dataclasses.replace(s, tool_calls=[], tool_results=[])
+                    for s in on_files.load_steps(sid)
+                ]
+            assert list(on_lake.session_texts(ids, include_uuids=True)) == [
+                on_files.session_text(sid, include_uuids=True) for sid in ids
+            ]
         finally:
             opened.close()
 
@@ -412,3 +434,33 @@ class TestALaggingLakeNeverServesAnOldWrite:
         opened = LakeSessionSource.open(LakeLayout(lake_root), other)
         assert isinstance(opened, LakeUnavailable)
         assert str(other) in opened.reason
+
+
+class TestALakeRebuiltMidRun:
+    def test_a_rebuild_under_an_open_source_falls_back_to_the_files(self, tmp_path: Path) -> None:
+        """``lake rebuild`` swaps the lake out while a long ``analyze`` holds the old attach."""
+        _, corpus, lake = _own_lake(tmp_path)
+        opened = _open(lake, corpus)
+        lines: list[str] = []
+        sink = logger.add(lambda m: lines.append(str(m)), level="WARNING")
+        try:
+            on_lake, on_files = CorpusReader(corpus, source=opened), CorpusReader(corpus)
+            ids = list(on_lake.session_bounds(since_days=None))
+            assert opened.from_files == ()
+            with _env(lake, tmp_path), contextlib.redirect_stdout(io.StringIO()):
+                rebuild(corpus_root=[corpus], fmt="json")  # type: ignore[arg-type]
+            texts = list(on_lake.session_texts(ids, include_uuids=True))
+            assert opened.failed, "the rebuild must break the open attach for this to test anything"
+            assert texts == [on_files.session_text(sid, include_uuids=True) for sid in ids]
+            assert [on_lake.load_steps(sid) for sid in ids] == [
+                on_files.load_steps(sid) for sid in ids
+            ]
+            assert opened.edges_uuids(ids[0]) == on_files.edges_uuids(ids[0])
+            assert on_lake.session_bounds(since_days=None) == on_files.session_bounds(
+                since_days=None
+            )
+            assert set(opened.from_files) == set(ids)
+        finally:
+            logger.remove(sink)
+            opened.close()
+        assert len([line for line in lines if "a lake read failed" in line]) == 1

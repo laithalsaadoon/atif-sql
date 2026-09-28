@@ -9,6 +9,7 @@ proves it reads what the files hold); these pin the half that lives here.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -141,15 +142,24 @@ class _CountingSource(TrajectoryFileSource):
         self.steps_batch_size = steps_batch
         self.turn_calls: list[list[str]] = []
         self.step_calls: list[list[str]] = []
+        self.unbatchable: set[str] = set()
+        #: Every session id loaded, in call order, from either method.
+        self.loaded: list[str] = []
+
+    @override
+    def batchable(self, session_id: str) -> bool:
+        return session_id not in self.unbatchable
 
     @override
     def load_turns(self, session_ids: Sequence[str]) -> dict[str, list[StepEvent]]:
         self.turn_calls.append(list(session_ids))
+        self.loaded.extend(session_ids)
         return TrajectoryFileSource.load_steps(self, session_ids)
 
     @override
     def load_steps(self, session_ids: Sequence[str]) -> dict[str, list[StepEvent]]:
         self.step_calls.append(list(session_ids))
+        self.loaded.extend(session_ids)
         return super().load_steps(session_ids)
 
 
@@ -195,3 +205,48 @@ def test_session_texts_loads_one_source_batch_at_a_time(
     assert source.step_calls == [five_sessions[0:2], five_sessions[2:4], five_sessions[4:5]]
     plain = CorpusReader(corpus_root)
     assert texts == [plain.session_text(sid, include_uuids=True) for sid in five_sessions]
+
+
+def test_read_ahead_leaves_out_what_the_source_would_read_alone(
+    corpus_root: Path, five_sessions: list[str]
+) -> None:
+    """A session the lake source reads from its files costs a full parse; only a gate's ask pays it."""
+    source = _CountingSource(corpus_root, turns_batch=3, steps_batch=1)
+    source.unbatchable = {five_sessions[1]}
+    reader = CorpusReader(corpus_root, source=source)
+    reader.session_bounds()
+    for sid in five_sessions:
+        reader.load_steps(sid)
+    s = five_sessions
+    assert source.turn_calls == [[s[0], s[2], s[3]], [s[1], s[4]]]
+
+
+def _rewrite(corpus_root: Path, session_id: str, turns: list[tuple[str, str]]) -> None:
+    write_session(corpus_root, session_id, turns, day=25)
+    trajectory = corpus_root / "sessions" / session_id / "trajectory.json"
+    later = trajectory.stat().st_mtime_ns + 10_000_000_000
+    os.utime(trajectory, ns=(later, later))
+
+
+@pytest.mark.parametrize("batching", [False, True], ids=["files", "batching"])
+def test_a_session_rewritten_between_stages_is_read_again(
+    corpus_root: Path, five_sessions: list[str], *, batching: bool
+) -> None:
+    """Stages share one reader; a later stage must gate on what it checkpoints."""
+    source = _CountingSource(corpus_root, turns_batch=64 if batching else 1, steps_batch=1)
+    source.turns_are_complete = not batching
+    reader = CorpusReader(corpus_root, source=source)
+    changed, unchanged = five_sessions[0], five_sessions[1]
+    reader.session_bounds()
+    before = reader.load_steps(changed)
+    reader.load_steps(unchanged)
+    reader.session_text(changed)
+    _rewrite(corpus_root, changed, [("user", "hello"), ("agent", "hi"), ("user", "one more")])
+    reader.session_bounds()
+    mark = len(source.loaded)
+    after = reader.load_steps(changed)
+    assert len(after) == len(before) + 1
+    assert "one more" in reader.session_text(changed)
+    reader.load_steps(unchanged)
+    assert changed in source.loaded[mark:]
+    assert unchanged not in source.loaded[mark:], "an unchanged session stays memoized"
