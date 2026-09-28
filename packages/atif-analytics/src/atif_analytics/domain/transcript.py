@@ -155,7 +155,9 @@ def format_step_ts(ts: datetime | None) -> str:
     UTC, milliseconds unless the value carries sub-millisecond precision (then
     microseconds, so nothing is dropped), and a ``Z``. An aware value is
     converted to UTC first; a naive one is taken as UTC, which is how the lake
-    stores it. ``None`` spells as the empty string.
+    stores it. ``None`` spells as the empty string. The two sources agree only
+    on ``Z`` stamps, which is what both converters write: the lake's timestamp
+    cast drops any other offset, while the file path converts it.
     """
     if ts is None:
         return ""

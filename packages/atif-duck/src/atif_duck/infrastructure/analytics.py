@@ -128,8 +128,10 @@ def register_analytics(
     With ``more_roots`` (a query over every corpus of the lake) each view
     reads the parquets under every root's ``analytics/``. The rows carry no
     corpus column (the catalog's shapes do not change with the scope); join
-    ``sessions`` on ``session_id`` for it. Session ids are unique across
-    corpora, since each is its own transcript's id.
+    ``sessions`` on ``session_id`` for it. That join is exact while each
+    session id lives in one corpus, which holds for corpora converted from
+    different transcripts. A copied corpus repeats its ids, and there each
+    analytics row matches the session in both corpora.
     """
     roots = (corpus_root, *more_roots)
     registered: set[str] = set()

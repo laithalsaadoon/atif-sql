@@ -12,6 +12,11 @@ it is not sandboxed the way ``query``'s is. It attaches the published reader
 catalog ``READ_ONLY`` through :func:`~atif_duck.infrastructure.lake.attach_lake_for_query`,
 so it never waits on the writer, sees the last committed state, and refuses
 a lake whose schema is stale or that holds another corpus under this name.
+
+A read that fails after the attach raises :class:`LakeReadError`. The one
+way that happens in practice: a ``lake rebuild`` swaps a new lake into place
+while a long ``analyze`` still holds the old attach, and the old data files
+it names are gone.
 """
 
 from __future__ import annotations
@@ -53,6 +58,10 @@ DEFAULT_READER_MEMORY_BYTES: int = DEFAULT_WRITER_MEMORY_BYTES
 
 #: DuckDB threads for the reader's connection.
 _READER_THREADS: int = 4
+
+
+class LakeReadError(RuntimeError):
+    """A read on an open :class:`LakeSessionReader` failed (the lake moved under it)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,14 +132,22 @@ class LakeSessionReader:
         self._con.close()
         shutil.rmtree(self._spill, ignore_errors=True)
 
+    def _fetch(self, statement: str, params: list[Any]) -> list[tuple[Any, ...]]:
+        import duckdb
+
+        try:
+            return self._con.execute(statement, params).fetchall()
+        except duckdb.Error as exc:
+            raise LakeReadError(str(exc)) from exc
+
     def _batch(self, statement: str, session_ids: Sequence[str]) -> list[tuple[Any, ...]]:
         if not session_ids:
             return []
-        return self._con.execute(statement, [self._corpus, list(session_ids)]).fetchall()
+        return self._fetch(statement, [self._corpus, list(session_ids)])
 
     def freshness(self) -> dict[str, SessionFreshness]:
         """``{session_id: SessionFreshness}`` for every session the lake holds for the corpus."""
-        rows = self._con.execute(SESSION_FRESHNESS_SQL, [self._corpus]).fetchall()
+        rows = self._fetch(SESSION_FRESHNESS_SQL, [self._corpus])
         return {
             str(sid): SessionFreshness(
                 materialized_at=None if materialized is None else str(materialized),
@@ -141,7 +158,7 @@ class LakeSessionReader:
 
     def last_edge_ts(self) -> dict[str, datetime | None]:
         """``{session_id: newest record ts}`` (aware, UTC) over the corpus's edges."""
-        rows = self._con.execute(LAST_EDGE_TS_SQL, [self._corpus]).fetchall()
+        rows = self._fetch(LAST_EDGE_TS_SQL, [self._corpus])
         return {str(sid): _utc(ts) for sid, ts in rows}
 
     def turns(self, session_ids: Sequence[str]) -> list[tuple[Any, ...]]:
@@ -165,12 +182,13 @@ class LakeSessionReader:
 
     def edge_uuids(self, session_id: str) -> set[str]:
         """The session's non-empty raw-record uuids."""
-        rows = self._con.execute(EDGE_UUIDS_SQL, [self._corpus, session_id]).fetchall()
+        rows = self._fetch(EDGE_UUIDS_SQL, [self._corpus, session_id])
         return {str(uuid) for (uuid,) in rows}
 
 
 __all__ = [
     "DEFAULT_READER_MEMORY_BYTES",
+    "LakeReadError",
     "LakeSessionReader",
     "SessionFreshness",
 ]

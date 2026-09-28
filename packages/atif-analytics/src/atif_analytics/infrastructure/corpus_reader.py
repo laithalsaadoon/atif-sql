@@ -247,6 +247,11 @@ class TrajectoryFileSource:
             for d in complete_session_dirs(self._sessions_dir)
         }
 
+    def batchable(self, session_id: str) -> bool:
+        """Never: a parse costs per session, so nothing is read ahead."""
+        del session_id
+        return False
+
     def load_steps(self, session_ids: Sequence[str]) -> dict[str, list[StepEvent]]:
         """Parse each session's trajectory."""
         return {sid: read_trajectory_steps(self._sessions_dir / sid) for sid in session_ids}
@@ -272,11 +277,20 @@ class CorpusReader:
     would hold the whole admitted batch resident for the run. A stage that
     revisits a session evicted from the window loads it again.
 
+    Every :meth:`session_bounds` call drops the memoized sessions whose
+    bounds moved since the last one. The stages share one reader, and
+    materialize can rewrite a session between two of them, so without this a
+    later stage would gate on the old steps and then checkpoint the session
+    at its new bounds, never looking at the new ones.
+
     Read-ahead: a source whose one call costs about the same for many
     sessions as for one (the lake) sets a batch size, and a turns miss then
     loads that many sessions from the miss onward in the newest-first order of
     the last :meth:`session_bounds`, which is the order every gate walks. The
     file source's batch size is 1, so it loads exactly what is asked for.
+    Only sessions the source calls :meth:`~atif_analytics.domain.ports.SessionSource.batchable`
+    ride along, so a session the lake source would read from its files is
+    parsed only when a gate asks for it.
     """
 
     def __init__(
@@ -298,6 +312,7 @@ class CorpusReader:
         self._turns_cache_size = 2 * max(1, self._source.turns_batch_size)
         self._order: dict[str, int] = {}
         self._ordered: list[str] = []
+        self._bounds: SessionBounds = {}
 
     @property
     def source_name(self) -> str:
@@ -322,9 +337,9 @@ class CorpusReader:
         EVERY session in the window, including the ones the checkpoint is
         about to skip. The order is also the read-ahead order.
         """
-        rows = [
-            (sid, last_ts, mtime) for sid, (last_ts, mtime) in self._source.session_bounds().items()
-        ]
+        bounds = self._source.session_bounds()
+        self._forget_moved(bounds)
+        rows = [(sid, last_ts, mtime) for sid, (last_ts, mtime) in bounds.items()]
         rows.sort(key=lambda r: r[0])
         if since_days is not None:
             cutoff = datetime.now(UTC).timestamp() - since_days * 86_400
@@ -336,6 +351,13 @@ class CorpusReader:
         self._ordered = [sid for sid, _, _ in rows]
         self._order = {sid: i for i, sid in enumerate(self._ordered)}
         return {sid: (last_ts, mtime) for sid, last_ts, mtime in rows}
+
+    def _forget_moved(self, bounds: SessionBounds) -> None:
+        """Drop every memoized session whose bounds differ from the last enumeration's."""
+        for cache in (self._turns_cache, self._steps_cache):
+            for sid in [sid for sid in cache if bounds.get(sid) != self._bounds.get(sid)]:
+                del cache[sid]
+        self._bounds = bounds
 
     def session_ids(self, *, since_days: int | None = None, limit: int | None = None) -> list[str]:
         """Newest-first session ids matching the window."""
@@ -385,7 +407,11 @@ class CorpusReader:
         for sid in self._ordered[start + 1 :]:
             if len(batch) >= size:
                 break
-            if sid not in self._turns_cache and sid not in self._steps_cache:
+            if (
+                sid not in self._turns_cache
+                and sid not in self._steps_cache
+                and self._source.batchable(sid)
+            ):
                 batch.append(sid)
         return batch
 

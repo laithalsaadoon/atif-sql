@@ -1678,6 +1678,7 @@ def analyze(
             source.close()
     if source is not None:
         summary["sessions_read_from_files"] = len(source.from_files)
+        summary["lake_read_failed"] = source.failed
     emit_json(summary, fmt)
 
 

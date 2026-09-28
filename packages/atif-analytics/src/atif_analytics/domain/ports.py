@@ -60,6 +60,16 @@ class SessionSource(Protocol):
         """
         ...
 
+    def batchable(self, session_id: str) -> bool:
+        """Whether read-ahead may pull this session into another session's batch.
+
+        False for a session the source would read on its own anyway (the
+        lake source's file fallback parses one trajectory per session, so
+        reading one ahead costs a full parse the checkpoint may never need).
+        The requested session is always loaded; this only gates the extras.
+        """
+        ...
+
     def load_turns(self, session_ids: Sequence[str]) -> Mapping[str, list[StepEvent]]:
         """Each session's steps, in order, with the tool payloads optional.
 

@@ -252,7 +252,9 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   corpus's store (one store for all when `ATIF_SQL_LANCE_URI` pins it). The
   analytics views read each corpus's `analytics/` parquets on either path,
   and with `--all-corpora` they read every lake corpus's (granted file by
-  file like the rest).
+  file like the rest). Those rows carry no corpus column, so a session id
+  held by two corpora (a copied corpus) matches both corpora's analytics
+  rows there.
 - Embed discovery: `atif-sql embed` reads the steps to embed from the lake's
   `steps` table (primary uuid = `source_uuids[0]`, text = `message`, the
   store's existing key and text), in the per-session reader's order, so the
@@ -274,8 +276,11 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   loaded, left behind by a failed or skipped lake write) is read from its
   files, so a lagging lake never hands a pipeline an older transcript. Session
   enumeration and the `trajectory.json` mtime bound come from the session
-  directories either way, so the checkpoint sees the same bounds. The
-  outputs stay parquet under `analytics/`, not lake tables: they're a few
+  directories either way, so the checkpoint sees the same bounds. A lake
+  read that fails mid-run (a rebuild swapped the lake out, or compact removed
+  a file the open attach still names) warns once, and the rest of the run
+  reads files. The reader drops a memoized session whenever its bounds move
+  between stages. The outputs stay parquet under `analytics/`, not lake tables: they're a few
   small shard directories per corpus that one process appends to, so the lake
   would add a second writer to lock against materialize and a pending ledger
   for a failed sync, and buy no fewer files.
