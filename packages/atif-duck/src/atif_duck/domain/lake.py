@@ -31,7 +31,7 @@ Schema identity: the lake records :data:`LAKE_SCHEMA_VERSION`, a digest of
 the rendered table definitions (:func:`lake_schema_digest`), and the columnar
 schema version it was loaded under. Any of the three differing from the
 running code makes the lake STALE: the writer rebuilds it and a reader falls
-back to the per-session path. ``tests/test_lake_schema.py`` pins the digest
+back to the per-session path. ``tests/test_lake.py`` pins the digest
 beside the version, so a change to any shape the lake derives from fails until
 someone decides whether it also needs a version bump.
 

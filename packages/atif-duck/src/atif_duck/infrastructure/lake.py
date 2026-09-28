@@ -131,13 +131,19 @@ DEFAULT_LOCK_TIMEOUT_SECONDS: float = 600.0
 CLEANUP_GRACE_HOURS: int = 1
 
 #: The writer's DuckDB memory cap (lowered further by the caller's host- and
-#: cgroup-derived cap). Measured on the copied corpora: a full rebuild peaks
-#: at 3.3 GB RSS under a 2 GiB cap against 6.3 GB under 4 GiB, and takes the
-#: same time; spilling covers the rest.
+#: cgroup-derived cap). Measured on the copied corpora: loading every corpus
+#: peaks at 3.5 GB RSS under a 2 GiB cap against 6.3 GB under 4 GiB, in about
+#: the same time; spilling covers the rest.
 DEFAULT_WRITER_MEMORY_BYTES: int = 2 * 1024**3
 
 #: DuckDB threads for the writer's connection.
 _WRITER_THREADS: int = 4
+
+#: DuckDB threads while DuckLake merges or rewrites files. Each thread holds
+#: its own share of the files being merged, and ``tool_results`` rows carry
+#: whole tool outputs: under the 2 GiB cap, merging the copied corpora ran out
+#: of memory at two threads and four, and finished at one (1.9 GB RSS).
+_MAINTENANCE_THREADS: int = 1
 
 #: Who the lake's snapshots name as their author.
 _COMMIT_AUTHOR: str = "atif-sql"
@@ -324,6 +330,16 @@ def _writer_connection(
     finally:
         con.close()
         shutil.rmtree(spill, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def _file_maintenance(con: duckdb.DuckDBPyConnection) -> Generator[None]:
+    """Run DuckLake's file merges and rewrites at :data:`_MAINTENANCE_THREADS`."""
+    con.execute(f"SET threads={int(_MAINTENANCE_THREADS)}")
+    try:
+        yield
+    finally:
+        con.execute(f"SET threads={int(_WRITER_THREADS)}")
 
 
 def _attach(
@@ -597,7 +613,8 @@ def _rebuild_locked(
                 count = _load_corpus(con, corpus, batch_size=batch_size)
                 loaded.append((corpus.name, corpus.agent, count))
             # A load in batches leaves several small files per partition.
-            con.execute(f"CALL ducklake_merge_adjacent_files({sql_literal(LAKE_ALIAS)});")
+            with _file_maintenance(con):
+                con.execute(f"CALL ducklake_merge_adjacent_files({sql_literal(LAKE_ALIAS)});")
             con.execute(
                 f"CALL ducklake_expire_snapshots({sql_literal(LAKE_ALIAS)}, older_than => now());"
             )
@@ -1088,9 +1105,10 @@ def compact_lake(
         with _writer_connection(memory_limit_bytes) as con:
             _attach(con, layout.catalog_path, layout.data_dir, read_only=False)
             files_before, snapshots_before = _count_live_files(con), _snapshot_count(con)
-            con.execute(f"CALL ducklake_merge_adjacent_files({alias});")
-            con.execute(f"CALL ducklake_rewrite_data_files({alias});")
-            con.execute(f"CALL ducklake_merge_adjacent_files({alias});")
+            with _file_maintenance(con):
+                con.execute(f"CALL ducklake_merge_adjacent_files({alias});")
+                con.execute(f"CALL ducklake_rewrite_data_files({alias});")
+                con.execute(f"CALL ducklake_merge_adjacent_files({alias});")
             con.execute(
                 f"CALL ducklake_expire_snapshots({alias}, older_than => now() - INTERVAL {int(expire_older_than_days)} DAY);"
             )
