@@ -308,7 +308,7 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.42.91" },
     { name = "duckdb", specifier = ">=1.5.2,<2" },
-    { name = "lancedb", specifier = ">=0.30,<0.38" },
+    { name = "lancedb", specifier = ">=0.30,<0.39" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "polars", specifier = ">=1.40.0" },
     { name = "pyarrow", specifier = ">=23.0.1" },
@@ -382,7 +382,7 @@ requires-dist = [
     { name = "cyclopts", specifier = ">=4.10.2" },
     { name = "duckdb", specifier = ">=1.5.2,<2" },
     { name = "imagesize", specifier = ">=2.0" },
-    { name = "lancedb", specifier = ">=0.30,<0.38" },
+    { name = "lancedb", specifier = ">=0.30,<0.39" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "polars", specifier = ">=1.40.0" },
     { name = "pyarrow", specifier = ">=23.0.1" },
@@ -661,7 +661,7 @@ wheels = [
 
 [[package]]
 name = "commitizen"
-version = "4.18.0"
+version = "4.18.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "argcomplete" },
@@ -677,9 +677,9 @@ dependencies = [
     { name = "termcolor" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/1e/4918352e4b89ffd7b50cea166c834a28d046af8c7326351f873b2cc8d7b5/commitizen-4.18.0.tar.gz", hash = "sha256:9fab436e99420c97ee020bfeea17fe29903fb320a9cdd6e30c2c63bfbac4cb3b", size = 68288, upload-time = "2026-08-19T14:47:01.136Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/05/5740bfcd2e89e8be97757294335b5c480bcf60b134ef7bc84428c3a15884/commitizen-4.18.1.tar.gz", hash = "sha256:27379caedd00553344e44cc8cef039598b6d3e65f9b598e31d355489c481563d", size = 68482, upload-time = "2026-09-13T21:37:43.008Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/7d/f50f8c478977d4aed0902e1ca558a8b457fc985937ee751304abd6f45a1f/commitizen-4.18.0-py3-none-any.whl", hash = "sha256:3e11153209a9d9e05fd6b21761099ad22e131a5410f5b89b847d83baa1909661", size = 90324, upload-time = "2026-08-19T14:46:59.58Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/3e/c15f31a04a3432bce3312cde554ba73e8c5232a3615f08f39264a447c427/commitizen-4.18.1-py3-none-any.whl", hash = "sha256:16ed052ff775bf42cad85bc09075db110ca7ba84f49233fc642629a0da65862b", size = 90476, upload-time = "2026-09-13T21:37:41.152Z" },
 ]
 
 [[package]]
@@ -1513,7 +1513,7 @@ wheels = [
 
 [[package]]
 name = "lancedb"
-version = "0.37.1"
+version = "0.38.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecation" },
@@ -1525,23 +1525,23 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/23/2f/4ddcab82bb618c6c8de00725f3cf59585dcb9040964dde13cb0cae6ed3cd/lancedb-0.37.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c15c46f23cf6959c79fb93cdba2c76536cf784d3134386662da03dc6ccac3c26", size = 58474767, upload-time = "2026-08-10T10:41:45.675Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/5e/dac0fd9478a21685444f23e6ec937babf4ff48b1616b68e8137778d6ecb9/lancedb-0.37.1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:35d872d920cbfdc3771fbcd33f2c63bff6ff7203d6d2ba8fe4330e98eb859d12", size = 61666580, upload-time = "2026-08-10T10:41:49.535Z" },
-    { url = "https://files.pythonhosted.org/packages/1f/fa/ee1cdb1e904872d75fa0ff44ad35cd23494e810299c33e68de0687de7a71/lancedb-0.37.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:86597f4dbc51a33a07341550dc77d21a1ddd1f7539266eda5bb64c4f3bd11cca", size = 64802395, upload-time = "2026-08-10T10:41:52.969Z" },
-    { url = "https://files.pythonhosted.org/packages/42/55/65c69307373b7f05dea38465b7d3836c86390f0ebc79b5c56d2c0919f229/lancedb-0.37.1-cp310-abi3-win_amd64.whl", hash = "sha256:488eca15361dfc34439500c9e2607c4fb2b8bf190fa1003bd54b1d6eb40e0316", size = 70994296, upload-time = "2026-08-10T10:41:56.609Z" },
+    { url = "https://files.pythonhosted.org/packages/85/e5/556c3d9871231aa94e309293bac8bc24fe43f5965e0e294c82fc1cdc3d3b/lancedb-0.38.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:1559fa168fad17f5f67d6e072f7daa3cba3c7f66b82ef6cf4cf75a8e0a79c888", size = 60483495, upload-time = "2026-08-31T08:46:17.284Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/cb/fd9ac855ad4c4a7503e8c98133916dde30edb5a74ea04ea3da246ed0192a/lancedb-0.38.0-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b80362e1335e8fb71ece2d5c0665dd603af1f6715696fcc652a7053039b6a085", size = 64373373, upload-time = "2026-08-31T08:46:20.916Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/cf/3df2396facdba00b787abf0cbcfb05ad3c0d27b86e2a5eca1deb675fe54f/lancedb-0.38.0-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:2b20ce0a865f386e5460736c058a4baae6c618072436a55119b5b5052a655749", size = 67746344, upload-time = "2026-09-01T08:59:02.977Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/4d/a1e7febf279c15afdf8102d9458b5457be02b2173a17d2a472f83f9034a6/lancedb-0.38.0-cp310-abi3-win_amd64.whl", hash = "sha256:6e99b98c10ebfb68f36fff5d159246ce4ef5ee686d49c9298a3fc88f754a470d", size = 104137765, upload-time = "2026-09-01T08:59:17.369Z" },
 ]
 
 [[package]]
 name = "lefthook"
-version = "2.1.12"
+version = "2.1.14"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/1a/f8aac25173b7a648bc15bc78416cb055b2af926d04fc0a40df38f96d7b17/lefthook-2.1.12-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:32d55313d69d5014107ad8a6a798777021c33e73c9a756259234ba2cd868e650", size = 5427199, upload-time = "2026-08-28T10:22:27.015Z" },
-    { url = "https://files.pythonhosted.org/packages/0b/41/c80e7f7b4555ff3e2f0ece7d400f287200a11c38e0217cb2efb4f6973f88/lefthook-2.1.12-py3-none-macosx_11_0_arm64.whl", hash = "sha256:65cf6d5f0186c49e7fe8c9b63ffb9118849bc84c19592b1850160023c1087c62", size = 4950026, upload-time = "2026-08-28T10:22:28.603Z" },
-    { url = "https://files.pythonhosted.org/packages/6c/cd/9def477d21330a50f1abcda24b4b36c00842b6ed96804336593bb16ec253/lefthook-2.1.12-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:dd944a7d8455fb8ffd071e985185d0714231c4edf5b6ddbc13645da9a0ebad86", size = 4780693, upload-time = "2026-08-28T10:22:30.104Z" },
-    { url = "https://files.pythonhosted.org/packages/24/a2/dda25b28733814351e5c880cc8fece44cba414db259da8963a05dfff1b0d/lefthook-2.1.12-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:6e917914affde9c6de3295fb355c2a8ff9fb6e807ff40597f2ba2b2ca6ba5432", size = 5360902, upload-time = "2026-08-28T10:22:31.627Z" },
-    { url = "https://files.pythonhosted.org/packages/e6/78/f0cd9f42f892986d1576ea5e0af59d5be8e0512e1bb1e185ea6ab86c07d0/lefthook-2.1.12-py3-none-win_amd64.whl", hash = "sha256:c8f155eadbe4922e6ea5e12245800dc0e2d3efc945945299961711d4398fd303", size = 5508588, upload-time = "2026-08-28T10:22:32.95Z" },
-    { url = "https://files.pythonhosted.org/packages/22/49/a0a6c09934947748cfc459f7370cf03fa5122ea87d8de0a9a1160210a6ca/lefthook-2.1.12-py3-none-win_arm64.whl", hash = "sha256:7ea0032c826c4e9ab6a9c1a82f675508078b0b469d269ed7b705d5aca8351a2f", size = 4860903, upload-time = "2026-08-28T10:22:34.155Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/54/9b67d7b19bc4e61345065d53ce103d3ab81dc1dc5a5e35695af076c1506c/lefthook-2.1.14-py3-none-macosx_10_15_x86_64.whl", hash = "sha256:e60ec36d5ec6094bea11c063aa09f11972509d6f6647d82ad1ee12d61f0859a2", size = 5427421, upload-time = "2026-09-14T10:26:00.346Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/a0/72c430c1e261f11c67f57befb52432f8635ce8268dc0f7f1013125c803f0/lefthook-2.1.14-py3-none-macosx_11_0_arm64.whl", hash = "sha256:dd628f4b7436d825758ed98fc5e52c5ed3c782e1bbf4c623fc7d3b45ec3216dc", size = 4950978, upload-time = "2026-09-14T10:26:02.22Z" },
+    { url = "https://files.pythonhosted.org/packages/92/df/b44d9c547d45337e6bff854143c70579b34efea9076e20cd5b7c2dbe910d/lefthook-2.1.14-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:fd2aecae214cdcbb6336485e01fe114a002d78a80dbb49907b9f9f039d57d840", size = 4782004, upload-time = "2026-09-14T10:26:03.733Z" },
+    { url = "https://files.pythonhosted.org/packages/9a/04/216ca938c50e5b5d199b74157217b3963d1de166bf82ee32fab510d0a89d/lefthook-2.1.14-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:ee4ea57cbf07fdaa6faca8e18ba1b09e3246b1d7d8fc1a9c411299bbe7c24bae", size = 5361787, upload-time = "2026-09-14T10:26:05.164Z" },
+    { url = "https://files.pythonhosted.org/packages/91/63/1e1c38fa8e590f23d22df778425a3783d9f1df1137cc9bf7125240cbf6a4/lefthook-2.1.14-py3-none-win_amd64.whl", hash = "sha256:d28d43e98c42e723e92e2045c9b40e7908f128f63eec1ad3ebd37a0e9dc5cc74", size = 5509521, upload-time = "2026-09-14T10:26:06.699Z" },
+    { url = "https://files.pythonhosted.org/packages/de/0c/8fc504b2c8222faf8877ffb597ab007201e296e73d99602b21c2a57934ac/lefthook-2.1.14-py3-none-win_arm64.whl", hash = "sha256:2be15ca9164f5921e5170d522624a3dc6033ae38b4a8a90ba05598d22803876c", size = 4861855, upload-time = "2026-09-14T10:26:07.947Z" },
 ]
 
 [[package]]
