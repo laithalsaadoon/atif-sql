@@ -126,7 +126,7 @@ What the drawn edge deliberately compresses:
   imported more often, or in more sites, by another member, so the attribution rule sources all of them
   elsewhere. Its own import sites are real: `packages/atif-corpus/src/atif_corpus/infrastructure/settings.py:19`
   and `packages/atif-corpus/src/atif_corpus/domain/sessions.py:29`.
-- **harbor is a dev dependency now.** Production code builds on harbor 0.22.0's ATIF data classes
+- **harbor is a dev dependency now.** Production code builds on harbor 0.23.0's ATIF data classes
   and validator, vendored in `packages/atif-converter/src/atif_converter/domain/atif/`, and imports nothing from harbor itself.
   The conversion itself is ours, ported from 0.22.0
   (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`,

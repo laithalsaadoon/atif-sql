@@ -21,7 +21,7 @@ is `uv sync --all-packages` and depends on `hooks:install`, so it also installs
 the lefthook git hooks in the same step.
 
 Python is 3.13 rather than 3.14 on purpose: `mise.toml`'s header records that
-`harbor==0.22.0` (a dev dependency, for the test oracles) floors at
+harbor (a dev dependency, for the test oracles) floors at
 `Requires-Python >=3.12` and 3.13 is the safe pick while harbor's dependency chain
 settles on 3.14.
 
@@ -144,13 +144,14 @@ member's `src/` imports either one.
 
 **The ATIF models are vendored.** The data classes from `harbor.models.trajectories`
 (RFC 0001) and `harbor.utils.trajectory_validator` live in
-`atif_converter.domain.atif`, copied from harbor 0.22.0 under Apache-2.0. Each file
+`atif_converter.domain.atif`, copied from harbor 0.23.0 under Apache-2.0. Each file
 carries an attribution header and is otherwise upstream's file byte for byte, with
 the import path rewritten; ruff and ty skip the directory so nobody reformats it
 into ours. `UPSTREAM_VERSION` in its `__init__` records the release, and `meta.json`
 stamps it as `harbor_version`. The conversion from a Claude Code session or a Codex
 rollout to a `Trajectory` is ours, in `atif_converter.domain.claude_code_conversion`
-and `atif_converter.domain.codex_conversion`, ported from harbor 0.22.0.
+and `atif_converter.domain.codex_conversion`, ported from harbor and held to parity
+with harbor 0.23.0.
 
 harbor itself is used in two places, both tests:
 
@@ -186,7 +187,7 @@ models our transcripts name, plus local overrides for models litellm doesn't pri
 yet. Refresh it by hand, never by editing the JSON:
 
 ```bash
-uv run scripts/update_prices.py --ref v1.100.1   # a litellm tag, branch, or commit
+uv run scripts/update_prices.py --ref v1.102.0   # a litellm tag, branch, or commit
 ```
 
 The script drops an override once upstream prices the same key and says so; delete

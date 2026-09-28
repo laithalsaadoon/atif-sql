@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Ported from harbor 0.22.0, src/harbor/agents/installed/claude_code.py
+# Ported from harbor 0.23.0, src/harbor/agents/installed/claude_code.py
 # (Apache-2.0, Copyright the Harbor authors), onto the ATIF models vendored in
 # atif_converter.domain.atif, so atif-converter doesn't depend on harbor.
 
@@ -36,7 +36,8 @@ raised ``OSError`` and the method returned ``None`` on every call, which sent
 every trajectory down the ``litellm`` estimate path. That fallback ordering is
 kept verbatim: ``total_cost_usd`` is the litellm estimate or ``None``, and
 ``final_metrics.extra["cost_source"] == "litellm_estimate"`` whenever the
-estimate priced at least one step. The estimate itself now comes from
+estimate priced the session. Since harbor 0.23.0 every priced step also carries
+its own ``metrics.cost_usd`` and ``metrics.extra["cost_source"]``. The estimate itself now comes from
 :mod:`atif_converter.domain.pricing`, which repeats ``litellm.cost_per_token``'s
 arithmetic over a vendored copy of litellm's price data without litellm being
 installed; the floats are identical, so the label stays. Also not ported: ``_session_dirs`` (log-dir
@@ -73,7 +74,7 @@ from atif_converter.domain.atif import (
     Trajectory,
 )
 
-#: The schema version harbor 0.22.0 stamps on a Claude Code trajectory.
+#: The schema version harbor 0.23.0 stamps on a Claude Code trajectory.
 SCHEMA_VERSION = "ATIF-v1.7"
 
 
@@ -422,16 +423,22 @@ def _format_tool_result(
     return (result_text or None), metadata
 
 
-def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
-    """Estimate cost from transcript usage when Claude omits its result event.
+def _estimate_step_costs(steps: list[Step]) -> float | None:
+    """Price each step, writing ``metrics.cost_usd`` on it, and return the sum.
 
-    harbor priced every step through ``litellm.cost_per_token``; the call goes
-    through :mod:`atif_converter.domain.pricing`, which returns the same floats
-    from a vendored copy of litellm's price data. Any pricing failure yields
-    "no estimate", as a litellm error did in harbor.
+    harbor 0.23.0's ``_estimate_step_costs``: every step with token usage that
+    can be priced gets ``metrics.cost_usd`` and ``metrics.extra["cost_source"]``,
+    and the sum is the session estimate used when Claude omits its result event.
+    The sum is ``None`` when any step with usage could not be priced, since a
+    partial sum would understate the total. harbor priced each step through
+    ``litellm.cost_per_token``; the call goes through
+    :mod:`atif_converter.domain.pricing`, which returns the same floats from a
+    vendored copy of litellm's price data. A pricing failure leaves that step
+    unpriced, as a litellm error did in harbor.
     """
     total_cost = 0.0
     priced_any_step = False
+    priced_all_steps = True
     for step in steps:
         metrics = step.metrics
         if metrics is None:
@@ -443,7 +450,8 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
             continue
         if not step.model_name:
             logger.debug("Cannot estimate Claude cost without a step model")
-            return None
+            priced_all_steps = False
+            continue
 
         extra = metrics.extra or {}
         cache_creation_tokens = extra.get("cache_creation_input_tokens")
@@ -465,25 +473,32 @@ def _estimate_total_cost_from_steps(steps: list[Step]) -> float | None:
                 cache_read_input_tokens=cache_read_tokens,
                 service_tier=service_tier,
             )
-        except Exception as exc:  # noqa: BLE001 — harbor swallowed every pricing error into "no estimate"
+        except Exception as exc:  # noqa: BLE001 — harbor swallowed every pricing error into "unpriced"
             logger.debug(
                 "Cannot estimate Claude cost for model '{}': {}",
                 step.model_name,
                 exc,
             )
-            return None
+            priced_all_steps = False
+            continue
         if priced is None:
-            # DELIBERATE DIVERGENCE from harbor, which sums litellm's (0.0, 0.0)
-            # for a model with no rates and reports a $0 session. One unpriced
-            # step makes the whole estimate unknown, as a litellm error does.
-            logger.debug("No price for Claude model '{}'; no estimate", step.model_name)
-            return None
+            # DELIBERATE DIVERGENCE from harbor, which writes litellm's (0.0, 0.0)
+            # for a model with no rates as a $0 step and sums it into a $0
+            # session. The step stays unpriced (no ``cost_usd``, no label) and
+            # the session estimate is unknown, as a litellm error makes it.
+            logger.debug("No price for Claude model '{}'; step left unpriced", step.model_name)
+            priced_all_steps = False
+            continue
 
         prompt_cost, completion_cost = priced
-        total_cost += prompt_cost + completion_cost
+        metrics.cost_usd = prompt_cost + completion_cost
+        # harbor labels every priced step "litellm_estimate"; a step priced from a
+        # local override says so, as the session label does.
+        metrics.extra = {**extra, "cost_source": pricing.cost_source_label([step.model_name])}
+        total_cost += metrics.cost_usd
         priced_any_step = True
 
-    return total_cost if priced_any_step else None
+    return total_cost if priced_any_step and priced_all_steps else None
 
 
 def _first_event_model(events: list[dict[str, Any]], *, include_sidechain: bool) -> str | None:
@@ -937,7 +952,7 @@ def _build_final_metrics(steps: list[Step]) -> FinalMetrics:
     # harbor consults ``_parse_total_cost_from_stream_json`` first; in our
     # usage it always returned ``None`` (see the module docstring), so the
     # estimate is the only cost source.
-    total_cost_usd = _estimate_total_cost_from_steps(steps)
+    total_cost_usd = _estimate_step_costs(steps)
     if total_cost_usd is not None:
         final_extra["cost_source"] = pricing.cost_source_label(
             step.model_name for step in steps if step.metrics is not None

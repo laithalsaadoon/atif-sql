@@ -7,7 +7,7 @@ litellm bit for bit where litellm is available (a dev dependency), including
 litellm's ``(0.0, 0.0)`` for a Claude id it doesn't know. These tests run
 everywhere and pin what the converter does with that answer: an unpriced model
 makes the session estimate ``None`` instead of $0, the local overrides price the
-two current models litellm 1.100.1 lacks, frozen values pin the arithmetic, and
+current models litellm lacks, frozen values pin the arithmetic, and
 pricing never imports litellm.
 """
 
@@ -29,8 +29,9 @@ from atif_converter.domain.claude_code_conversion import convert_claude_code_rec
 SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "update_prices.py"
 
 #: (model, (prompt, completion, cache_creation, cache_read), tier, expected), captured
-#: from ``litellm.cost_per_token`` 1.100.1 on 2026-09-27. They hold the arithmetic
-#: still when litellm isn't installed to compare against.
+#: from ``litellm.cost_per_token`` 1.100.1 on 2026-09-27, apart from the two gpt-5.5
+#: priority rows, re-captured from 1.102.0 on 2026-09-28 after upstream raised those
+#: rates. They hold the arithmetic still when litellm isn't installed to compare against.
 FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, float]]] = [
     ("claude-opus-5", (1234, 567, 8901, 23456), "standard", (0.06735925, 0.014175)),
     ("claude-opus-5", (238085, 12582, 214679, 238085), "standard", (1.46078625, 0.31455)),
@@ -130,9 +131,9 @@ FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, floa
         (0.05952125, 0.25164000000000003),
     ),
     ("gpt-5.5", (1234, 567, 8901, 23456), "standard", (0.011727999999999999, 0.01701)),
-    ("gpt-5.5", (1234, 567, 8901, 23456), "priority", (0.023455999999999998, 0.03402)),
+    ("gpt-5.5", (1234, 567, 8901, 23456), "priority", (0.029320000000000002, 0.04252499999999999)),
     ("gpt-5.5", (238085, 12582, 214679, 238085), "standard", (0.1190425, 0.37746)),
-    ("gpt-5.5", (238085, 12582, 214679, 238085), "priority", (0.238085, 0.75492)),
+    ("gpt-5.5", (238085, 12582, 214679, 238085), "priority", (0.29760625, 0.9436499999999999)),
 ]
 
 UNKNOWN_CLAUDE = "claude-newfamily-7"
@@ -181,6 +182,45 @@ def _final(records: list[dict[str, Any]]) -> dict[str, Any]:
     assert trajectory is not None
     dumped = trajectory.model_dump(mode="json", exclude_none=True)
     return dumped["final_metrics"]
+
+
+def _agent_step_metrics(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    trajectory = convert_claude_code_records(records)
+    assert trajectory is not None
+    dumped = trajectory.model_dump(mode="json", exclude_none=True)
+    return [step["metrics"] for step in dumped["steps"] if step["source"] == "agent"]
+
+
+class TestStepCosts:
+    """harbor 0.23.0 prices every step; the policy decides what an unpriced one says."""
+
+    def test_a_priced_step_carries_its_cost_and_label(self) -> None:
+        records = [_user("u1", "01"), _assistant("a1", "02", "claude-opus-5", msg_id="m1")]
+        (metrics,) = _agent_step_metrics(records)
+        prompt_cost, completion_cost = _price("claude-opus-5")
+        assert metrics["cost_usd"] == prompt_cost + completion_cost
+        assert metrics["extra"]["cost_source"] == pricing.COST_SOURCE_LITELLM
+        assert _final(records)["total_cost_usd"] == metrics["cost_usd"]
+
+    def test_an_unpriced_step_carries_neither(self) -> None:
+        metrics = _agent_step_metrics(
+            [
+                _user("u1", "01"),
+                _assistant("a1", "02", "claude-haiku-4-5-20251001", msg_id="m1"),
+                _assistant("a2", "03", UNKNOWN_CLAUDE, msg_id="m2"),
+            ]
+        )
+        priced, unpriced = metrics
+        assert priced["cost_usd"] > 0
+        assert "cost_usd" not in unpriced
+        assert "cost_source" not in (unpriced.get("extra") or {})
+
+    def test_an_override_priced_step_is_labeled(self) -> None:
+        (metrics,) = _agent_step_metrics(
+            [_user("u1", "01"), _assistant("a1", "02", "claude-opus-5-5", msg_id="m1")]
+        )
+        assert metrics["cost_usd"] == pytest.approx(0.004 + 0.02)
+        assert metrics["extra"]["cost_source"] == pricing.COST_SOURCE_WITH_OVERRIDES
 
 
 class TestUnpricedIsNone:
@@ -246,6 +286,9 @@ class TestLocalOverrides:
         assert cached[0] == pytest.approx(4.0 + 0.2 + 5.0)
 
     def test_fable_5_1_is_priced_from_its_published_rates(self) -> None:
+        # Upstream prices it since litellm v1.102.0, so its override retired; the
+        # published rates are unchanged.
+        assert not pricing.is_local_override("claude-fable-5-1")
         prompt_cost, completion_cost = _price("claude-fable-5-1", (1_000_000, 1_000_000, 0, 0))
         assert prompt_cost == pytest.approx(10.0)
         assert completion_cost == pytest.approx(50.0)
@@ -264,7 +307,7 @@ class TestLocalOverrides:
     def test_overrides_carry_every_rate_the_arithmetic_reads(self) -> None:
         table = pricing.load_table()
         assert table is not None
-        assert pricing.override_models() == {"claude-opus-5-5", "claude-fable-5-1"}
+        assert pricing.override_models() == {"claude-opus-5-5"}
         for model in pricing.override_models():
             entry = table.entries[model]
             for key in (
@@ -410,7 +453,8 @@ class TestUpdateScript:
         document = script.build(upstream, ref="test", digest="0" * 64, license_text="MIT License")
         models = document["models"]
         assert models["claude-opus-5-5"] == upstream["claude-opus-5-5"]
-        assert script.OVERRIDE_MARKER in models["claude-fable-5-1"]
+        for key in set(script.OVERRIDES) - {"claude-opus-5-5"}:
+            assert script.OVERRIDE_MARKER in models[key]
         assert "sample_spec" not in models
         assert "claude-opus-5-5" in capsys.readouterr().err
 

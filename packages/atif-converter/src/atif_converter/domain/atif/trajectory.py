@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Vendored from harbor 0.22.0, src/harbor/models/trajectories/trajectory.py
+# Vendored from harbor 0.23.0, src/harbor/models/trajectories/trajectory.py
 # (Apache-2.0, Copyright the Harbor authors). Byte for byte upstream apart
 # from these header lines and the import path, which reads
 # atif_converter.domain.atif where upstream reads harbor.models.trajectories.
@@ -26,8 +26,9 @@ class Trajectory(BaseModel):
         "ATIF-v1.5",
         "ATIF-v1.6",
         "ATIF-v1.7",
+        "ATIF-v1.8",
     ] = Field(
-        default="ATIF-v1.7",
+        default="ATIF-v1.8",
         description="String defining ATIF compatibility",
     )
     session_id: str | None = Field(
@@ -189,20 +190,22 @@ class Trajectory(BaseModel):
         return self
 
     def has_multimodal_content(self) -> bool:
-        """Check if any step contains multimodal content (images).
+        """Check if any step contains multimodal content (images or audio).
 
         Returns:
-            True if any step message or observation contains image content parts.
+            True if any step message or observation contains a media content
+            part. Audio counts since ATIF-v1.8.
         """
+        media_types = {"image", "audio"}
         for step in self.steps:
             if isinstance(step.message, list):
                 for part in step.message:
-                    if part.type == "image":
+                    if part.type in media_types:
                         return True
             if step.observation:
                 for result in step.observation.results:
                     if isinstance(result.content, list):
                         for part in result.content:
-                            if part.type == "image":
+                            if part.type in media_types:
                                 return True
         return False

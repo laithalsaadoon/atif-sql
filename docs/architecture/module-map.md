@@ -219,7 +219,7 @@ forbids the import (`packages/atif-corpus/src/atif_corpus/domain/agents.py:25`).
 `convert_and_audit` returns a conversion result paired with a loss report — the trajectory plus an
 accounting of what upstream dropped
 (`packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`). The conversion is
-ours: `convert_claude_code_records`, a port of harbor 0.22.0's Claude Code converter built on the
+ours: `convert_claude_code_records`, a port of harbor 0.23.0's Claude Code converter built on the
 public ATIF data classes (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`),
 reached through the file-reading seam at
 `packages/atif-converter/src/atif_converter/infrastructure/claude_code_converter.py:73` and validated
@@ -231,7 +231,7 @@ the same shape one module over: `convert_codex_and_audit`
 one rollout in and one trajectory out by construction. harbor's own private converters are the
 parity ORACLE, reached from the tests only (`packages/atif-converter/tests/harbor_oracle.py:94`, `:111`),
 frozen to goldens and diffed against the live corpus. harbor is a dev dependency only: the ATIF
-data classes and validator the converters build on are vendored from harbor 0.22.0 in
+data classes and validator the converters build on are vendored from harbor 0.23.0 in
 `packages/atif-converter/src/atif_converter/domain/atif/` and held to upstream by `packages/atif-converter/tests/test_vendored_atif.py`. The
 known conversion gaps are types rather than prose — `FidelityGap` enumerates them
 (`packages/atif-converter/src/atif_converter/domain/fidelity.py:44`) and a pure enrichment pass repairs

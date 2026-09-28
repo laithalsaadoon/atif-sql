@@ -29,7 +29,7 @@ per invocation, and each is dry-run by default (`README.md:37`).
 
 The directories under `packages/` are internal module boundaries, not separate installs
 (`README.md:43`); they are uv workspace members (`pyproject.toml:100`). `atif-converter` owns the
-conversion itself: its converters ported from Harbor 0.22.0 under Apache-2.0
+conversion itself: its converters ported from Harbor 0.23.0 under Apache-2.0
 (`packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py`,
 `packages/atif-converter/src/atif_converter/domain/codex_conversion.py`), built on Harbor's ATIF
 data classes and validator, vendored in `packages/atif-converter/src/atif_converter/domain/atif/`. harbor itself is a dev dependency:
@@ -80,8 +80,8 @@ process exit codes at the CLI edge (`:38`).
 | Build backend | `uv_build>=0.11.14,<0.12` | `packages/atif-cli/pyproject.toml:48` |
 | CLI framework | `cyclopts>=4.10.2` | `packages/atif-cli/pyproject.toml:37` |
 | Query engine | `duckdb>=1.5.2,<2` | `packages/atif-duck/pyproject.toml:20` |
-| Trajectory models | vendored from harbor 0.22.0 (`pydantic>=2.13.2`) | `packages/atif-converter/src/atif_converter/domain/atif/__init__.py` |
-| Vector store | `lancedb>=0.30,<0.38` | `packages/atif-embed/pyproject.toml:22` |
+| Trajectory models | vendored from harbor 0.23.0 (`pydantic>=2.13.2`) | `packages/atif-converter/src/atif_converter/domain/atif/__init__.py` |
+| Vector store | `lancedb>=0.30,<0.40` | `packages/atif-embed/pyproject.toml:22` |
 | Model access | `boto3>=1.42.91` for Bedrock | `packages/atif-models/pyproject.toml:24` |
 | Dataframes | `polars>=1.40.0` | `packages/atif-embed/pyproject.toml:24` |
 | Validation | `pydantic>=2.13.2` | `packages/atif-converter/pyproject.toml:25` |

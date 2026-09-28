@@ -44,7 +44,7 @@ dependencies = [
     "cyclopts>=4.10.2",
     "duckdb>=1.5.2,<2",
     "imagesize>=2.0",
-    "lancedb>=0.30,<0.38",
+    "lancedb>=0.30,<0.40",
     "loguru>=0.7.3",
     "polars>=1.40.0",
     "pyarrow>=23.0.1",
@@ -100,42 +100,17 @@ resolution = "highest"
 # Dependency cooldown (Semgrep `uv-missing-dependency-cooldown`): the resolver ignores any
 # release younger than seven days, so a package taken over or published broken is usually
 # pulled before it can land here. The rule accepts only a relative window of at least seven
-# days. uv records the window in uv.lock, so adding it re-resolves the graph, and on the day
-# it landed (2026-09-12) that would have moved 21 packages (the exclude-newer-package table
-# below; ruff and ty among them, which the gates run on) DOWN to their week-old releases.
-# Each of those is exempted up to the instant the window landed, which keeps every pin in
-# uv.lock exactly where it was; the exemptions are no-ops once those releases are a week old
-# and can be deleted in the next `uv lock --upgrade`. A fresh CVE fix inside the window gets
-# the same per-package treatment, never a shorter window. No square bracket may appear in
-# this comment: the Semgrep rule reads the table as everything up to the next one.
+# days. uv records the window in uv.lock, so changing it re-resolves the graph. A package
+# that must move inside the window, such as a fresh CVE fix, gets a per-package
+# exclude-newer-package exemption up to the instant it needs, never a shorter window, and
+# the exemption is deleted in the next `uv lock --upgrade` once that release is a week old.
+# No square bracket may appear in this comment: the Semgrep rule reads the table as
+# everything up to the next one.
 exclude-newer = "7 days"
 python-preference = "only-managed"
 python-downloads = "automatic"
 compile-bytecode = true
 link-mode = "clone"
-
-# See the cooldown note above: the packages the seven-day window would have moved on the day
-# it landed, exempted up to that instant so uv.lock stayed as it was.
-[tool.uv.exclude-newer-package]
-boto3 = "2026-09-12T21:16:20Z"
-botocore = "2026-09-12T21:16:20Z"
-cyclopts = "2026-09-12T21:16:20Z"
-filelock = "2026-09-12T21:16:20Z"
-grimp = "2026-09-12T21:16:20Z"
-huggingface-hub = "2026-09-12T21:16:20Z"
-hypothesis = "2026-09-12T21:16:20Z"
-litellm = "2026-09-12T21:16:20Z"
-multidict = "2026-09-12T21:16:20Z"
-numpy = "2026-09-12T21:16:20Z"
-platformdirs = "2026-09-12T21:16:20Z"
-polars = "2026-09-12T21:16:20Z"
-polars-runtime-32 = "2026-09-12T21:16:20Z"
-pyjwt = "2026-09-12T21:16:20Z"
-regex = "2026-09-12T21:16:20Z"
-ruff = "2026-09-12T21:16:20Z"
-tqdm = "2026-09-12T21:16:20Z"
-ty = "2026-09-12T21:16:20Z"
-wrapt = "2026-09-12T21:16:20Z"
 
 [dependency-groups]
 dev = [
@@ -157,7 +132,7 @@ dev = [
 
 # ---------------------------------------------------------------------------
 # ruff — shared across every workspace member. The py313 target follows the
-# toolchain: harbor==0.22.0 floors at >=3.12 and mise pins 3.13, so a newer
+# toolchain: harbor floors at >=3.12 and mise pins 3.13, so a newer
 # target would accept syntax the pinned interpreter cannot run.
 # ---------------------------------------------------------------------------
 [tool.ruff]
@@ -746,6 +721,16 @@ reportMissingTypeStubs = "none"
 [[tool.pyright.executionEnvironments]]
 root = "packages/atif-converter/tests"
 reportPrivateUsage = "none"
+
+# Vendored harbor source, kept byte for byte (see `[tool.ruff] extend-exclude`), so a
+# finding there can't be fixed without editing upstream's file. pyright still reads it in
+# strict mode, with one rule off: harbor 0.23.0's `ContentPart` checks at run time that a
+# media part's source matches its `type` (`isinstance(self.source, expected)` with
+# `expected` one of the two source classes), which pyright's static narrowing reports as
+# unnecessary although the check rejects a real mismatch.
+[[tool.pyright.executionEnvironments]]
+root = "packages/atif-converter/src/atif_converter/domain/atif"
+reportUnnecessaryIsInstance = "none"
 
 [[tool.pyright.executionEnvironments]]
 root = "packages/atif-corpus/tests"

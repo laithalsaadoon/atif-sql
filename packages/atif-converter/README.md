@@ -1,11 +1,11 @@
 # atif-converter
 
 Converts Claude Code session JSONL and Codex rollouts into ATIF trajectories
-(converters ported from harbor 0.22.0, on harbor's ATIF models vendored in
+(converters ported from harbor and held to parity with harbor 0.23.0, on harbor's ATIF models vendored in
 `atif_converter.domain.atif`), and owns the FIDELITY POLICY: the seven known upstream
 conversion gaps are encoded as `atif_converter.domain.fidelity.FidelityGap`,
 and every conversion is audited into a `LossReport` (raw-side census vs
-converted output). harbor is a dev dependency only; the tests pin harbor 0.22.0
+converted output). harbor is a dev dependency only; the tests pin harbor 0.23.0
 behavior and hold the vendored models to it, so they are the drift alarm for a
 harbor bump.
 
@@ -21,13 +21,13 @@ higher `records_total` than a census scoped to `subagents/` alone would.
 
 ## Cost estimation
 
-Claude Code's `final_metrics.total_cost_usd` and Codex's per-call `cost_usd` are
-estimates harbor computed with `litellm.cost_per_token`. They still are, in
+Claude Code's per-step `cost_usd` and `final_metrics.total_cost_usd`, and Codex's
+per-call `cost_usd`, are estimates harbor computes with `litellm.cost_per_token`. They still are, in
 value: `atif_converter.domain.pricing` returns the same floats, bit for bit,
 without litellm being installed. It reads `domain/model_prices.json`, a
 filtered copy of litellm's public `model_prices_and_context_window.json` (MIT;
 the notice and source ref are in its `meta` block), and repeats litellm
-1.100.1's arithmetic in the same float operation order. The table holds the
+1.102.0's arithmetic in the same float operation order. The table holds the
 Claude and OpenAI text models our transcripts name under the `anthropic`,
 `openai`, `bedrock` and `bedrock_converse` providers, and keeps litellm's
 `fallback_generalizations` rules, which route an unmapped `claude-<family>-<n>`
@@ -35,9 +35,10 @@ id to Anthropic at zero rates; the converter reports such a model as unpriced
 (`None`), never $0.
 
 Anything else (a `provider/model` string, a fine-tune id, a `tiered_pricing`
-table, a model the table doesn't hold) is unpriced. Two local overrides price
+table, a model the table doesn't hold) is unpriced, and so is its step: harbor
+writes $0 there, the converter writes no `cost_usd`. Local overrides price
 models litellm doesn't carry yet, from the vendor's published rates, and a
-session priced from one is labeled `litellm_estimate+local_overrides`.
+step or session priced from one is labeled `litellm_estimate+local_overrides`.
 
 `scripts/update_prices.py` regenerates the table by hand from a litellm git
 ref and retires an override once upstream prices the same key.

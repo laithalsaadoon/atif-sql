@@ -215,7 +215,7 @@ ever published an aarch64 wheel, so a first `uvx atif-sql` on Graviton compiled 
 extensions), left with hdbscan and the structural pipelines on 2026-09-27.
 
 Alpine and other musl targets are not supported: `duckdb` and `lancedb` publish no
-musllinux wheels, and `lancedb==0.37.1` publishes **no sdist at all**, so there is nothing to
+musllinux wheels, and `lancedb==0.39.0` publishes **no sdist at all**, so there is nothing to
 build from.
 
 **harbor and litellm are not in the closure.** harbor's agent runtime carried a web server

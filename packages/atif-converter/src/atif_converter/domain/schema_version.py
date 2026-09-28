@@ -34,12 +34,17 @@ History:
   Both change sets ship together and no corpus was ever stamped with only one
   of them, so one bump separates every version-1 session from every version-2
   one.
+* 3 — harbor 0.23.0: every priced Claude Code step carries
+  ``metrics.cost_usd`` and ``metrics.extra.cost_source`` (an unpriced step
+  carries neither), and ``meta.json`` records ``harbor_version`` 0.23.0. Prices
+  from litellm v1.102.0, which also prices claude-fable-5-1, so its local
+  override retired and its sessions are labeled ``litellm_estimate``.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 2
+CONVERTER_SCHEMA_VERSION: Final = 3
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

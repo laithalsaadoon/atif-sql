@@ -100,23 +100,6 @@ OVERRIDES: dict[str, dict[str, Any]] = {
             ],
         },
     },
-    "claude-fable-5-1": {
-        "litellm_provider": "anthropic",
-        "mode": "chat",
-        "input_cost_per_token": 1e-05,
-        "output_cost_per_token": 5e-05,
-        "cache_creation_input_token_cost": 1.25e-05,
-        "cache_creation_input_token_cost_above_1hr": 2e-05,
-        "cache_read_input_token_cost": 2.5e-07,
-        OVERRIDE_MARKER: {
-            "checked": "2026-09-27",
-            "sources": [
-                # "$10 / MTok" input, "$50 / MTok" output, "$12.50 / MTok" 5m cache
-                # write, "$20 / MTok" 1h cache write, "$0.25 / MTok" cache read.
-                "https://platform.claude.com/docs/en/models/fable-5-1/overview",
-            ],
-        },
-    },
 }
 
 

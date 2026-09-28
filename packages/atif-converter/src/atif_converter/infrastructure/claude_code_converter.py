@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Ported from harbor 0.22.0, src/harbor/agents/installed/claude_code.py
+# Ported from harbor 0.23.0, src/harbor/agents/installed/claude_code.py
 # (Apache-2.0, Copyright the Harbor authors), onto the ATIF models vendored in
 # atif_converter.domain.atif, so atif-converter doesn't depend on harbor.
 
