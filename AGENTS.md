@@ -270,9 +270,12 @@ holds every corpus, at `ATIF_SQL_LAKE_ROOT` (default `~/.atif-sql/lake/`):
   merges small files, rewrites delete-heavy ones, expires snapshots older than
   `--expire-older-than-days` (default 30) and removes unreferenced files once
   they're an hour old, so a reader on the previous catalog copy still finds
-  its files. The refresh script's nightly `compact` lane runs it under its
-  own lock and 4G cap, holding the materialize lane's lock too, so it never
-  overlaps the lake's writer.
+  its files. `--memory-limit SIZE` replaces the host-derived DuckDB budget
+  (the writer's ceiling still applies). The refresh script's nightly
+  `compact` lane runs it with an explicit budget under its own lock and 4G
+  cap, holding the materialize lane's lock too, so it never overlaps the
+  lake's writer. A DuckDB error (an out-of-memory merge) exits 70 and
+  publishes nothing.
 - Memory: the writer caps DuckDB at 2 GiB (lower when the host or cgroup is),
   and runs DuckLake's file merges and rewrites on one thread, because merging
   `tool_results` at more threads outgrew that cap. `query` sizes its own cap

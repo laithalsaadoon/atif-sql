@@ -280,6 +280,11 @@ def _query_memory_limit_bytes() -> int:
     return max(_QUERY_MEMORY_MIN_BYTES, min(target, ceiling))
 
 
+def parse_size(text: str) -> int:
+    """Bytes for a DuckDB-style size literal; raises ``ValueError`` on anything else."""
+    return _parse_size(text)
+
+
 def query_memory_limit_bytes() -> int:
     """The host- and cgroup-derived DuckDB cap; the ``lake`` commands open their writers under it."""
     return _query_memory_limit_bytes()
