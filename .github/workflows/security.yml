@@ -68,7 +68,7 @@ jobs:
       # The SARIF verification in `mise run security` caught it, which is the whole point of
       # failing on a missing report rather than on findings. Paying a cold install per run is
       # cheaper than a tier that can report success for a scan that never executed.
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
