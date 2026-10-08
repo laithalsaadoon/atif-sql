@@ -162,6 +162,11 @@ pre-push:
       # because a config edit is not file-scoped work.
       run: mise run lint:hooks
 
+    - name: lint-pnpm-lock
+      # site/pnpm-lock.yaml must stay one YAML document or GitHub's dependency graph loses the
+      # docs site's packages. Milliseconds, and the failure only shows on GitHub otherwise.
+      run: mise run lint:pnpm-lock
+
     - name: test
       run: mise run test
       skip:

@@ -13,3 +13,19 @@ allowBuilds:
 # back to an older one, so a pinned version younger than the cooldown has no installable candidate
 # and the install fails outright. Such a pin goes under `minimumReleaseAgeExclude` until it ages
 # out; every pin in `package.json` is past the cooldown today, so the list is gone.
+
+# pnpm 12 reads `packageManager` in package.json and, with the default `pmOnFail: download`, writes
+# the pinned pnpm into the lockfile as a separate first YAML document (`packageManagerDependencies`).
+# GitHub's dependency graph parses only the first document, so the docs site's real dependencies
+# vanished from the SBOM and Dependabot closed alerts as fixed. `ignore` keeps the lockfile one
+# document. mise already pins pnpm 12.10.1 equal to `packageManager`, so pnpm's own version
+# switching adds nothing; `lint:pnpm-lock` fails the build if the second document comes back.
+pmOnFail: ignore
+
+# GHSA-rj75-hqrm-r3gf (postcss-selector-parser < 7.1.6). @expressive-code/core 0.44.2, the newest
+# release, depends on postcss-nested ^6, which pins postcss-selector-parser ^6.1.1 and so resolves
+# 6.1.4. postcss-nested 7 takes postcss-selector-parser ^7.0.0 (7.1.6 today). expressive-code only
+# runs postcss-nested over the CSS it generates at build time. Drop this override once
+# @expressive-code/core ships a postcss-nested 7 range.
+overrides:
+  postcss-nested: 7.0.2
