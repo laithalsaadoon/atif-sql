@@ -2042,7 +2042,10 @@ class TestStderrLogLevel:
         """
         from loguru import logger
 
-        monkeypatch.setattr(app_module, "app", lambda: None)
+        def _no_dispatch(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(app_module, "app", _no_dispatch)
         app_module.main()
         try:
             logger.info("an info line")
@@ -2076,3 +2079,33 @@ class TestStderrLogLevel:
         assert "is not a loguru level" in err
         assert "an info line" not in err
         assert "a warning line" in err
+
+
+class TestUsageErrorExitCode:
+    """A flag cyclopts refuses exits invalid_input (64), never cyclopts 5's own 2.
+
+    cyclopts 5 exits 2 on every parse error, and :data:`EXIT_CODES` gives 2 to
+    ``empty_session`` and ``no_embeddings``, so an agent branching on 2 would read
+    a typo as an empty session. ``main`` maps the parse error onto the table.
+    """
+
+    @pytest.mark.parametrize(
+        "argv",
+        [["--bogus"], ["convert", "--bogus"], ["search", "a question", "-k", "many"]],
+    )
+    def test_parse_error_exits_invalid_input(
+        self,
+        argv: list[str],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["atif-sql", *argv])
+        try:
+            with pytest.raises(SystemExit) as exc:
+                app_module.main()
+        finally:
+            logger.remove()
+        assert exc.value.code == EXIT_CODES["invalid_input"] == 64
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Error" in captured.err, "cyclopts must still print its error panel"
