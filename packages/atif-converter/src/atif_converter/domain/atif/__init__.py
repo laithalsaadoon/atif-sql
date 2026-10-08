@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Vendored from harbor 0.23.0, src/harbor/models/trajectories/__init__.py
+# Vendored from harbor 0.24.0, src/harbor/models/trajectories/__init__.py
 # (Apache-2.0, Copyright the Harbor authors), with the provenance constants
 # below added.
 
@@ -35,7 +35,7 @@ from atif_converter.domain.atif.trajectory import Trajectory
 #: The distribution these files were vendored from.
 UPSTREAM_DISTRIBUTION = "harbor"
 #: The upstream release the files match; ``meta.json`` records it as ``harbor_version``.
-UPSTREAM_VERSION = "0.23.0"
+UPSTREAM_VERSION = "0.24.0"
 
 __all__ = [
     "UPSTREAM_DISTRIBUTION",

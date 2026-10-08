@@ -146,14 +146,14 @@ member's `src/` imports either one.
 
 **The ATIF models are vendored.** The data classes from `harbor.models.trajectories`
 (RFC 0001) and `harbor.utils.trajectory_validator` live in
-`atif_converter.domain.atif`, copied from harbor 0.23.0 under Apache-2.0. Each file
+`atif_converter.domain.atif`, copied from harbor 0.24.0 under Apache-2.0. Each file
 carries an attribution header and is otherwise upstream's file byte for byte, with
 the import path rewritten; ruff and ty skip the directory so nobody reformats it
 into ours. `UPSTREAM_VERSION` in its `__init__` records the release, and `meta.json`
 stamps it as `harbor_version`. The conversion from a Claude Code session or a Codex
 rollout to a `Trajectory` is ours, in `atif_converter.domain.claude_code_conversion`
 and `atif_converter.domain.codex_conversion`, ported from harbor and held to parity
-with harbor 0.23.0.
+with harbor 0.24.0.
 
 harbor itself is used in two places, both tests:
 

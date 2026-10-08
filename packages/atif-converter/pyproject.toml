@@ -16,7 +16,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # pydantic for the ATIF models vendored from harbor 0.23.0 under
+    # pydantic for the ATIF models vendored from harbor 0.24.0 under
     # atif_converter.domain.atif; harbor itself and litellm are dev-only (the
     # root's [dependency-groups] dev), kept for the parity oracle and the
     # pricing identity test.

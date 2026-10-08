@@ -47,13 +47,16 @@ _CONVERT_METHOD = "_convert_events_to_trajectory"
 #: a parity failure. Keep each entry narrow (a path AND a direction), so a
 #: divergence the decision did not cover still fails.
 #:
-#: * ``steps[i].extra.agent_id`` present only in ours: harbor reads
-#:   ``event["agent_id"]``, a key no transcript carries (they spell it
-#:   ``agentId``), so its sidechain steps never name their subagent. See
-#:   ``_normalize_assistant_event`` in ``domain/claude_code_conversion.py``.
-DELIBERATE_DIVERGENCES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"^\$\.steps\[\d+\]\.extra\.agent_id: only in ours = "),
-)
+#: Empty since harbor 0.24.0: harbor #3434 reads ``agentId``, so the
+#: ``steps[i].extra.agent_id`` divergence this list named is gone and every
+#: step's subagent id must agree with harbor's.
+DELIBERATE_DIVERGENCES: tuple[re.Pattern[str], ...] = ()
+
+#: The blob placeholder :class:`atif_converter.domain.blobs.BlobRef` writes for an
+#: image, as ``_image_content_forgiven`` reads it.
+_IMAGE_PLACEHOLDER = re.compile(r"\[image sha256:(?P<sha>[0-9a-f]{64}) (?P<media>\S+) \d+ bytes\]")
+#: harbor's path for a Codex tool output image it saved (harbor #3467).
+_HARBOR_IMAGE_PATH = re.compile(r"images/codex_(?P<sha16>[0-9a-f]{16})\.(?:png|jpg|gif|webp)")
 
 #: ``agent.extra`` lists harbor builds from a Python ``set``, so its order
 #: follows the process hash seed; ours keep first-seen order (see
@@ -305,18 +308,67 @@ def _set_order_forgiven(expected: dict[str, Any], ours: dict[str, Any]) -> tuple
     return tuple(forgiven)
 
 
+def _image_content_matches(theirs: Any, ours: Any) -> bool:
+    """Whether ``ours`` is harbor's image-bearing tool output, with each image as its placeholder.
+
+    harbor 0.24.0 saves a Codex tool output's inline image to a file and returns
+    the content as parts; our pure converter writes the blob placeholder text
+    instead and joins the parts with newlines, as harbor joins a text-only list
+    (see ``_tool_output_content`` in ``domain/codex_conversion.py``). Each
+    placeholder must name the same bytes harbor saved (its SHA-256 starts with
+    the 16 hex digits of harbor's file name) and the same media type, and every
+    text part must match exactly.
+    """
+    if not isinstance(theirs, list) or not isinstance(ours, str):
+        return False
+    if not any(isinstance(part, dict) and part.get("type") == "image" for part in theirs):
+        return False
+    texts: list[str] = []
+    for part in theirs:
+        if not isinstance(part, dict):
+            return False
+        if part.get("type") == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+            continue
+        source = part.get("source") or {}
+        path = _HARBOR_IMAGE_PATH.fullmatch(str(source.get("path", "")))
+        if part.get("type") != "image" or path is None:
+            return False
+        texts.append(f"\0{path['sha16']}\0{source.get('media_type')}\0")
+    # Rebuild ours with each placeholder in the same marker form, then compare whole.
+    rebuilt = _IMAGE_PLACEHOLDER.sub(lambda m: f"\0{m['sha'][:16]}\0{m['media']}\0", ours)
+    return rebuilt == "\n".join(texts)
+
+
+def _image_content_forgiven(expected: dict[str, Any], ours: dict[str, Any]) -> frozenset[str]:
+    """The ``observation.results[j].content`` paths :func:`_image_content_matches` explains."""
+    forgiven: set[str] = set()
+    harbor_steps = expected.get("steps") or []
+    for index, step in enumerate(ours.get("steps") or []):
+        if index >= len(harbor_steps):
+            break
+        our_results = (step.get("observation") or {}).get("results") or []
+        harbor_results = (harbor_steps[index].get("observation") or {}).get("results") or []
+        for position, (theirs, mine) in enumerate(zip(harbor_results, our_results, strict=False)):
+            if _image_content_matches(theirs.get("content"), mine.get("content")):
+                forgiven.add(f"$.steps[{index}].observation.results[{position}].content")
+    return frozenset(forgiven)
+
+
 def parity_diffs(expected: dict[str, Any], ours: dict[str, Any]) -> list[str]:
     """:func:`diff_paths` minus the documented deliberate divergences.
 
-    Four kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
-    pattern matches, always; the element lines of a
+    Five kinds are forgiven. Every line a :data:`DELIBERATE_DIVERGENCES`
+    pattern matches, always; a Codex tool output's content where harbor saved
+    an image and ours holds its blob placeholder, only when
+    :func:`_image_content_matches` holds; the element lines of a
     :data:`SET_ORDER_DIVERGENCE_KEYS` list, only when both sides hold the same
     values; the :data:`PRICING_DIVERGENCE_PATHS`, only when
     :func:`_pricing_divergence_expected` says the pricing policy explains them;
     and a step's :data:`STEP_PRICING_DIVERGENCE_PATHS`, only when that step's
     model is one the policy prices differently.
     """
-    step_forgiven = _step_pricing_forgiven(expected, ours)
+    step_forgiven = _step_pricing_forgiven(expected, ours) | _image_content_forgiven(expected, ours)
     order_forgiven = _set_order_forgiven(expected, ours)
     diffs = [
         line

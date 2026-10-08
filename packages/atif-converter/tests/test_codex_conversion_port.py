@@ -18,6 +18,10 @@ than a reading of harbor's source.
 
 from __future__ import annotations
 
+import base64
+import copy
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +33,14 @@ from codex_fixtures import (
     codex_rollout_records,
     write_codex_rollout,
 )
-from harbor_oracle import diff_paths, harbor_codex_trajectory, harbor_has_private_api
+from harbor_oracle import (
+    diff_paths,
+    harbor_codex_trajectory,
+    harbor_has_private_api,
+    parity_diffs,
+)
 
+from atif_converter.domain.blobs import BlobCollector, extract_codex_blobs
 from atif_converter.domain.codex_conversion import convert_codex_records
 from atif_converter.infrastructure.codex_converter import convert_codex_rollout
 
@@ -265,8 +275,10 @@ class TestReasoning:
 
 
 class TestToolCallShapes:
-    def test_web_search_call_has_empty_id_and_null_observation(self, tmp_path: Path) -> None:
-        """``web_search_call`` becomes a tool call with ``call_id == ""`` and no output."""
+    def test_web_search_call_gets_a_request_scoped_id_and_null_observation(
+        self, tmp_path: Path
+    ) -> None:
+        """harbor #2972: a ``web_search_call`` with no item id is ``<api call>_web_search_<n>``, no output."""
         records = [
             _session_meta(),
             _turn_context(),
@@ -284,15 +296,43 @@ class TestToolCallShapes:
         (agent,) = _agent_steps(_convert(tmp_path, records))
         assert agent["tool_calls"] == [
             {
-                "tool_call_id": "",
+                "tool_call_id": "api_call_1_web_search_0",
                 "function_name": "web_search_call",
                 "arguments": {"action_type": "search", "query": "harbor atif", "url": "https://x"},
             }
         ]
-        # source_call_id "" -> None and content None: an empty result object.
-        assert agent["observation"] == {"results": [{}]}
-        assert agent["extra"]["tool_call_details"] == {"": {"status": "completed"}}
+        # content None: the result object carries its call id alone.
+        assert agent["observation"] == {"results": [{"source_call_id": "api_call_1_web_search_0"}]}
+        assert agent["extra"]["tool_call_details"] == {
+            "api_call_1_web_search_0": {"status": "completed"}
+        }
         assert agent["message"] == "found it"
+
+    @pytest.mark.parametrize(
+        ("native_id", "call_id"), [("ws_7", "ws_7"), ("  ", "api_call_1_web_search_0")]
+    )
+    def test_web_search_call_keeps_codexs_own_item_id(
+        self, tmp_path: Path, native_id: str, call_id: str
+    ) -> None:
+        """harbor #2972: a non-blank item ``id`` is the call id; a blank one falls back."""
+        records = [
+            _session_meta(),
+            _turn_context(),
+            _user("q"),
+            _item(
+                {
+                    "type": "web_search_call",
+                    "id": native_id,
+                    "status": "completed",
+                    "action": {"type": "search", "query": "q"},
+                }
+            ),
+            _assistant("done"),
+            _token_count(10, 2),
+        ]
+        (agent,) = _agent_steps(_convert(tmp_path, records))
+        assert agent["tool_calls"][0]["tool_call_id"] == call_id
+        assert agent["observation"]["results"] == [{"source_call_id": call_id}]
 
     def test_custom_tool_call_input_string_becomes_the_input_argument(self, tmp_path: Path) -> None:
         """A non-JSON ``input`` is wrapped as ``{"input": raw}``; the raw string is kept."""
@@ -364,12 +404,19 @@ class TestToolCallShapes:
             ("42", "42", None),
             ("plain text", "plain text", None),
             (None, None, None),
+            # harbor #3467: a JSON scalar keeps its raw text, not Python's str() of it.
+            ("true", "true", None),
+            ("null", "null", None),
+            # harbor #3467: a non-string ``output`` is its JSON text.
+            ('{"output": [1, "a"], "metadata": {"b": 2}}', '[1, "a"]', {"b": 2}),
+            # a non-string output that is not content blocks is its JSON text.
+            ([1, 2], "[1, 2]", None),
         ],
     )
     def test_function_call_output_blob_shapes(
-        self, tmp_path: Path, raw_output: str | None, content: str | None, metadata: Any
+        self, tmp_path: Path, raw_output: Any, content: str | None, metadata: Any
     ) -> None:
-        """``_parse_output_blob``: object -> output/metadata, scalar -> str, text -> itself."""
+        """``_parse_output_blob``: object -> output/metadata, scalar -> its text, text -> itself."""
         records = [
             _session_meta(),
             _turn_context(),
@@ -420,6 +467,149 @@ class TestToolCallShapes:
         # normalized when its OUTPUT arrives: b's output came first, so the
         # step carries b's call timestamp even though a sorts first.
         assert agent["timestamp"] == "2026-09-11T17:27:02.200Z"
+
+
+#: A 1x1 PNG, base64, for the inline image branches.
+_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+
+
+class TestStructuredToolOutput:
+    """harbor #3467: MCP content-block lists become text, never Python's repr of the list."""
+
+    def _content(self, tmp_path: Path, output: Any, *, cross_check: bool = True) -> Any:
+        records = [
+            _session_meta(),
+            _turn_context(),
+            _user("q"),
+            _function_call("c1", "mcp__srv__tool", "{}"),
+            _function_call_output("c1", output),
+            _token_count(10, 2),
+        ]
+        (agent,) = _agent_steps(_convert(tmp_path, records, cross_check=cross_check))
+        return agent["observation"]["results"][0].get("content")
+
+    @pytest.mark.parametrize("encode", [False, True], ids=["list", "json-string"])
+    def test_text_items_join_with_newlines(self, tmp_path: Path, encode: bool) -> None:
+        """``input_text`` and MCP ``text`` blocks, as a list or as its JSON text, join with ``\\n``."""
+        blocks = [
+            {"type": "input_text", "text": "Script completed\nOutput:\n"},
+            {"type": "text", "text": ""},
+            {"type": "input_text", "text": '{"exit_code":0}'},
+        ]
+        output = json.dumps(blocks) if encode else blocks
+        assert self._content(tmp_path, output) == 'Script completed\nOutput:\n\n\n{"exit_code":0}'
+
+    def test_other_blocks_are_their_json_text(self, tmp_path: Path) -> None:
+        """A resource (or audio, or encrypted) block is kept as JSON, in place."""
+        blocks = [
+            {"type": "text", "text": "see"},
+            {"type": "resource_link", "uri": "file:///r.txt", "name": "r"},
+        ]
+        assert self._content(tmp_path, blocks) == (
+            'see\n{"type": "resource_link", "uri": "file:///r.txt", "name": "r"}'
+        )
+
+    def test_a_list_with_an_unknown_type_is_its_json_text(self, tmp_path: Path) -> None:
+        """Not content blocks: one element's ``type`` is unknown, so the list stays JSON."""
+        blocks = [{"type": "text", "text": "a"}, {"type": "mystery"}]
+        assert self._content(tmp_path, blocks) == json.dumps(blocks)
+
+    @pytest.mark.parametrize(
+        ("block", "text"),
+        [
+            ({"type": "input_image", "image_url": "https://x/y.png"}, "[image: https://x/y.png]"),
+            ({"type": "input_image", "image_url": "data:image/png;base64,@@@"}, "[image omitted]"),
+            ({"type": "input_image", "image_url": "data:image/bmp;base64,AAAA"}, "[image omitted]"),
+            ({"type": "image", "data": _PNG_BASE64}, "[image omitted]"),
+            ({"type": "input_image", "file_id": "file-1"}, "[image omitted]"),
+        ],
+        ids=["remote-url", "undecodable", "unsupported-type", "no-media-type", "file-id"],
+    )
+    def test_images_nobody_can_reference_are_harbors_text(
+        self, tmp_path: Path, block: dict[str, Any], text: str
+    ) -> None:
+        """Remote, undecodable, unsupported or id-only images: harbor's own text, exactly."""
+        assert (
+            self._content(tmp_path, [{"type": "text", "text": "shot:"}, block]) == f"shot:\n{text}"
+        )
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            {"type": "input_image", "image_url": f"data:image/png;base64,{_PNG_BASE64}"},
+            {"type": "image", "data": _PNG_BASE64, "mimeType": "image/png"},
+        ],
+        ids=["input_image", "mcp-image"],
+    )
+    def test_an_inline_image_is_its_blob_placeholder(
+        self, tmp_path: Path, block: dict[str, Any]
+    ) -> None:
+        """The one deliberate divergence: harbor saves the file, we write the blob placeholder."""
+        content = self._content(
+            tmp_path, [{"type": "text", "text": "shot:"}, block], cross_check=False
+        )
+        data = base64.b64decode(_PNG_BASE64)
+        digest = hashlib.sha256(data).hexdigest()
+        assert content == f"shot:\n[image sha256:{digest} image/png {len(data)} bytes]"
+
+    def test_an_inline_image_is_the_pre_pass_placeholder(self) -> None:
+        """Raw and production paths agree: the converter writes what ``extract_codex_blobs`` would."""
+        output = [
+            {"type": "input_text", "text": "shot:"},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{_PNG_BASE64}"},
+        ]
+        records = [
+            _session_meta(),
+            _turn_context(),
+            _user("q"),
+            _function_call("c1", "tool", "{}"),
+            _function_call_output("c1", output),
+            _token_count(10, 2),
+        ]
+        raw = convert_codex_records(copy.deepcopy(records), fallback_session_id="s")
+        lifted = copy.deepcopy(records)
+        extract_codex_blobs(lifted, BlobCollector())
+        assert lifted[4]["payload"]["output"][1]["type"] == "input_text"
+        pre_passed = convert_codex_records(lifted, fallback_session_id="s")
+        assert raw is not None
+        assert pre_passed is not None
+        assert raw.to_json_dict() == pre_passed.to_json_dict()
+
+    def test_harbor_differs_only_by_the_saved_image(self, tmp_path: Path) -> None:
+        """While harbor ships the method: its image part and our placeholder are the ONLY diff."""
+        if not harbor_has_private_api("codex"):
+            pytest.skip("harbor no longer ships Codex's private converter")
+        output = [
+            {"type": "input_text", "text": "shot:"},
+            {"type": "input_image", "image_url": f"data:image/png;base64,{_PNG_BASE64}"},
+        ]
+        records = [
+            _session_meta(),
+            _turn_context(),
+            _user("q"),
+            _function_call("c1", "tool", "{}"),
+            _function_call_output("c1", output),
+            _token_count(10, 2),
+        ]
+        rollout = write_codex_rollout(tmp_path / "sessions", records)
+        theirs = harbor_codex_trajectory(rollout)
+        ours = convert_codex_rollout(rollout)
+        assert theirs is not None
+        assert ours is not None
+        raw = diff_paths(theirs, ours.to_json_dict())
+        assert [line.split(":", 1)[0] for line in raw] == [
+            "$.steps[1].observation.results[0].content"
+        ]
+        harbor_content = theirs["steps"][1]["observation"]["results"][0]["content"]
+        assert [part["type"] for part in harbor_content] == ["text", "image"]
+        assert parity_diffs(theirs, ours.to_json_dict()) == []
+        # The forgiveness is narrow: another image's bytes are not forgiven.
+        tampered = copy.deepcopy(ours.to_json_dict())
+        result = tampered["steps"][1]["observation"]["results"][0]
+        result["content"] = result["content"].replace("sha256:", "sha256:0", 1)[:-1]
+        assert parity_diffs(theirs, tampered) != []
 
 
 class TestApiCallGrouping:
