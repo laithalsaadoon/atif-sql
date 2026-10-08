@@ -412,7 +412,7 @@ the derived example must execute — or a documented `EXCLUSIONS` entry.
 ## Definition of done
 
 `mise run check` fully green (lint + fmt + typecheck + lint:imports + lint:workflows +
-lint:hooks + test). `mise run security` is the report-only tier beside it: findings do not fail
+lint:hooks + lint:pnpm-lock + test). `mise run security` is the report-only tier beside it: findings do not fail
 it, a scanner that produced no usable SARIF does.
 First-time setup: `mise trust && mise install && mise run install`.
 

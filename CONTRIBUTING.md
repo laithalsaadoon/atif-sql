@@ -41,6 +41,7 @@ that.
 | `fmt` | `uv run ruff format --check .` | formatting; `mise run fmt:write` applies it |
 | `typecheck` | `uv run ty check` | `[tool.ty.rules] all = "error"`, and `[tool.ty.terminal] error-on-warning = true` means a warning is also a failure |
 | `lint:imports` | `uv run lint-imports` | the import contracts below |
+| `lint:pnpm-lock` | `python3 scripts/verify_single_yaml_document.py site/pnpm-lock.yaml` | `site/pnpm-lock.yaml` holding more than one YAML document, which GitHub's dependency graph cannot read |
 | `test` | `uv run pytest --no-header -q` | `[tool.pytest.ini_options] testpaths = ["packages/*/tests"]` |
 
 Each gate declares `sources`, so mise skips one whose inputs have not moved by
