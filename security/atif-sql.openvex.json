@@ -5,7 +5,7 @@
   "role": "document creator",
   "timestamp": "2026-08-28T17:06:14Z",
   "version": 2,
-  "tooling": "hand-authored; rendered to osv-scanner.toml by scripts/vex_to_osv_config.py",
+  "tooling": "hand-authored; rendered to osv-scanner.toml and the allow-ghsas input of .github/workflows/dependency-review.yml by scripts/vex_to_osv_config.py",
   "statements": [
     {
       "@id": "https://github.com/laithalsaadoon/atif-sql/security/atif-sql.openvex.json#braces-3.0.3",

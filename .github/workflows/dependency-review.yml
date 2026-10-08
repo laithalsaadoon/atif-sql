@@ -50,6 +50,15 @@ jobs:
           # `on-failure`, not `always`: a comment on every green pull request trains reviewers
           # to skim past the one that is not green.
           comment-summary-in-pr: on-failure
+          # RENDERED from security/atif-sql.openvex.json by `mise run security:vex`; do not edit
+          # by hand. The OpenVEX ledger is the one record of why a finding is suppressed, but
+          # this action has no `--vex` input: its only suppression surface is this list, which
+          # src/filter.ts at a1d282b matches on the GHSA id alone, blind to package and version.
+          # So the value is the GHSA ids of the ledger's `not_affected` and `fixed` statements,
+          # and `mise run security:vex:check` (inside `mise run check`) fails when this set and
+          # the ledger's differ in either direction, or when a ledger npm version is not the one
+          # site/pnpm-lock.yaml locks, which puts the version scoping back.
+          allow-ghsas: GHSA-ch52-4w7c-c8xp, GHSA-vfj7-8cjw-p6xm
           # Strong copyleft cannot enter an Apache-2.0 distribution. LGPL is deliberately
           # absent (weak copyleft, linkable) and so is MPL-2.0, which
           # `mise run security:licenses` already allows by name for certifi, pathspec, and

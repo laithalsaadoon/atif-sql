@@ -325,26 +325,41 @@ depends = [
 # ---------------------------------------------------------------------------
 
 [tasks."security:vex"]
-description = "Regenerate osv-scanner.toml from the OpenVEX ledger"
+description = "Regenerate osv-scanner.toml and dependency-review's allow-ghsas from the OpenVEX ledger"
 # NOT in `security`'s depends, deliberately. `osv-scanner.toml` is COMMITTED and drift-gated, so
 # regenerating it as part of the scan would let a scan run against a suppression surface no gate
 # has ever seen — the scan would define its own exemptions and then pass. Editing
-# `security/atif-sql.openvex.json` means running this task and committing BOTH files.
-run = "uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml"
+# `security/atif-sql.openvex.json` means running this task and committing what it rewrote:
+# osv-scanner.toml and the `allow-ghsas:` line of .github/workflows/dependency-review.yml.
+run = """
+uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml \
+  --pnpm-lock site/pnpm-lock.yaml --workflow .github/workflows/dependency-review.yml
+"""
 
 [tasks."security:vex:check"]
-description = "Drift gate: osv-scanner.toml must match the ledger, and the renderer must work"
+description = "Drift gate: osv-scanner.toml and allow-ghsas must match the ledger, and the renderer must work"
 # In `check`'s depends, because a generated file nothing verifies is a file that drifts. Two
 # assertions, and the second exists because the live ledger ships EMPTY:
 #
 #   --check   re-renders the live ledger in memory and diffs it against the committed
 #             osv-scanner.toml, printing a unified diff and failing on any difference. This also
 #             re-runs every ledger validation, so a stale PURL version fails here even when the
-#             rendered TOML happens not to change.
+#             rendered TOML happens not to change. With `--pnpm-lock` it holds every
+#             `pkg:npm` PURL to the version site/pnpm-lock.yaml locks, and with `--workflow` it
+#             fails when dependency-review.yml's `allow-ghsas` set differs from the ledger's
+#             GHSA set in either direction: that action has no `--vex`, and its allow list is
+#             version-blind, so the lock assertion is what scopes it.
 #   examples/ renders the worked example to a temp path and asserts both advisory ids reach the
 #             output. With no live statements, `--check` alone would exercise only the
 #             empty-ledger branch and the suppression-emitting path could rot unnoticed.
-sources = ["security/**/*.json", "osv-scanner.toml", "scripts/vex_to_osv_config.py", "uv.lock"]
+sources = [
+    "security/**/*.json",
+    "osv-scanner.toml",
+    "scripts/vex_to_osv_config.py",
+    "uv.lock",
+    "site/pnpm-lock.yaml",
+    ".github/workflows/dependency-review.yml",
+]
 #
 # `uv run python`, not bare `python3`: the renderer uses 3.12+ syntax (a `type` statement), and
 # on a host whose /usr/bin precedes the mise tool dir, `python3` is the system 3.9 and the task
@@ -356,7 +371,8 @@ sources = ["security/**/*.json", "osv-scanner.toml", "scripts/vex_to_osv_config.
 # report.
 run = """
 set -eu
-uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml --check
+uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml \
+  --pnpm-lock site/pnpm-lock.yaml --workflow .github/workflows/dependency-review.yml --check
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 uv run python scripts/vex_to_osv_config.py \
