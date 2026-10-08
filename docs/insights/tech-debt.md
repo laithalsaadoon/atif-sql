@@ -80,7 +80,7 @@ flake8-fixme and flake8-todos on, and neither appears among the ignores at
 `pyproject.toml:153-184`.
 Probed 2026-08-28 by dropping one `# TODO: ...` comment into `packages/atif-duck/src/`:
 `ruff check` exits 2 with `TD002` (missing author), `TD003` (missing issue link), and
-`FIX002` (line contains TODO). A marker cannot reach `main` past `mise run lint`, so the
+`FIX002` (line contains `TODO`). A marker cannot reach `main` past `mise run lint`, so the
 debt lives in the channels the register draws on instead of in markers. One more channel
 exists and contributes no row: a comment explaining the code by reference to an
 implementation no installer of this package can obtain. `grep -riE 'claude-sql|predecessor'
@@ -99,7 +99,7 @@ the config names what would let them back on, none of which exists.
 The `TC*` rules are off because a probe found that fixing them breaks
 `typing.get_type_hints` on first-party functions. Per-site `# noqa: N818` markers flag
 error classes deliberately not named `*Error`. The size limits are pinned at the current
-worst function. Reading the config top to bottom is a more complete account of what this
+worst function. Reading the config top to bottom is a fuller account of what this
 codebase owes than reading its comments, and none of it appears in any tracker.
 
 Shows up in:

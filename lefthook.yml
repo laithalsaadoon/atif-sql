@@ -167,6 +167,11 @@ pre-push:
       # docs site's packages. Milliseconds, and the failure only shows on GitHub otherwise.
       run: mise run lint:pnpm-lock
 
+    - name: docs-prose
+      # Vale over the published prose, offline from the committed styles, about 3 s. A docs
+      # edit that trips an error-level rule is cheaper to reword here than after a CI round trip.
+      run: mise run docs:prose
+
     - name: test
       run: mise run test
       skip:

@@ -262,7 +262,7 @@ driving the CLI reads, so the dict is the surface — not the individual numbers
   both the mapping and the literal 78 (`packages/atif-cli/src/atif_cli/errors.py:35-37`,
   `packages/atif-cli/tests/test_app.py:744`).
 - **A code outside the dict is the failure mode this surface exists to prevent.** An unhandled
-  traceback exits 1, which appears nowhere in `EXIT_CODES`, and tests assert that a lazily-bound
+  traceback exits 1, which appears nowhere in `EXIT_CODES`, and tests assert that a lazily bound
   Lance scan tripping mid-stream still classifies instead of exiting 1
   (`packages/atif-cli/src/atif_cli/duck_errors.py:15-17`,
   `packages/atif-cli/tests/test_app.py:657` and `packages/atif-cli/tests/test_app.py:1039`).

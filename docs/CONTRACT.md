@@ -20,6 +20,7 @@ divides labour between the two contracts and does not deny they exist. Lean
 proofs are out of scope for the workspace.
 
 ## Materialized corpus layout (atif-corpus writes, atif-duck reads)
+```text
 <corpus_root>/                     # default: ~/.atif-sql/corpus/<corpus-slug>/
   sessions/<session_id>/
     trajectory.json.zst            # compact JSON (separators=(',',':')), ATIF-v1.7,
@@ -56,6 +57,7 @@ proofs are out of scope for the workspace.
   catalog.reader.duckdb            # read-only (0444) copy the writer publishes after each write
   data/main/<table>/agent=<agent>/corpus=<corpus>/[year=<y>/month=<m>/]*.parquet
 <lake_root>.lock                   # the writer's flock, beside the root
+```
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
   One key is reserved and not hashed: `codex` names the Codex CLI corpus.
@@ -282,6 +284,7 @@ proofs are out of scope for the workspace.
   locks the connection, and the grants name each live lake file.
 
 ## CLI (atif-cli composes; the only package importing the others)
+```text
 atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
 atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N] [--no-lake]  # sync corpus
@@ -316,6 +319,7 @@ atif-sql embed --prune-orphans [--no-dry-run]  # stored rows no lake step names;
                                        # dry run by default, exit 78 without a lake
 atif-sql search 'text' [--all-corpora] [--no-lake]  # kNN joined to the lake's steps
 atif-sql schema                        # static, <50ms, no duckdb bind
+```
 
 ## Parity oracle (satisfied and retired)
 The migration oracle compared this stack against a prior implementation over
@@ -337,7 +341,7 @@ repo neither declares nor provides.
 source_root (default CLAUDE_CONFIG_DIR~/.claude /projects), corpus_root,
 quiesce_seconds=300, agent=claude-code (every --agent command reads it),
 materialize_workers=min(8, cpu_count) (materialize's pool size; 1 = single process).
-ATIF_SQL_QUERY_MEMORY_LIMIT (DuckDB size literal, e.g. 6GB) and ATIF_SQL_QUERY_THREADS
+ATIF_SQL_QUERY_MEMORY_LIMIT (DuckDB size literal, for example `6GB`) and ATIF_SQL_QUERY_THREADS
 override query's host-derived cap and thread count; ATIF_SQL_ALLOW_ROOT=1 lets
 query/search/analyze run as uid 0 (a warning is logged).
 lake_root (default ~/.atif-sql/lake), corpus_base (default ~/.atif-sql/corpus;

@@ -147,7 +147,7 @@ sequenceDiagram
 8. Before any of that, the connection was sized to the host (`_configure_query_resources`: a memory
    cap from available RAM, a thread count from that cap, a private `mkdtemp` spill directory, and
    extension auto-install and auto-load off), because registration is what needs the cap. The
-   fully-registered connection is then sandboxed: a directory allowlist holding only the private
+   fully registered connection is then sandboxed: a directory allowlist holding only the private
    spill area, a path allowlist holding the individual parquets the views read lazily (on the lake
    path, each live lake data and delete file, never the lake's data directory, because a caller's
    `ducklake_cleanup_old_files` deletes files under a directory grant),

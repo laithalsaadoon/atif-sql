@@ -62,6 +62,11 @@ shellcheck = "latest"
 # This version and `packageManager` in site/package.json must agree.
 pnpm = "12.10.1"
 node = "24"
+# --- prose (docs:prose) -----------------------------------------------------
+# Pinned exactly rather than `latest`: a Vale release can change how a rule matches, and the
+# committed styles under .vale/styles were synced against this version. Moving it is an edit
+# here, a `mise lock`, and a `mise run docs:prose` over the tree.
+"aqua:vale-cli/vale" = "3.24.0"
 
 [env]
 PYTHONDONTWRITEBYTECODE = "1"
@@ -213,7 +218,7 @@ description = "The suite under branch coverage; writes coverage.xml and enforces
 run = "uv run pytest --no-header -q --cov --cov-report=term-missing --cov-report=xml"
 
 [tasks.check]
-description = "All gates: lint + fmt + typecheck (ty + pyright) + imports + workflows + hooks + pnpm lock + vex drift + test"
+description = "All gates: lint + fmt + typecheck (ty + pyright) + imports + workflows + hooks + pnpm lock + vex drift + prose + test"
 depends = [
     "lint",
     "fmt",
@@ -227,6 +232,11 @@ depends = [
     # and this must FAIL. A generated suppression surface nothing verifies is a suppression
     # surface that outlives its reason.
     "security:vex:check",
+    # The prose gate is here, unlike `docs:gate`, because it meets check's terms: one static
+    # binary from mise.lock, styles committed under .vale/styles so it runs offline, and 3.4 s
+    # over the 24 files in scope on the devbox (2026-10-08). Its planted-defect test
+    # (packages/atif-cli/tests/test_vale_gate.py) runs under `test`.
+    "docs:prose",
     "test",
 ]
 
@@ -687,6 +697,19 @@ description = "Scan the docs tree for a bare brace the raw-twin MDX parser would
 # a heading is the usual source.
 dir = "site"
 run = "pnpm run gate:braces:tree"
+
+[tasks."docs:prose"]
+description = "Vale over the published prose: fail on an error-level alert or on zero files checked"
+# Scope: docs/**/*.md, site/authored/**/*.md, README.md and AGENTS.md, the text the site, llms.txt
+# and the raw Markdown twins publish; scripts/vale_gate.py holds the globs, and .vale.ini the rules
+# and why each one below error sits there. The script counts the scope itself and fails unless
+# Vale's own summary says it read every one of those files, so a broken glob or a moved tree is
+# a red gate rather than "0 errors in 0 files". Warnings print as a count, the ratchet a later
+# change lowers. No `sources`: a few seconds, and a skipped gate reads like a passing one.
+#
+# `python3`, not `uv run python`: the script is stdlib-only like the other gate helpers, and Vale
+# itself is the mise-pinned binary, so this runs before `uv sync`.
+run = "python3 scripts/vale_gate.py"
 
 [tasks."docs:build"]
 description = "Build the docs site into site/dist"

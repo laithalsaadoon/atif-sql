@@ -57,7 +57,7 @@ Settings env: ATIF_SQL_LLM_FAMILY, ATIF_SQL_LLM_SIZE_<PIPELINE> overrides.
 ## Pipeline size assignments (defaults)
 classify=medium(terra), trajectory=medium, conflicts=large(sol — hardest
 judgment task), friction=small(luna — per-message enum), embed unchanged
-(cohere embed v4 1024d int8, one adapter behind EmbeddingProvider).
+(cohere embed v4 1024-dim int8, one adapter behind EmbeddingProvider).
 
 ## Ports & state: one shape per seam, declared in domain/ports.py
 CachePort/CheckpointPort/RetryQueuePort/VectorStorePort, sqlite WAL state.db
@@ -72,7 +72,7 @@ Schemas/enums are fixed vocabularies (autonomy tiers, work categories,
 transition_kinds, conflict kinds, friction labels) — parity of meaning.
 Friction tiers: regex + SQL stamp layers run first (zero-cost), LLM tier on luna.
 Structural pipelines (cluster/terms/community): fixed hyperparameters
-(UMAP 50d/HDBSCAN 20,5/Leiden k15 floor .3 min 3 seed 42/c-TF-IDF 2,.95,1-2,top10).
+(UMAP 50-dim/HDBSCAN 20,5/Leiden k15 floor .3 min 3 seed 42/c-TF-IDF 2,.95,1-2,top10).
 
 ## VSS
 The stack: cohere embed v4 -> lancedb IvfHnswSq -> duckdb lance
