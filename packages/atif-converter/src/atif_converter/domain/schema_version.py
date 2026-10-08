@@ -53,12 +53,24 @@ History:
   them $0. The table also adds flex rates for gpt-5.1 and gpt-5.2 and moves
   o4-mini's flex cache-read rate. ``total_cost_usd`` and ``metrics.cost_usd``
   change for every such session.
+* 7 — harbor 0.24.0: ``meta.json`` records ``harbor_version`` 0.24.0. The
+  Claude Code port itself puts each event's ``agentId`` on every step the
+  event becomes (prompts, tool results and turns, which enrichment filled
+  before) and writes ``is_sidechain`` and ``agent_id`` right after ``id`` in
+  ``extra``, harbor's key order; a snake_case ``agent_id`` key names no
+  subagent (harbor #3434). A Codex tool output that is a list of content blocks or
+  items is its text parts joined by newlines, with an inline image as its blob
+  placeholder, where it was Python's ``str()`` of the list; a non-string
+  ``output`` inside an output object is its JSON text; a JSON scalar output
+  keeps its raw text (harbor #3467). A Codex ``web_search_call`` carries its
+  item id, or ``<api call>_web_search_<n>``, where its id was empty (harbor
+  #2972).
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 6
+CONVERTER_SCHEMA_VERSION: Final = 7
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

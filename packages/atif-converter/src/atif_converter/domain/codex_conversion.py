@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Ported from harbor 0.22.0, src/harbor/agents/installed/codex.py (Apache-2.0,
-# Copyright the Harbor authors), onto the ATIF models vendored in
+# Copyright the Harbor authors), brought to harbor 0.24.0, onto the ATIF models vendored in
 # atif_converter.domain.atif, so atif-converter doesn't depend on harbor.
 
 """Codex rollout records -> ATIF trajectory, as one pure function.
@@ -15,7 +15,13 @@ against harbor's private method for as long as harbor still ships it.
 FAITHFUL, NOT IMPROVED. Every quirk below is harbor's, kept so the two agree
 byte for byte; a behavior change is a decision for a later commit, made with
 the golden re-frozen on purpose. Names and structure follow harbor's so an
-upstream diff can be re-applied by hand:
+upstream diff can be re-applied by hand. harbor 0.24.0's two Codex changes
+are applied: a ``web_search_call`` keeps its item id or gets
+``<api call>_web_search_<n>`` (harbor #2972), and a structured tool output (a
+list of MCP content blocks or content items) becomes text rather than Python's
+``str()`` of the list (harbor #3467). The one departure is an inline image in
+such an output, which harbor saves to a file and this pure function writes as
+its blob placeholder (:func:`_tool_output_content` says why):
 
 =================================  =========================================
 harbor 0.22.0                       here
@@ -59,6 +65,7 @@ Pure over already-parsed records in FILE order: no file I/O, no
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Literal
 
 from loguru import logger
@@ -75,6 +82,7 @@ from atif_converter.domain.atif import (
     ToolCall,
     Trajectory,
 )
+from atif_converter.domain.blobs import BlobCollector
 from atif_converter.domain.codex_enrichment import message_text
 
 #: The schema version harbor 0.22.0 stamps on a Codex trajectory.
@@ -85,13 +93,33 @@ _SCHEMA_VERSION = "ATIF-v1.7"
 _UNKNOWN_VERSION = "unknown"
 
 
-def _parse_output_blob(raw: Any) -> tuple[str | None, dict[str, Any] | None]:
-    """Extract textual output and metadata from Codex tool outputs.
+#: harbor 0.24.0's tool output content types (``codex.py``, harbor #3467).
+_TOOL_OUTPUT_TEXT_TYPES = frozenset({"text", "input_text"})
+_TOOL_OUTPUT_IMAGE_TYPES = frozenset({"image", "input_image"})
+_TOOL_OUTPUT_CONTENT_TYPES = (
+    _TOOL_OUTPUT_TEXT_TYPES
+    | _TOOL_OUTPUT_IMAGE_TYPES
+    | frozenset({"audio", "input_audio", "resource", "resource_link", "encrypted_content"})
+)
+#: The image types harbor stores; anything else is ``[image omitted]``.
+_IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+_BASE64_DATA_URL = re.compile(
+    r"data:(?P<media_type>[^;,]+)(?:;[^;,]*)*;base64,(?P<data>.*)", re.DOTALL
+)
+#: harbor's text for an image it cannot reference.
+_IMAGE_OMITTED = "[image omitted]"
 
-    harbor's ``Codex._parse_output_blob``. A JSON object yields its
-    ``output`` (or, when that key is missing, the whole object re-serialized)
-    plus its ``metadata`` when that is an object; a JSON scalar or array is
-    stringified; a non-JSON string is the output itself.
+
+def _parse_output_blob(raw: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """Extract the observation content and metadata from a Codex tool output.
+
+    harbor 0.24.0's ``Codex._parse_output_blob`` (harbor #3467). A JSON object
+    yields its ``output`` (JSON text when that is not a string, or, when the key
+    is missing, the whole object re-serialized) plus its ``metadata`` when that
+    is an object; a list of MCP content blocks or content items becomes the
+    text :func:`_tool_output_content` renders; any other JSON value keeps the
+    raw string, or its JSON text when the output was not a string; a non-JSON
+    string is the output itself.
     """
     if raw is None:
         return None, None
@@ -109,10 +137,117 @@ def _parse_output_blob(raw: Any) -> tuple[str | None, dict[str, Any] | None]:
         if output is None and parsed:
             # dumping remaining structure if output missing
             output = json.dumps(parsed, ensure_ascii=False)
+        elif output is not None and not isinstance(output, str):
+            output = json.dumps(output, ensure_ascii=False)
         metadata = parsed.get("metadata")
         return output, metadata if isinstance(metadata, dict) else None
 
-    return str(parsed), None
+    return _non_object_output(raw, parsed), None
+
+
+def _non_object_output(raw: Any, parsed: Any) -> str:
+    """The text of a tool output that is not a JSON object (harbor's tail branches)."""
+    if _is_tool_output_content(parsed):
+        return _tool_output_content(parsed)
+    if isinstance(raw, str):
+        return raw
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def _is_tool_output_content(value: Any) -> bool:
+    """Whether a tool output is a list of MCP content blocks or content items.
+
+    harbor's ``Codex._is_tool_output_content``: a non-empty list whose every
+    element is an object with a known content ``type``.
+    """
+    if not isinstance(value, list) or not value:
+        return False
+    for block in value:
+        if not isinstance(block, dict):
+            return False
+        block_type = block.get("type")
+        if not isinstance(block_type, str) or block_type not in _TOOL_OUTPUT_CONTENT_TYPES:
+            return False
+    return True
+
+
+def _tool_output_content(blocks: list[dict[str, Any]]) -> str:
+    """Tool output content blocks -> the observation's text.
+
+    harbor's ``Codex._tool_output_content``: text blocks keep their text, an
+    image becomes :func:`_tool_output_image_text`, and any other block (audio,
+    a resource, encrypted content) is kept as its JSON text; the parts are
+    joined by newlines.
+
+    DELIBERATE DIVERGENCE from harbor 0.24.0 for an inline image harbor can
+    decode: harbor writes it to ``<logs_dir>/images/codex_<sha256[:16]>.<ext>``
+    and returns a list of content parts with an image part pointing there. This
+    converter is pure and the corpus keeps attachments in its blob store, so the
+    image becomes the blob placeholder text the pre-pass
+    (:func:`~atif_converter.domain.blobs.extract_codex_blobs`) writes for the
+    same ``input_image``, and the content stays one string. The parity oracle
+    forgives exactly that (``tests/harbor_oracle.py::_image_content_forgiven``).
+    """
+    return "\n".join(_tool_output_block_text(block) for block in blocks)
+
+
+def _tool_output_block_text(block: dict[str, Any]) -> str:
+    block_type = block["type"]
+    text = block.get("text")
+    if block_type in _TOOL_OUTPUT_TEXT_TYPES and isinstance(text, str):
+        return text
+    if block_type in _TOOL_OUTPUT_IMAGE_TYPES:
+        return _tool_output_image_text(block)
+    return json.dumps(block, ensure_ascii=False)
+
+
+def _tool_output_image_text(block: dict[str, Any]) -> str:
+    """The text for an MCP image block or an ``input_image`` item.
+
+    harbor's ``Codex._tool_output_image_part`` and ``_save_tool_output_image``,
+    with the same texts for an image nobody can reference (``[image omitted]``)
+    and for a remote URL (``[image: <url>]``); an inline image harbor would save
+    becomes its blob placeholder (see :func:`_tool_output_content`).
+    """
+    if block["type"] == "image":
+        data = block.get("data")
+        media_type = block.get("mimeType") or block.get("mime_type")
+    else:
+        data = block.get("image_url")
+        media_type = None
+    if not isinstance(data, str):
+        return _IMAGE_OMITTED
+    if "://" in data and not data.startswith("data:"):
+        return f"[image: {data}]"
+
+    return _inline_image_text(data, media_type)
+
+
+def _inline_image_text(data: str, media_type: Any) -> str:
+    """An inline image's placeholder, or harbor's text when harbor would not save it."""
+    data_url = _BASE64_DATA_URL.fullmatch(data)
+    base64_text = data
+    if data_url is not None:
+        media_type, base64_text = data_url.group("media_type"), str(data_url.group("data"))
+    if not isinstance(media_type, str):
+        return _IMAGE_OMITTED
+    valid_media_type = _image_media_type(media_type)
+    if valid_media_type is None:
+        logger.debug("Unsupported Codex tool image type: {}", media_type)
+        return _IMAGE_OMITTED
+    ref = BlobCollector().add_base64("".join(base64_text.split()), valid_media_type)
+    if ref is None:
+        logger.debug("Failed to decode Codex tool image")
+        return _IMAGE_OMITTED
+    return ref.placeholder()
+
+
+def _image_media_type(value: str) -> str | None:
+    """The supported image MIME type for ``value``, as harbor's ``Codex._image_media_type`` maps it."""
+    media_type = value.strip().lower()
+    if media_type == "image/jpg":
+        media_type = "image/jpeg"
+    return media_type if media_type in _IMAGE_MEDIA_TYPES else None
 
 
 def _group_events_by_api_call_id(
@@ -616,6 +751,15 @@ def _normalize_events(
             if "url" in action:
                 arguments["url"] = action["url"]
 
+            # harbor 0.24.0 (harbor #2972): the call keeps Codex's own item id,
+            # or gets one unique within its request.
+            native_call_id = payload.get("id")
+            web_search_call_id = (
+                native_call_id
+                if isinstance(native_call_id, str) and native_call_id.strip()
+                else f"{current_api_call_id}_web_search_{tool_order_counter}"
+            )
+
             normalized_events.append(
                 {
                     "kind": "tool_call",
@@ -623,7 +767,7 @@ def _normalize_events(
                     "codex_turn_id": codex_turn_id,
                     "tool_order": tool_order_counter,
                     "timestamp": timestamp,
-                    "call_id": "",
+                    "call_id": web_search_call_id,
                     "tool_name": "web_search_call",
                     "arguments": arguments,
                     "raw_arguments": None,

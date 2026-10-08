@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Ported from harbor 0.23.0, src/harbor/agents/installed/claude_code.py
+# Ported from harbor 0.24.0, src/harbor/agents/installed/claude_code.py
 # (Apache-2.0, Copyright the Harbor authors), onto the ATIF models vendored in
 # atif_converter.domain.atif, so atif-converter doesn't depend on harbor.
 
@@ -559,7 +559,8 @@ def _collect_events(
     # Keep events in chronological order across the main chain and any
     # subagent sidechains, so the first user step remains the instruction
     # (downstream byte-identity checks rely on this) and step timestamps
-    # stay monotonic; sidechain steps are marked via `extra.is_sidechain`.
+    # stay monotonic; sidechain steps carry `extra.is_sidechain` and
+    # `extra.agent_id` so consumers can distinguish concurrent subagents.
     deduped_raw_events.sort(key=lambda e: e.get("timestamp", ""))
     return deduped_raw_events
 
@@ -593,6 +594,20 @@ def _agent_extra(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     if agent_ids:
         agent_extra["agent_ids"] = agent_ids
     return agent_extra or None
+
+
+def _event_identity_extra(event: dict[str, Any]) -> dict[str, Any]:
+    """Keep each Claude session event's agent identity on its ATIF step.
+
+    harbor 0.24.0's ``ClaudeCode._event_identity_extra`` (harbor #3434): every
+    step a session event becomes, the agent turn, a user message and a tool
+    result alike, carries ``is_sidechain`` and, when the event names one, the
+    ``agentId`` of the subagent that wrote it.
+    """
+    extra: dict[str, Any] = {"is_sidechain": event.get("isSidechain", False)}
+    if agent_id := event.get("agentId"):
+        extra["agent_id"] = agent_id
+    return extra
 
 
 def _last_usage_by_msg_id(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -638,20 +653,11 @@ def _normalize_assistant_event(
             extra[key] = value
     if event.get("id"):
         extra["id"] = event["id"]
-    # DELIBERATE DIVERGENCE from harbor 0.22.0, which reads ``agent_id``: every
-    # transcript spells the field ``agentId`` (the key ``_agent_extra`` above
-    # already reads), so harbor's lookup never matched and no sidechain step
-    # carried its subagent's id. The snake_case spelling is still honored for
-    # a record that has it. The parity oracle names this divergence
-    # (``tests/harbor_oracle.py::DELIBERATE_DIVERGENCES``).
-    agent_id = event.get("agentId") or event.get("agent_id")
-    if agent_id:
-        extra["agent_id"] = agent_id
+    extra.update(_event_identity_extra(event))
     if event.get("cwd"):
         extra.setdefault("cwd", event["cwd"])
     if event.get("userType") and event.get("userType") != "external":
         extra["user_type"] = event["userType"]
-    extra["is_sidechain"] = event.get("isSidechain", False)
 
     model_name = message.get("model") or state.default_model_name
 
@@ -777,7 +783,7 @@ def _normalize_tool_result_block(
 
     extra_val = call_info.get("extra")
     extra = extra_val if isinstance(extra_val, dict) else {}
-    extra["is_sidechain"] = event.get("isSidechain", False)
+    extra.update(_event_identity_extra(event))
     if metadata:
         extra.setdefault("tool_result_metadata", metadata)
     if block.get("is_error") is not None:
@@ -805,7 +811,7 @@ def _normalize_user_event(
         # first user step) hold; the strip is only the empty-skip filter.
         text = content
         if text.strip():
-            extra = {"is_sidechain": event.get("isSidechain", False)}
+            extra = _event_identity_extra(event)
             state.normalized_events.append(
                 {
                     "kind": "message",
@@ -860,7 +866,7 @@ def _normalize_user_event(
                     "timestamp": timestamp,
                     "role": "user",
                     "text": text_message,
-                    "extra": {"is_sidechain": event.get("isSidechain", False)},
+                    "extra": _event_identity_extra(event),
                 }
             )
         return
@@ -876,7 +882,7 @@ def _normalize_user_event(
                     "timestamp": timestamp,
                     "role": "user",
                     "text": text,
-                    "extra": {"is_sidechain": event.get("isSidechain", False)},
+                    "extra": _event_identity_extra(event),
                 }
             )
 

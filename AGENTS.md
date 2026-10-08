@@ -91,12 +91,12 @@ Rules of the road:
   `src/` imports nothing from either, and
   `packages/atif-converter/tests/test_dev_only_imports_guard.py` fails on any
   import, in any member. The ATIF data classes and the validator are harbor
-  0.23.0's, vendored under Apache-2.0 in `atif_converter.domain.atif` (each
+  0.24.0's, vendored under Apache-2.0 in `atif_converter.domain.atif` (each
   file byte for byte upstream apart from its header and import path; ruff and
   ty skip the directory so it stays that way). The raw-JSONL → `Trajectory`
   conversion is ours (`atif_converter.domain.claude_code_conversion`,
   `domain.codex_conversion`, ported from harbor and held to parity with
-  0.23.0). harbor survives in the tests
+  0.24.0). harbor survives in the tests
   as two oracles: its private converters in
   `packages/atif-converter/tests/harbor_oracle.py` (frozen goldens under
   `tests/goldens/`, plus a live-corpus parity test), and

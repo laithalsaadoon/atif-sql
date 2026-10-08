@@ -484,9 +484,9 @@ class TestTurnBundling:
         assert [s["message"] for s in out["steps"]] == ["go", "one", "two"]
 
     def test_event_extras_are_copied_onto_the_agent_step(self, tmp_path: Path) -> None:
-        """requestId is read off the MESSAGE, id/agent_id/cwd/userType off the EVENT; external userType is dropped."""
+        """requestId is read off the MESSAGE, id/agentId/cwd/userType off the EVENT; external userType is dropped."""
         record = _assistant(
-            "a1", "02", "x", id="ev-1", agent_id="ag-1", cwd="/w", userType="internal"
+            "a1", "02", "x", id="ev-1", agentId="ag-1", cwd="/w", userType="internal"
         )
         record["message"]["requestId"] = "req-1"
         record["message"]["stop_sequence"] = "STOP"
@@ -496,15 +496,89 @@ class TestTurnBundling:
             "stop_sequence": "STOP",
             "requestId": "req-1",
             "id": "ev-1",
+            "is_sidechain": False,
             "agent_id": "ag-1",
             "cwd": "/w",
             "user_type": "internal",
-            "is_sidechain": False,
         }
-        assert out["agent"]["extra"] == {"cwds": ["/w"]}
+        # harbor 0.24.0's key order: the identity keys follow ``id``.
+        assert list(out["steps"][1]["extra"]) == [
+            "stop_sequence",
+            "requestId",
+            "id",
+            "is_sidechain",
+            "agent_id",
+            "cwd",
+            "user_type",
+        ]
+        assert out["agent"]["extra"] == {"cwds": ["/w"], "agent_ids": ["ag-1"]}
+
+    def test_snake_case_agent_id_is_not_an_identity(self, tmp_path: Path) -> None:
+        """harbor 0.24.0 reads ``agentId`` alone; a record's ``agent_id`` key names no subagent."""
+        record = _assistant("a1", "02", "x", agent_id="ag-1")
+        out = _convert(tmp_path, [_user("u1", "01", "go"), record])
+        assert out is not None
+        assert "agent_id" not in out["steps"][1]["extra"]
 
 
 class TestSidechains:
+    def test_every_step_of_a_subagent_names_it(self, tmp_path: Path) -> None:
+        """harbor #3434: a subagent's prompt, tool turn, tool result and answer all carry its ``agentId``."""
+
+        def side(agent_id: str, ts: int, tool_id: str) -> list[dict[str, Any]]:
+            common = {"isSidechain": True, "agentId": agent_id}
+            return [
+                {**_user(f"{agent_id}-u1", f"{ts:02}", f"look at {agent_id}"), **common},
+                {
+                    **_assistant(
+                        f"{agent_id}-a1",
+                        f"{ts + 1:02}",
+                        [{"type": "tool_use", "id": tool_id, "name": "Read", "input": {}}],
+                        msg_id=f"m-{agent_id}-1",
+                    ),
+                    **common,
+                },
+                {
+                    **_user(
+                        f"{agent_id}-u2",
+                        f"{ts + 2:02}",
+                        [{"type": "tool_result", "tool_use_id": tool_id, "content": "ok"}],
+                    ),
+                    **common,
+                },
+                {
+                    **_assistant(
+                        f"{agent_id}-a2",
+                        f"{ts + 3:02}",
+                        f"{agent_id} done",
+                        msg_id=f"m-{agent_id}-2",
+                    ),
+                    **common,
+                },
+            ]
+
+        out = _convert(
+            tmp_path,
+            [_user("u1", "01", "go"), _assistant("a1", "30", "all done", msg_id="m-main")],
+            {
+                "agent-helper-1.jsonl": side("helper-1", 2, "t1"),
+                "agent-helper-2.jsonl": side("helper-2", 10, "t2"),
+            },
+        )
+        assert out is not None
+        steps = out["steps"]
+        sidechain = [s for s in steps if s["extra"]["is_sidechain"]]
+        # Per subagent: its prompt, its tool turn (result attached), its answer.
+        assert [s["extra"].get("agent_id") for s in sidechain] == ["helper-1"] * 3 + [
+            "helper-2"
+        ] * 3
+        assert [s["source"] for s in sidechain] == ["user", "agent", "agent"] * 2
+        tool_turns = [s for s in sidechain if s.get("observation")]
+        assert [s["observation"]["results"][0]["content"] for s in tool_turns] == ["ok", "ok"]
+        main = [s for s in steps if not s["extra"]["is_sidechain"]]
+        assert len(main) == 2
+        assert not any("agent_id" in s["extra"] for s in main)
+
     def test_main_chain_model_wins_over_an_earlier_sidechain_model(self, tmp_path: Path) -> None:
         """agent.model_name and the model-less fallback come from the main chain even when a sidechain is first."""
         side = [

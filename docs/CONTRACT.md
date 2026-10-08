@@ -187,10 +187,10 @@ proofs are out of scope for the workspace.
 ## Converter (atif-converter owns the conversion; harbor's ATIF models are the contract)
 0. src/ imports nothing from harbor (or litellm); both are dev dependencies.
    The ATIF data classes (harbor.models.trajectories, RFC 0001) and
-   harbor.utils.trajectory_validator are vendored from harbor 0.23.0
+   harbor.utils.trajectory_validator are vendored from harbor 0.24.0
    (Apache-2.0) as atif_converter.domain.atif and held to upstream by a
    conformance test. The raw-JSONL -> Trajectory conversion for both agents is
-   ours, ported from harbor 0.23.0 and held to PARITY with it by an oracle in
+   ours, ported from harbor and held to PARITY with harbor 0.24.0 by an oracle in
    atif-converter's tests: frozen goldens per synthetic fixture, plus a
    live-corpus diff.
 1. Side-file discovery: every *.jsonl under <session-stem>/ (including

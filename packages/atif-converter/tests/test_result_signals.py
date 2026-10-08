@@ -89,23 +89,30 @@ class TestSubagentAgentId:
         assert extra is not None
         assert extra["agent_id"] == "ag-7"
 
-    def test_harbor_differs_only_by_the_named_divergence(
+    def test_harbor_names_every_sidechain_step_the_same(
         self, parallel_subagent_session: Path
     ) -> None:
-        """The oracle still holds everywhere else, and the divergence is real."""
+        """harbor 0.24.0 (#3434) reads ``agentId`` too: every step's subagent id agrees."""
         require_harbor_private_api("claude-code")
         theirs = harbor_claude_code_trajectory(parallel_subagent_session)
         ours = convert_claude_code_session(parallel_subagent_session)
         assert theirs is not None
         assert ours is not None
-        raw = diff_paths(theirs, ours.to_json_dict())
-        agent_id_lines = [line for line in raw if ".extra.agent_id: only in ours" in line]
-        assert agent_id_lines, "the fixture must exercise the divergence the filter names"
+        ours_dict = ours.to_json_dict()
+        sidechain = [s for s in theirs["steps"] if s["extra"]["is_sidechain"]]
+        # Not vacuous: harbor names a subagent on prompts, tool turns and answers.
+        assert len(sidechain) == 6
+        assert all(s["extra"].get("agent_id") in {"aaa", "bbb"} for s in sidechain)
+        assert [s["extra"].get("agent_id") for s in theirs["steps"]] == [
+            s["extra"].get("agent_id") for s in ours_dict["steps"]
+        ]
+        raw = diff_paths(theirs, ours_dict)
+        assert not [line for line in raw if ".extra.agent_id:" in line]
         # The fixture's model has no price, so the pricing policy's own named
-        # divergence (NULL, not harbor's $0), per session and per step, shows up
-        # beside it, and harbor's set-ordered ``agent.extra.agent_ids`` may come
-        # out reversed; nothing else may.
-        others = {line.split(":", 1)[0] for line in raw if line not in agent_id_lines}
+        # divergence (NULL, not harbor's $0), per session and per step, shows up,
+        # and harbor's set-ordered ``agent.extra.agent_ids`` may come out
+        # reversed; nothing else may.
+        others = {line.split(":", 1)[0] for line in raw}
         step_paths = {
             path.format(i=index)
             for index in range(len(ours.steps))
@@ -118,7 +125,7 @@ class TestSubagentAgentId:
             *step_paths,
             *order_paths,
         }
-        assert parity_diffs(theirs, ours.to_json_dict()) == []
+        assert parity_diffs(theirs, ours_dict) == []
 
 
 class TestSubagentLinks:
