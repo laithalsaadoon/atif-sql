@@ -27,7 +27,7 @@ value: `atif_converter.domain.pricing` returns the same floats, bit for bit,
 without litellm being installed. It reads `domain/model_prices.json`, a
 filtered copy of litellm's public `model_prices_and_context_window.json` (MIT;
 the notice and source ref are in its `meta` block), and repeats litellm
-1.102.0's arithmetic in the same float operation order. The table holds the
+1.103.2's arithmetic in the same float operation order. The table holds the
 Claude and OpenAI text models our transcripts name under the `anthropic`,
 `openai`, `bedrock` and `bedrock_converse` providers, and keeps litellm's
 `fallback_generalizations` rules, which route an unmapped `claude-<family>-<n>`
