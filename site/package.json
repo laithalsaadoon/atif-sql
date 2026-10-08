@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Documentation site for atif-sql, with the machine-readable surface an agent fetches.",
   "license": "Apache-2.0",
-  "packageManager": "pnpm@11.27.1",
+  "packageManager": "pnpm@12.10.1",
   "engines": {
     "node": ">=22"
   },
