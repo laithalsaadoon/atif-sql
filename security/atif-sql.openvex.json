@@ -4,7 +4,55 @@
   "author": "atif-sql maintainers",
   "role": "document creator",
   "timestamp": "2026-08-28T17:06:14Z",
-  "version": 1,
+  "version": 2,
   "tooling": "hand-authored; rendered to osv-scanner.toml by scripts/vex_to_osv_config.py",
-  "statements": []
+  "statements": [
+    {
+      "@id": "https://github.com/laithalsaadoon/atif-sql/security/atif-sql.openvex.json#braces-3.0.3",
+      "vulnerability": {
+        "name": "GHSA-vfj7-8cjw-p6xm",
+        "@id": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "aliases": [
+          "CVE-2026-93687"
+        ],
+        "description": "braces through 3.0.3: stack exhaustion in the recursive AST walkers on deeply nested brace patterns. No patched release exists."
+      },
+      "timestamp": "2026-10-08T17:45:00Z",
+      "products": [
+        {
+          "@id": "pkg:npm/braces@3.0.3",
+          "identifiers": {
+            "purl": "pkg:npm/braces@3.0.3"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_cannot_be_controlled_by_adversary",
+      "impact_statement": "braces reaches the docs site (site/) on exactly one path, read with `pnpm why braces` on 2026-10-08: starlight-llms-txt 0.12.0 -> micromatch 4.0.8 -> braces 3.0.3. It is a build-time dependency of the static docs site and ships in no atif-sql package or CLI. The vulnerable input is the brace PATTERN, and the only call sites are `micromatch.isMatch(doc.id, pattern)` in starlight-llms-txt's generator.ts, where the doc id is the string matched and never expanded. The only patterns that reach it are the literals `[\"agents\", \"index*\"]` that site/astro.config.ts passes as `promote`; `include`, `exclude` and `demote` are unset. Those literals are authored in this repository, contain no braces and are reviewed in pull requests, so no outside party chooses a pattern, and a crash would abort a local or CI docs build rather than serve anyone. Revisit when the docs build takes patterns from the environment, a content file or a contributor-supplied config, or when braces publishes a release newer than 3.0.3."
+    },
+    {
+      "@id": "https://github.com/laithalsaadoon/atif-sql/security/atif-sql.openvex.json#http-cache-semantics-4.2.0",
+      "vulnerability": {
+        "name": "GHSA-ch52-4w7c-c8xp",
+        "@id": "https://github.com/advisories/GHSA-ch52-4w7c-c8xp",
+        "aliases": [
+          "CVE-2026-93748"
+        ],
+        "description": "http-cache-semantics through 4.2.0: a shared-cache entry zeroed for security can be returned for a client max-stale request, disclosing another user's cached Set-Cookie. No patched release exists."
+      },
+      "timestamp": "2026-10-08T17:45:00Z",
+      "products": [
+        {
+          "@id": "pkg:npm/http-cache-semantics@4.2.0",
+          "identifiers": {
+            "purl": "pkg:npm/http-cache-semantics@4.2.0"
+          }
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "http-cache-semantics reaches the docs site (site/) on exactly one path, read with `pnpm why http-cache-semantics` on 2026-10-08: astro 7.3.5 -> http-cache-semantics 4.2.0, a build-time dependency that ships in no atif-sql package or CLI. astro's only use is `dist/assets/build/remote.js`, which builds a CachePolicy to decide how long a downloaded REMOTE image may be cached during `astro build`. The docs site has no remote image: site/astro.config.ts sets no `image` option (no `domains`, no `remotePatterns`, so astro's default allows none), and grep over site/src, site/authored and docs/ finds no `astro:assets` image component and no markdown image with an http(s) source on 2026-10-08. The advisory needs a shared cache that answers many users' requests; here the one request is the build's own fetch, built by astro without a max-stale directive, in one process, and the output is a static directory. Nothing serves other users' cached responses. Revisit when the site adds a remote image, an SSR adapter or any shared HTTP cache, or when a release newer than 4.2.0 appears."
+    }
+  ],
+  "last_updated": "2026-10-08T17:45:00Z"
 }
