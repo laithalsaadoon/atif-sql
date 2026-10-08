@@ -27,7 +27,7 @@
       "total_tokens": 1108
     },
     "total_completion_tokens": 8,
-    "total_cost_usd": 0.00198,
+    "total_cost_usd": 0.003105,
     "total_prompt_tokens": 1100,
     "total_steps": 4
   },
@@ -65,7 +65,7 @@
       "message": "",
       "metrics": {
         "completion_tokens": 40,
-        "cost_usd": 0.0005250000000000001,
+        "cost_usd": 0.0016500000000000002,
         "extra": {
           "cache_write_input_tokens": 900,
           "reasoning_output_tokens": 0,

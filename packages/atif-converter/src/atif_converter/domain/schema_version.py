@@ -46,12 +46,19 @@ History:
 * 5 — Claude Code ``agent.extra`` lists (``cwds``, ``git_branches``,
   ``agent_ids``) in first-seen order instead of set order, so a session
   converts to the same bytes in every process.
+* 6 — prices from litellm v1.103.2, whose arithmetic bills cache writes and
+  cache reads at the input rate for a model that publishes no cache-creation
+  or cache-read rate (every OpenAI text model's cache writes, and cached
+  tokens of the 46 entries with no cache-read rate), where v1.102.0 billed
+  them $0. The table also adds flex rates for gpt-5.1 and gpt-5.2 and moves
+  o4-mini's flex cache-read rate. ``total_cost_usd`` and ``metrics.cost_usd``
+  change for every such session.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 5
+CONVERTER_SCHEMA_VERSION: Final = 6
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

@@ -31,7 +31,10 @@ SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "update_prices.py"
 #: (model, (prompt, completion, cache_creation, cache_read), tier, expected), captured
 #: from ``litellm.cost_per_token`` 1.100.1 on 2026-09-27, apart from the two gpt-5.5
 #: priority rows, re-captured from 1.102.0 on 2026-09-28 after upstream raised those
-#: rates. They hold the arithmetic still when litellm isn't installed to compare against.
+#: rates, and the eight gpt-5.1-codex and gpt-5.5 rows, re-captured from 1.103.2 on
+#: 2026-10-08 once litellm billed cache writes at the input rate for a model with no
+#: cache-creation rate. They hold the arithmetic still when litellm isn't installed to
+#: compare against.
 FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, float]]] = [
     ("claude-opus-5", (1234, 567, 8901, 23456), "standard", (0.06735925, 0.014175)),
     ("claude-opus-5", (238085, 12582, 214679, 238085), "standard", (1.46078625, 0.31455)),
@@ -110,30 +113,30 @@ FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, floa
         "gpt-5.1-codex",
         (1234, 567, 8901, 23456),
         "standard",
-        (0.0029319999999999997, 0.0056700000000000006),
+        (0.014058250000000001, 0.0056700000000000006),
     ),
     (
         "gpt-5.1-codex",
         (1234, 567, 8901, 23456),
         "priority",
-        (0.005863999999999999, 0.011340000000000001),
+        (0.028116500000000003, 0.011340000000000001),
     ),
     (
         "gpt-5.1-codex",
         (238085, 12582, 214679, 238085),
         "standard",
-        (0.029760625, 0.12582000000000002),
+        (0.298109375, 0.12582000000000002),
     ),
     (
         "gpt-5.1-codex",
         (238085, 12582, 214679, 238085),
         "priority",
-        (0.05952125, 0.25164000000000003),
+        (0.59621875, 0.25164000000000003),
     ),
-    ("gpt-5.5", (1234, 567, 8901, 23456), "standard", (0.011727999999999999, 0.01701)),
-    ("gpt-5.5", (1234, 567, 8901, 23456), "priority", (0.029320000000000002, 0.04252499999999999)),
-    ("gpt-5.5", (238085, 12582, 214679, 238085), "standard", (0.1190425, 0.37746)),
-    ("gpt-5.5", (238085, 12582, 214679, 238085), "priority", (0.29760625, 0.9436499999999999)),
+    ("gpt-5.5", (1234, 567, 8901, 23456), "standard", (0.056233000000000005, 0.01701)),
+    ("gpt-5.5", (1234, 567, 8901, 23456), "priority", (0.1405825, 0.04252499999999999)),
+    ("gpt-5.5", (238085, 12582, 214679, 238085), "standard", (1.1924375, 0.37746)),
+    ("gpt-5.5", (238085, 12582, 214679, 238085), "priority", (2.98109375, 0.9436499999999999)),
 ]
 
 UNKNOWN_CLAUDE = "claude-newfamily-7"
