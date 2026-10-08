@@ -412,7 +412,9 @@ the derived example must execute — or a documented `EXCLUSIONS` entry.
 ## Definition of done
 
 `mise run check` fully green (lint + fmt + typecheck + lint:imports + lint:workflows +
-lint:hooks + lint:pnpm-lock + test). `mise run security` is the report-only tier beside it: findings do not fail
+lint:hooks + lint:pnpm-lock + security:vex:check + docs:prose + test). `docs:prose` is Vale over
+the published prose (docs/, site/authored/, README.md, AGENTS.md) at error level: reword the
+sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. `mise run security` is the report-only tier beside it: findings do not fail
 it, a scanner that produced no usable SARIF does.
 First-time setup: `mise trust && mise install && mise run install`.
 

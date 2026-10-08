@@ -127,7 +127,7 @@ fixed by changing the environment.
   shipping undocumented.
 
 - **Embedding without a scope, or with `--all` on a corpus you have not sized.** `--dry-run` prints the
-  plan for free. Read it first.
+  plan at no cost. Read it first.
 
 ## 6. Read next
 

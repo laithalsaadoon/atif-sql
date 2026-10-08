@@ -43,7 +43,7 @@ Contracts are ordered by confirmed consumer count, descending.
 
 **Producer:** `packages/atif-corpus/src/atif_corpus/domain/layout.py:18-22`
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py:210-213` — inlines the
   filenames as SQL glob literals for its `read_json` readers.
@@ -90,7 +90,7 @@ producer through the `ArtifactProducer` port and merges the returned keys into `
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:171-180` does the same and logs a warning. Nothing in the file layout expresses
   this — it is a write-ORDER promise made at
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:209-212`.
-- **No reader ever sees a partially-written directory**, because the writer stages all the
+- **No reader ever sees a partially written directory**, because the writer stages all the
   artifacts under `<corpus_root>/.staging/` and swaps the whole dir with `os.replace`
   (`packages/atif-corpus/src/atif_corpus/application/materialize.py:201-212`), and `.staging` is deliberately outside `sessions/` so a DuckDB glob
   cannot reach it (`packages/atif-corpus/src/atif_corpus/domain/layout.py:50-54`).
@@ -131,7 +131,7 @@ write side — any layout change starts there and then greps the reader modules 
 `ANALYTICS_VIEW_SCHEMA:328`, `ANALYTICS_MACRO_SIGNATURES:397`, `TABLE_MACRO_NAMES:413`,
 `DESCRIPTIONS:431`
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-cli/src/atif_cli/app.py:1745-1778` — the `schema` command reads `VIEW_SCHEMA`,
   `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES`, tags each object
@@ -204,7 +204,7 @@ drift test against a store built at a non-default `output_dimension` before chan
 
 **Producer:** `pyproject.toml:462-523`
 
-**Consumer(s):**
+**Consumers:**
 
 - `mise.toml:197` — `lint:imports` is one of the `mise run check` gates, so the build is
   the consumer.
@@ -278,7 +278,7 @@ either a `layers` contract or a place in the `independence` list in the same com
 
 **Producer:** `packages/atif-models/src/atif_models/domain/ports.py:116`
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:65` (annotated at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:98`, `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:375`)
@@ -353,7 +353,7 @@ mismatched adapter fails the typecheck gate.
 
 **Producer:** `packages/atif-converter/src/atif_converter/domain/edges.py:22-32`
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py:107-117` — `_EDGE_COLUMNS`, the
   same keys in the same order with DuckDB types.
@@ -408,7 +408,7 @@ editing `packages/atif-duck/src/atif_duck/infrastructure/registry.py:107-117` in
 
 **Producer:** `packages/atif-embed/src/atif_embed/domain/ports.py:31`, `packages/atif-embed/src/atif_embed/domain/ports.py:59`, `packages/atif-embed/src/atif_embed/domain/ports.py:87`
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-embed/src/atif_embed/application/embed.py:35` — imports every one of them; annotated at
   `packages/atif-embed/src/atif_embed/application/embed.py:46-47` and `packages/atif-embed/src/atif_embed/application/embed.py:65-67`.
@@ -497,7 +497,7 @@ construction from settings — `packages/atif-embed/src/atif_embed/infrastructur
 **Producer:** `packages/atif-corpus/src/atif_corpus/domain/ports.py:41` (`ConverterPort`) and `packages/atif-corpus/src/atif_corpus/domain/ports.py:21`
 (`ConversionOutput`)
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-corpus/src/atif_corpus/application/materialize.py:92` — imports the port;
   annotated at `packages/atif-corpus/src/atif_corpus/application/materialize.py:193` and `packages/atif-corpus/src/atif_corpus/application/materialize.py:480`.
@@ -543,7 +543,7 @@ class ConverterPort(Protocol):
   verifies. Delete that test and a signature change on either side becomes a runtime
   `AttributeError` at materialize time.
 - **The port is typed to `docs/CONTRACT.md`'s artifact shapes, not to converter internals** —
-  loosely-typed `dict[str, Any]` / `list[str]` fields instead of the converter's own
+  loosely typed `dict[str, Any]` / `list[str]` fields instead of the converter's own
   `ConversionResult`. The docstring at `packages/atif-corpus/src/atif_corpus/domain/ports.py:3-10` names the independence contract as the
   reason, so the weak typing is the contract, not an omission.
 - **Exceptions cross this port by design.** `packages/atif-corpus/src/atif_corpus/domain/ports.py:44-47` says an implementation may raise
@@ -574,7 +574,7 @@ the contract, not as a redundant smoke test — and
 **Producer:** `packages/atif-duck/src/atif_duck/infrastructure/registry.py:41-44` (the semantics)
 and `packages/atif-duck/src/atif_duck/domain/catalog.py:405` (`DEFAULT_PRICING`)
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1066-1083` — the `cost_estimate`
   macro, which consumes both.
@@ -636,7 +636,7 @@ attribute the field by module path, and read the producer docstring
 `packages/atif-embed/src/atif_embed/domain/embedding_guard.py:38`, and
 `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:33` with the rule at `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:46`
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-embed/src/atif_embed/application/embed.py:166-175` — the WRITE path calls
   `ensure_store_matches` before appending.
@@ -703,7 +703,7 @@ which is what both docstrings instruct.
 `harbor.utils.trajectory_validator` at harbor 0.22.0, vendored as `packages/atif-converter/src/atif_converter/domain/atif/`
 (`UPSTREAM_VERSION` in its `__init__`); harbor itself is a dev dependency
 
-**Consumer(s):**
+**Consumers:**
 
 - `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75` — `convert_claude_code_records`, our Claude Code converter, a parity port of harbor
   0.22.0's, building `Trajectory` / `Step` / `ToolCall` / `Metrics` from the public models.
@@ -741,7 +741,7 @@ DEV_ONLY: frozenset[str] = frozenset({"harbor", "litellm"})
 **Producer:** `packages/atif-cli/pyproject.toml:32-36` and
 `packages/atif-analytics/pyproject.toml:24`
 
-**Consumer(s):**
+**Consumers:**
 
 - `pyproject.toml:446-452` — commitizen's `version_files`, which rewrites every pin on each bump.
 - `packages/atif-cli/pyproject.toml:56-60` — `[tool.uv.sources]`, the local-workspace resolution
@@ -817,7 +817,7 @@ rather than skipping a file that no longer contains the current version — the 
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:115-121`, of which the
   `message_embeddings` view exposes only some
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:218-224`). `text_hash` and `truncated` are
-  unreachable from SQL, so a query cannot distinguish a head-only-embedded row from a complete one.
+  unreachable from SQL, so a query cannot distinguish a row embedded from its head alone from a complete one.
 - **The Lance schema version sidecar** — `SCHEMA_VERSION = 2` and `schema_version.json` at
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:61-67`, kept as a sidecar rather
   than a column because reading it must not require the table.

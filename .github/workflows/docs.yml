@@ -51,6 +51,11 @@ jobs:
           # assets. `version` stays unpinned so the runner keeps following mise, gated by that day.
           minimum_release_age: 24h
 
+      # Vale over the same published prose, from the styles committed under .vale/styles, so
+      # it needs no network. `mise run check` runs it too; here it gates a docs-only change
+      # in the workflow that publishes the text.
+      - run: mise run docs:prose
+
       - run: mise run docs:install
 
       - name: gate the site

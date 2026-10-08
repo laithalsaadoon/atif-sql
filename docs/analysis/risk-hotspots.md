@@ -26,7 +26,7 @@ as uncovered, because `exclude_also` drops a Protocol's `...` body while still m
 Note (2026-09-27): the scores, LOC figures, and coverage below were measured before the trajectory
 and structural pipelines were cut. `atif_analytics.application.use_cases.trajectory`, `.community`,
 and `.cluster` no longer exist, and `parquet_cache` lost `replace_sessions` (the trajectory
-pipeline was its one caller) and with it `_shard_may_hold`, so part of that file's drill-down
+pipeline was its one caller) and with it `_shard_may_hold`, so part of that file's breakdown
 describes code that's gone. The ranking hasn't been re-measured.
 
 | File | Trend | Open findings | Top owner | Citation |
@@ -53,7 +53,7 @@ ruff suppresses per line — `ruff check --select S608 packages/` exits clean wh
 interpolates (`pyproject.toml:150-152`). The scanner tier therefore carries no unaudited exposure,
 which is why coverage, complexity, and concurrency carry the ranking instead.
 
-## Per-file drill-down
+## Per-file breakdown
 
 ### `atif_duck.infrastructure.registry`
 
