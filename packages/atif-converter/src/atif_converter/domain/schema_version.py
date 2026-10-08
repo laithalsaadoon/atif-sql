@@ -65,12 +65,19 @@ History:
   keeps its raw text (harbor #3467). A Codex ``web_search_call`` carries its
   item id, or ``<api call>_web_search_<n>``, where its id was empty (harbor
   #2972).
+* 8 — every Codex tool output image the port writes a blob placeholder for is
+  lifted by the pre-pass too: an MCP ``image`` block with inline base64 (by
+  ``mimeType`` or ``mime_type``), and an ``input_image`` whose data URL
+  carries parameters or whose base64 is wrapped. Its bytes reach the blob
+  store, its result carries ``extra.images``, and a tool output list the port
+  dumps as JSON (one element of an unknown type) holds the placeholder item
+  where it held the base64. Placeholder text is unchanged.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 7
+CONVERTER_SCHEMA_VERSION: Final = 8
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

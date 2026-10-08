@@ -36,8 +36,15 @@ Code shapes carry base64 and each is handled:
 
 In a Codex rollout the shape is ``{"type": "input_image", "image_url":
 "data:<media>;base64,<data>"}`` inside a ``response_item`` message's content
-or a tool output list. A base64 value anywhere else (a tool CALL's own
-arguments, for instance) is the model's input and is left alone.
+or a tool output list. A tool output list can also carry an MCP image block,
+``{"type": "image", "data": "<base64>", "mimeType": "image/png"}``. The
+converter's harbor port names every inline image in a tool output it can save
+by a placeholder (:func:`codex_tool_image_ref` is its rule: a supported image
+type, a payload that decodes once whitespace is removed, data URL parameters
+allowed), so a tool output's MCP image, and an ``input_image`` the strict data
+URL match above misses, is lifted by that same rule and the placeholder names
+bytes the collector holds. A base64 value anywhere else (a tool CALL's own
+arguments, an ``image`` block in message content) is left alone.
 
 Replacement is by block: an attachment block becomes a TEXT block holding the
 placeholder (``input_text`` for Codex), which is the one block type every
@@ -83,6 +90,15 @@ _OCTET_STREAM = "application/octet-stream"
 
 #: A Codex data URL: ``data:<media>;base64,<payload>``.
 _DATA_URL_RE = re.compile(r"^data:([^;,]{1,128});base64,", re.ASCII)
+
+#: The image types harbor 0.24.0 saves from a Codex tool output
+#: (``Codex._image_media_type``); any other type is ``[image omitted]`` there.
+CODEX_TOOL_IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+#: harbor's data URL for a Codex tool output image: parameters allowed before ``;base64``.
+_TOOL_IMAGE_DATA_URL = re.compile(
+    r"data:(?P<media_type>[^;,]+)(?:;[^;,]*)*;base64,(?P<data>.*)", re.DOTALL
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,9 +336,54 @@ def extract_claude_code_blobs(records: Iterable[Any], collector: BlobCollector) 
 # ---------------------------------------------------------------------------
 
 
-def _codex_image_ref(item: Any, collector: BlobCollector) -> BlobRef | None:
-    if not isinstance(item, dict) or item.get("type") != "input_image":
+def codex_tool_image_media_type(value: str) -> str | None:
+    """The supported image MIME type for ``value``, as harbor's ``Codex._image_media_type`` maps it."""
+    media_type = value.strip().lower()
+    if media_type == "image/jpg":
+        media_type = "image/jpeg"
+    return media_type if media_type in CODEX_TOOL_IMAGE_MEDIA_TYPES else None
+
+
+def codex_tool_image_ref(data: str, media_type: Any, collector: BlobCollector) -> BlobRef | None:
+    """Register one inline Codex tool output image the way harbor 0.24.0 would save it.
+
+    ``data`` is base64 or a ``data:`` URL (whose media type then wins over
+    ``media_type``); harbor saves it only when the media type is one of
+    :data:`CODEX_TOOL_IMAGE_MEDIA_TYPES` and the payload, with whitespace
+    removed, decodes. ``None`` means harbor would write ``[image omitted]``:
+    nothing is registered. The converter's port and the pre-pass both call
+    this, so the placeholder text and the stored blob agree byte for byte.
+    """
+    data_url = _TOOL_IMAGE_DATA_URL.fullmatch(data)
+    base64_text = data
+    if data_url is not None:
+        media_type, base64_text = data_url.group("media_type"), str(data_url.group("data"))
+    if not isinstance(media_type, str):
         return None
+    valid_media_type = codex_tool_image_media_type(media_type)
+    if valid_media_type is None:
+        return None
+    return collector.add_base64("".join(base64_text.split()), valid_media_type)
+
+
+def _mcp_image_ref(item: dict[str, Any], collector: BlobCollector) -> BlobRef | None:
+    """An MCP ``image`` block's ref, read the way the converter's port reads it."""
+    data = item.get("data")
+    if not isinstance(data, str) or ("://" in data and not data.startswith("data:")):
+        return None
+    return codex_tool_image_ref(data, item.get("mimeType") or item.get("mime_type"), collector)
+
+
+def _tool_input_image_ref(item: dict[str, Any], collector: BlobCollector) -> BlobRef | None:
+    """A tool output ``input_image``'s ref by the port's rule (see :func:`codex_tool_image_ref`)."""
+    url = item.get("image_url")
+    if not isinstance(url, str) or ("://" in url and not url.startswith("data:")):
+        return None
+    return codex_tool_image_ref(url, None, collector)
+
+
+def _input_image_ref(item: dict[str, Any], collector: BlobCollector) -> BlobRef | None:
+    """An ``input_image`` item's ref when its ``image_url`` is a base64 data URL."""
     url = item.get("image_url")
     if not isinstance(url, str):
         return None
@@ -332,10 +393,28 @@ def _codex_image_ref(item: Any, collector: BlobCollector) -> BlobRef | None:
     return collector.add_base64(url[match.end() :], match.group(1))
 
 
-def _rewrite_codex_items(items: list[Any], collector: BlobCollector) -> list[BlobRef]:
+def _codex_image_ref(item: Any, collector: BlobCollector, *, tool_output: bool) -> BlobRef | None:
+    if not isinstance(item, dict):
+        return None
+    item_type = item.get("type")
+    if item_type == "input_image":
+        ref = _input_image_ref(item, collector)
+        if ref is None and tool_output:
+            # The port's rule is wider (data URL parameters, whitespace in
+            # the payload); whatever it would name, the collector must hold.
+            ref = _tool_input_image_ref(item, collector)
+        return ref
+    if item_type == "image" and tool_output:
+        return _mcp_image_ref(item, collector)
+    return None
+
+
+def _rewrite_codex_items(
+    items: list[Any], collector: BlobCollector, *, tool_output: bool = False
+) -> list[BlobRef]:
     refs: list[BlobRef] = []
     for position, item in enumerate(items):
-        ref = _codex_image_ref(item, collector)
+        ref = _codex_image_ref(item, collector, tool_output=tool_output)
         if ref is None:
             continue
         items[position] = {"type": "input_text", "text": ref.placeholder()}
@@ -348,7 +427,11 @@ def extract_codex_blobs(
     collector: BlobCollector,
     record_keys: Sequence[str] | None = None,
 ) -> BlobIndex:
-    """Rewrite every inline ``input_image`` data URL in a rollout's response items.
+    """Rewrite every inline image in a rollout's response items.
+
+    An ``input_image`` data URL is lifted from message content and tool
+    outputs; an MCP ``image`` block with inline base64 only from a tool output
+    list, by :func:`codex_tool_image_ref`'s rule.
 
     ``record_keys`` (parallel to ``records``) names each record the way the
     enrichment pass names it in ``source_uuids``; without it, attachments in
@@ -371,16 +454,20 @@ def extract_codex_blobs(
             output = payload.get("output")
             if isinstance(output, list):
                 index.add_tool_result(
-                    payload.get("call_id"), _rewrite_codex_items(output, collector)
+                    payload.get("call_id"),
+                    _rewrite_codex_items(output, collector, tool_output=True),
                 )
     return index
 
 
 __all__ = [
+    "CODEX_TOOL_IMAGE_MEDIA_TYPES",
     "Blob",
     "BlobCollector",
     "BlobIndex",
     "BlobRef",
+    "codex_tool_image_media_type",
+    "codex_tool_image_ref",
     "extract_claude_code_blobs",
     "extract_codex_blobs",
 ]

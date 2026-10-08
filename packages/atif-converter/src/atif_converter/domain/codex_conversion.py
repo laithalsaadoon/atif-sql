@@ -65,7 +65,6 @@ Pure over already-parsed records in FILE order: no file I/O, no
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Literal
 
 from loguru import logger
@@ -82,7 +81,7 @@ from atif_converter.domain.atif import (
     ToolCall,
     Trajectory,
 )
-from atif_converter.domain.blobs import BlobCollector
+from atif_converter.domain.blobs import BlobCollector, codex_tool_image_ref
 from atif_converter.domain.codex_enrichment import message_text
 
 #: The schema version harbor 0.22.0 stamps on a Codex trajectory.
@@ -100,11 +99,6 @@ _TOOL_OUTPUT_CONTENT_TYPES = (
     _TOOL_OUTPUT_TEXT_TYPES
     | _TOOL_OUTPUT_IMAGE_TYPES
     | frozenset({"audio", "input_audio", "resource", "resource_link", "encrypted_content"})
-)
-#: The image types harbor stores; anything else is ``[image omitted]``.
-_IMAGE_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
-_BASE64_DATA_URL = re.compile(
-    r"data:(?P<media_type>[^;,]+)(?:;[^;,]*)*;base64,(?P<data>.*)", re.DOTALL
 )
 #: harbor's text for an image it cannot reference.
 _IMAGE_OMITTED = "[image omitted]"
@@ -224,30 +218,19 @@ def _tool_output_image_text(block: dict[str, Any]) -> str:
 
 
 def _inline_image_text(data: str, media_type: Any) -> str:
-    """An inline image's placeholder, or harbor's text when harbor would not save it."""
-    data_url = _BASE64_DATA_URL.fullmatch(data)
-    base64_text = data
-    if data_url is not None:
-        media_type, base64_text = data_url.group("media_type"), str(data_url.group("data"))
-    if not isinstance(media_type, str):
-        return _IMAGE_OMITTED
-    valid_media_type = _image_media_type(media_type)
-    if valid_media_type is None:
-        logger.debug("Unsupported Codex tool image type: {}", media_type)
-        return _IMAGE_OMITTED
-    ref = BlobCollector().add_base64("".join(base64_text.split()), valid_media_type)
+    """An inline image's placeholder, or harbor's text when harbor would not save it.
+
+    The rule is :func:`~atif_converter.domain.blobs.codex_tool_image_ref`, the
+    one the pre-pass lifts the same image by, so in production the pre-pass has
+    already replaced the image with this placeholder and stored its bytes; the
+    throwaway collector here only names the bytes when the records were not
+    pre-passed.
+    """
+    ref = codex_tool_image_ref(data, media_type, BlobCollector())
     if ref is None:
-        logger.debug("Failed to decode Codex tool image")
+        logger.debug("Unsupported or undecodable Codex tool image: {}", media_type)
         return _IMAGE_OMITTED
     return ref.placeholder()
-
-
-def _image_media_type(value: str) -> str | None:
-    """The supported image MIME type for ``value``, as harbor's ``Codex._image_media_type`` maps it."""
-    media_type = value.strip().lower()
-    if media_type == "image/jpg":
-        media_type = "image/jpeg"
-    return media_type if media_type in _IMAGE_MEDIA_TYPES else None
 
 
 def _group_events_by_api_call_id(
