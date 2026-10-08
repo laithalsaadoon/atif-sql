@@ -60,7 +60,7 @@ shellcheck = "latest"
 # declaration order, and node's own bin holds a `pnpm` shim wherever `corepack enable` has
 # run — so with node first, every pnpm call goes through corepack and this pin is inert.
 # This version and `packageManager` in site/package.json must agree.
-pnpm = "11.27.1"
+pnpm = "12.10.1"
 node = "24"
 
 [env]
