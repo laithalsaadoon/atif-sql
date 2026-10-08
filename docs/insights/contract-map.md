@@ -761,7 +761,7 @@ dependencies = [
     "atif-corpus==0.1.0",
     "atif-duck==0.1.0",
     "atif-embed==0.1.0",
-    "cyclopts>=4.10.2",
+    "cyclopts>=5.1.1",
     "loguru>=0.7.3",
 ]
 ```

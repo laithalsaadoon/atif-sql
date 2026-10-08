@@ -34,7 +34,7 @@ dependencies = [
     "atif-corpus==0.1.0",
     "atif-duck==0.1.0",
     "atif-embed==0.1.0",
-    "cyclopts>=4.10.2",
+    "cyclopts>=5.1.1",
     # Imported directly by duck_errors.py to classify a DuckDB failure into the
     # parse/catalog/runtime exit-code taxonomy. Reaching it transitively through
     # atif-duck would make this package's exit codes depend on a sibling's

@@ -2368,6 +2368,10 @@ def main() -> None:
     An unknown level falls back to WARNING and says so, rather than replacing
     the caller's command with a loguru traceback — a bad log level is not a
     reason to refuse to run.
+
+    A usage error cyclopts refuses (an unknown option, a missing or uncoercible
+    value) exits ``EXIT_CODES["invalid_input"]`` (64) after cyclopts prints its
+    error panel, never cyclopts' own 2, which the table gives to ``empty_session``.
     """
     from loguru import logger
 
@@ -2380,7 +2384,13 @@ def main() -> None:
         logger.warning(
             "{}={!r} is not a loguru level; using {}", LOG_LEVEL_ENV, level, DEFAULT_LOG_LEVEL
         )
-    app()
+    try:
+        app(sys.argv[1:], exit_on_error=False)
+    except cyclopts.CycloptsError:
+        # cyclopts 5 exits 2 on a usage error (unknown option, missing or uncoercible
+        # value), and EXIT_CODES gives 2 to empty_session and no_embeddings. A malformed
+        # flag is invalid_input. cyclopts has already printed its error panel.
+        raise SystemExit(EXIT_CODES["invalid_input"]) from None
 
 
 __all__ = [

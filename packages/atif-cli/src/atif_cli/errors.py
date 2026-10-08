@@ -8,7 +8,9 @@ meaning: 64 for malformed input or SQL, 65 for a catalog miss (unknown
 view/macro/column), 70 for a runtime error. No other package owns a mapping —
 atif-converter raises typed :class:`~atif_converter.domain.errors.DomainError`
 subclasses and deliberately carries no codes, so ``convert`` translates them
-here and every command exits from the same dict.
+here and every command exits from the same dict. A usage error cyclopts
+refuses exits ``invalid_input``: ``atif_cli.app.main`` maps cyclopts 5's own
+exit 2, which this table gives to ``empty_session``.
 
 A number in this dict is a WIRE CONTRACT. An agent branches on it, so
 reassigning an existing key to a different number is a breaking change even
