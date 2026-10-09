@@ -414,7 +414,7 @@ the derived example must execute — or a documented `EXCLUSIONS` entry.
 `mise run check` fully green (lint + fmt + typecheck + lint:imports + lint:workflows +
 lint:hooks + lint:pnpm-lock + security:vex:check + docs:prose + test). `docs:prose` is Vale over
 the published prose (docs/, site/authored/, README.md, AGENTS.md, CONTRIBUTING.md) at error level,
-with a file floor per glob so a shrunken scope is red: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. `mise run security` is the report-only tier beside it: findings do not fail
+with a file floor per glob so a shrunken scope is red, and a per-rule warning ratchet against `.vale-baseline.json`: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. When a count falls, run `mise run docs:prose:baseline` and commit the lower file; never raise it. `mise run security` is the report-only tier beside it: findings do not fail
 it, a scanner that produced no usable SARIF does.
 First-time setup: `mise trust && mise install && mise run install`.
 

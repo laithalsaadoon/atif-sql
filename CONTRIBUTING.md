@@ -43,11 +43,18 @@ that.
 | `lint:imports` | `uv run lint-imports` | the import contracts below |
 | `lint:pnpm-lock` | `python3 scripts/verify_single_yaml_document.py site/pnpm-lock.yaml` | `site/pnpm-lock.yaml` holding more than one YAML document, which GitHub's dependency graph cannot read |
 | `security:vex:check` | `uv run python scripts/vex_to_osv_config.py ... --check` | `osv-scanner.toml` or the `allow-ghsas:` line of `.github/workflows/dependency-review.yml` drifting from `security/atif-sql.openvex.json`, or a ledger PURL version that `uv.lock` or `site/pnpm-lock.yaml` no longer locks; `mise run security:vex` re-renders both |
-| `docs:prose` | `python3 scripts/vale_gate.py` | an error-level Vale alert in `docs/**/*.md`, `site/authored/**/*.md`, `README.md`, `AGENTS.md` or `CONTRIBUTING.md`, a run that checked fewer files than that scope holds, or a glob that matched fewer files than its floor in `scripts/vale_gate.py` (`docs/**/*.md` at least 15, `site/authored/**/*.md` at least 2, each root file at least 1); `.vale.ini` names the rules and why each one below error sits there, and a new term goes in `.vale/styles/config/vocabularies/atif-sql/accept.txt` |
+| `docs:prose` | `python3 scripts/vale_gate.py` | an error-level Vale alert in `docs/**/*.md`, `site/authored/**/*.md`, `README.md`, `AGENTS.md` or `CONTRIBUTING.md`, a run that checked fewer files than that scope holds, or a glob that matched fewer files than its floor in `scripts/vale_gate.py` (`docs/**/*.md` at least 15, `site/authored/**/*.md` at least 2, each root file at least 1), or a rule whose warnings rose past its count in `.vale-baseline.json` (or that warns and is not in it); a baseline that is missing, empty, or does not parse fails as well. `.vale.ini` names the rules and why each one below error sits there, and a new term goes in `.vale/styles/config/vocabularies/atif-sql/accept.txt` |
 | `test` | `uv run pytest --no-header -q` | `[tool.pytest.ini_options] testpaths = ["packages/*/tests"]` |
 
 Most gates declare `sources`, so mise skips one whose inputs have not moved by
 mtime (`lint:pnpm-lock` and `docs:prose` run every time). Run `mise run --force check` when you want them all to execute anyway.
+
+The Vale warnings are a ratchet, not a free pass. `.vale-baseline.json` holds each rule's warning
+count over the scope in the table, and `docs:prose` names any rule that rose. Reword the sentence that
+added the warning; `vale <file>` lists them. When a change lowers a count, the gate passes and
+prints `lower the baseline: mise run docs:prose:baseline`: run that task and commit the file with
+the change. A baseline only goes down in review, so a diff that raises a count in it needs the
+same scrutiny as a widened `ignore` list.
 
 Never reach green by relaxing a gate. Widening an `ignore` list, adding a
 blanket per-file ignore, or deleting a contract is a change to the project's
