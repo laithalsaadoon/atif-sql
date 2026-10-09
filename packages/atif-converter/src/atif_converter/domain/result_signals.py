@@ -5,8 +5,11 @@
 A second post-conversion pass beside :mod:`atif_converter.domain.enrichment`
 and :mod:`atif_converter.domain.codex_enrichment`: pure functions over the
 trajectory dict and the raw records, no harbor import, no I/O. Everything it
-adds lands under ``extra``, which ATIF leaves free-form, so the trajectory
-still validates, and the harbor port itself stays at parity with its oracle.
+adds lands under ``extra``, which ATIF leaves free-form, apart from a Codex
+script's nested tool calls, each a ``ToolCall`` with its result on the step
+that already holds the script's call, which is the shape the validator asks
+for. The trajectory still validates, and the harbor port itself, which this
+pass runs after, stays at parity with its oracle.
 
 What it writes
 --------------
@@ -40,6 +43,19 @@ On every ``observation.results[]`` entry, under ``extra``:
     The attachments :mod:`atif_converter.domain.blobs` lifted out of this
     result, as ``BlobRef.to_json()`` entries (``image/*`` only).
 
+Nested tool calls
+-----------------
+A code-mode ``exec`` script's nested MCP calls and commands
+(:data:`~atif_converter.domain.codex_nested_calls.NESTED_CALL_ITEM_TYPES`
+items, attributed to the script by position as ``exit_code`` above says) are
+added to the script's step as tool calls of their own, right after the
+``exec`` call, each with ``extra.nested_in`` naming it and one result carrying
+its own ``is_error`` / ``exit_code`` (and ``images``). A script whose
+attribution is ambiguous adds none, an item whose id is already a call id is
+never added twice, and the ``exec`` result keeps the outcome folded from its
+items. :mod:`atif_converter.domain.codex_nested_calls` says what each field
+holds.
+
 On steps, under ``extra``:
 
 ``agent_id``
@@ -66,6 +82,12 @@ import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from atif_converter.domain.codex_nested_calls import (
+    NESTED_CALL_ITEM_TYPES,
+    nested_result_content,
+    nested_tool_call,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -431,10 +453,14 @@ class _ExecWindow:
     completes while exactly one script of its turn is open belongs to it. An
     item that could belong to more than one open script makes each of them
     ``ambiguous``, and an ambiguous script claims nothing its items said.
+    ``calls`` keeps the ``item_completed`` payloads of the MCP calls and
+    commands attributed to it, in completion order, for
+    :func:`_emit_nested_calls`.
     """
 
     turn_id: str | None
     nested: list[_CodexOutcome] = field(default_factory=list)
+    calls: list[dict[str, Any]] = field(default_factory=list)
     ambiguous: bool = False
 
 
@@ -539,6 +565,8 @@ class _CodexIndex:
         ]
         if len(candidates) == 1:
             candidates[0].nested.append(outcome)
+            if item.get("type") in NESTED_CALL_ITEM_TYPES:
+                candidates[0].calls.append(payload)
         else:
             for window in candidates:
                 window.ambiguous = True
@@ -564,7 +592,7 @@ class _CodexIndex:
         return merged
 
 
-def _index_codex_records(records: Iterable[Any]) -> dict[str, _CodexOutcome]:
+def _index_codex_records(records: Iterable[Any]) -> _CodexIndex:
     index = _CodexIndex()
     for record in records:
         if not isinstance(record, dict):
@@ -580,7 +608,117 @@ def _index_codex_records(records: Iterable[Any]) -> dict[str, _CodexOutcome]:
             index.call(payload)
         elif record_type == "response_item" and payload_type in _CODEX_OUTPUT_TYPES:
             index.output(payload)
-    return index.outcomes()
+    return index
+
+
+def _write_outcome(
+    result: dict[str, Any], outcome: _CodexOutcome | None, images: list[dict[str, Any]]
+) -> None:
+    if outcome is None and not images:
+        return
+    extra = _extra(result)
+    if outcome is not None and outcome.is_error is not None:
+        extra["is_error"] = outcome.is_error
+    if outcome is not None and outcome.exit_code is not None:
+        extra["exit_code"] = outcome.exit_code
+    if images:
+        extra["images"] = images
+
+
+def _trajectory_call_ids(steps: Iterable[Any]) -> set[str]:
+    ids: set[str] = set()
+    for step in steps:
+        calls = step.get("tool_calls") if isinstance(step, dict) else None
+        for call in calls if isinstance(calls, list) else ():
+            call_id = call.get("tool_call_id") if isinstance(call, dict) else None
+            if isinstance(call_id, str):
+                ids.add(call_id)
+    return ids
+
+
+def _nested_pairs(
+    window: _ExecWindow,
+    exec_call_id: str,
+    taken: set[str],
+    outcomes: Mapping[str, _CodexOutcome],
+    blob_index: BlobIndex,
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """The ``(ToolCall, ObservationResult)`` JSON pairs one script's nested items become.
+
+    An item id already taken (a top-level call's id, or an item emitted
+    before) is skipped, so no call appears twice.
+    """
+    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for payload in window.calls:
+        item = payload["item"]
+        item_id = item["id"]
+        if item_id in taken:
+            continue
+        taken.add(item_id)
+        result: dict[str, Any] = {"source_call_id": item_id}
+        content = nested_result_content(item)
+        if content is not None:
+            result["content"] = content
+        _write_outcome(
+            result,
+            outcomes.get(item_id),
+            _image_json(blob_index.by_tool_call_id.get(item_id, ())),
+        )
+        pairs.append((nested_tool_call(payload, exec_call_id), result))
+    return pairs
+
+
+def _insert_after(results: list[Any], exec_call_id: str, nested: list[dict[str, Any]]) -> None:
+    """Put ``nested`` right after the ``exec`` call's own result, or last when it has none."""
+    for position, result in enumerate(results):
+        if isinstance(result, dict) and result.get("source_call_id") == exec_call_id:
+            results[position + 1 : position + 1] = nested
+            return
+    results.extend(nested)
+
+
+def _emit_nested_calls(
+    steps: Sequence[Any],
+    index: _CodexIndex,
+    outcomes: Mapping[str, _CodexOutcome],
+    blob_index: BlobIndex,
+) -> int:
+    """Add each script's nested MCP calls and commands to the step of its ``exec`` call.
+
+    A script whose window is ``ambiguous`` emits nothing, as it claims no
+    outcome. Each nested call follows its ``exec`` call in ``tool_calls`` and
+    its result follows the script's result, in completion order. Returns how
+    many calls were added.
+    """
+    taken = _trajectory_call_ids(steps) | index.call_ids
+    emitted = 0
+    for step in steps:
+        calls = step.get("tool_calls") if isinstance(step, dict) else None
+        if not isinstance(calls, list):
+            continue
+        new_calls: list[Any] = []
+        nested_results: list[tuple[str, list[dict[str, Any]]]] = []
+        for call in calls:
+            new_calls.append(call)
+            call_id = call.get("tool_call_id") if isinstance(call, dict) else None
+            window = index.exec_calls.get(call_id) if isinstance(call_id, str) else None
+            if call_id is None or window is None or window.ambiguous:
+                continue
+            pairs = _nested_pairs(window, call_id, taken, outcomes, blob_index)
+            new_calls.extend(tool_call for tool_call, _result in pairs)
+            if pairs:
+                nested_results.append((call_id, [result for _call, result in pairs]))
+        if not nested_results:
+            continue
+        step["tool_calls"] = new_calls
+        observation = step.get("observation")
+        if not isinstance(observation, dict) or not isinstance(observation.get("results"), list):
+            observation = {"results": []}
+            step["observation"] = observation
+        for exec_call_id, results in nested_results:
+            _insert_after(observation["results"], exec_call_id, results)
+            emitted += len(results)
+    return emitted
 
 
 def annotate_codex_trajectory(
@@ -590,28 +728,28 @@ def annotate_codex_trajectory(
 ) -> dict[str, Any]:
     """The Codex half: ``is_error`` / ``exit_code`` / ``images`` per result, user-step images.
 
+    Also emits each code-mode script's nested MCP calls and commands as tool
+    calls of their own (module docstring, and
+    :mod:`atif_converter.domain.codex_nested_calls`).
+
     ``records`` are the rollout's parsed records, already rewritten by
     :func:`~atif_converter.domain.blobs.extract_codex_blobs` with the same
     record keys the enrichment pass writes into ``source_uuids``.
     """
     steps = trajectory.get("steps")
     step_list: list[Any] = steps if isinstance(steps, list) else []
-    outcomes = _index_codex_records(records)
+    index = _index_codex_records(records)
+    outcomes = index.outcomes()
     for result in _results(step_list):
         call_id = result.get("source_call_id")
         if not isinstance(call_id, str):
             continue
-        outcome = outcomes.get(call_id)
-        images = _image_json(blob_index.by_tool_call_id.get(call_id, ()))
-        if outcome is None and not images:
-            continue
-        extra = _extra(result)
-        if outcome is not None and outcome.is_error is not None:
-            extra["is_error"] = outcome.is_error
-        if outcome is not None and outcome.exit_code is not None:
-            extra["exit_code"] = outcome.exit_code
-        if images:
-            extra["images"] = images
+        _write_outcome(
+            result,
+            outcomes.get(call_id),
+            _image_json(blob_index.by_tool_call_id.get(call_id, ())),
+        )
+    _emit_nested_calls(step_list, index, outcomes, blob_index)
     _annotate_steps(step_list, {}, blob_index)
     return trajectory
 

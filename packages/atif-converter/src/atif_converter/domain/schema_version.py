@@ -72,12 +72,19 @@ History:
   store, its result carries ``extra.images``, and a tool output list the port
   dumps as JSON (one element of an unknown type) holds the placeholder item
   where it held the base64. Placeholder text is unchanged.
+* 9 — a Codex code-mode ``exec`` script's nested MCP calls and commands (the
+  ``McpToolCall`` / ``CommandExecution`` items attributed to it) are tool
+  calls of their own on its step, after the ``exec`` call, with
+  ``extra.nested_in``, ``via`` and ``duration_ms``, and one result each
+  carrying its content and its own ``is_error`` / ``exit_code`` (and
+  ``images``: the pre-pass lifts images out of those items' MCP results too).
+  The ``exec`` result's own fields are unchanged.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 8
+CONVERTER_SCHEMA_VERSION: Final = 9
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

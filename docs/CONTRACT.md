@@ -218,7 +218,16 @@ proofs are out of scope for the workspace.
      subagent with its parent_tool_call_id and link_source ("meta" from the
      sidecar, "tool_result" from toolUseResult.agentId). A key absent means
      the transcript did not say; nothing is guessed.
-   - atif_converter.domain.schema_version.CONVERTER_SCHEMA_VERSION (currently 2) is
+   - Codex code mode (domain.codex_nested_calls): each MCP call and command a
+     code-mode exec script ran (an item_completed McpToolCall or
+     CommandExecution item, attributed to the script by position) becomes a
+     tool call of its own on the script's step, right after the exec call:
+     tool_call_id is the item id, function_name mcp__<server>__<tool> or
+     exec_command, extra.nested_in names the exec call, and its one result
+     carries its own is_error / exit_code. A script whose attribution is
+     ambiguous emits none, and the exec result keeps the outcome folded from
+     its items. The harbor port emits none, so parity is unchanged.
+   - atif_converter.domain.schema_version.CONVERTER_SCHEMA_VERSION (currently 9) is
      bumped with any change to the converter's output for the same input.
 3. Census + edges + session events are derived from RAW jsonl (never from the
    trajectory). session_events keeps, as rows and NOT as steps: Claude Code
