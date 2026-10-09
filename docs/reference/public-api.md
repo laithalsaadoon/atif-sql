@@ -2,14 +2,14 @@
 
 **The supported entry point is the `atif-sql` command, not an import.** This repository ships exactly
 one installable distribution, `atif-sql`, whose only console script is
-`atif-sql = "atif_cli.app:main"` — `pyproject.toml:64`. Every workspace member ships inside that
+`atif-sql = "atif_cli.app:main"` (`pyproject.toml:64`). Every workspace member ships inside that
 one wheel rather than as install targets, and the published name is deliberately split from the
-`atif_cli` module that provides the entry point — `pyproject.toml:16-18`. Install with `uvx atif-sql` or
+`atif_cli` module that provides the entry point (`pyproject.toml:16-18`). Install with `uvx atif-sql` or
 `uv tool install atif-sql`; `docs/reference/cli.md` is the primary reference for the surface a user
 actually calls.
 
 What follows documents the **internal seam**: the highest-traffic symbols that one workspace member
-imports from another. That seam is enforced rather than conventional — the root `pyproject.toml`
+imports from another. That seam is enforced rather than conventional: the root `pyproject.toml`
 declares `[tool.importlinter]` over every root package at `pyproject.toml:462-463`, with an
 `independence` contract at `pyproject.toml:514-517` forbidding atif-converter, atif-corpus, atif-duck,
 atif-models, and atif-embed from importing each other at all, and a `forbidden` contract at
@@ -24,10 +24,10 @@ abstractions are `typing.Protocol` classes, and all of them sit under a `domain/
 `packages/atif-embed/src/atif_embed/domain/ports.py:31`, `:59`, and `:87`, and
 `LlmStructuredProvider` at `packages/atif-models/src/atif_models/domain/ports.py:116`. No
 `abstractmethod` exists anywhere in the workspace, so adapters satisfy a port structurally. Second,
-the name `DomainError` is declared independently more than once — one base class per erroring package, at
+the name `DomainError` is declared independently more than once (one base class per erroring package, at
 `packages/atif-converter/src/atif_converter/domain/errors.py:14`,
 `packages/atif-embed/src/atif_embed/domain/errors.py:14`, and
-`packages/atif-models/src/atif_models/domain/ports.py:39` — and they are unrelated types that
+`packages/atif-models/src/atif_models/domain/ports.py:39`), and they are unrelated types that
 share only a spelling.
 
 There is no HTTP or RPC surface: a grep for route decorators, `FastAPI(`, `APIRouter`, `add_route`,
@@ -51,8 +51,8 @@ support, carrying the corpus root and every pipeline knob.
 def build_examples() -> tuple[ExampleQuery, ...]:
 ```
 
-Derives the full example inventory from the static catalogs in a fixed order — core views, the VSS
-view, analytics views, then core macros, the VSS macro, analytics macros — so the CLI listing and the
+Derives the full example inventory from the static catalogs in a fixed order (core views, the VSS
+view, analytics views, then core macros, the VSS macro, analytics macros), so the CLI listing and the
 JSON array are deterministic across runs.
 
 `packages/atif-duck/src/atif_duck/domain/examples.py:191-252`
@@ -71,7 +71,7 @@ def build_plan(
 ) -> MaterializationPlan:
 ```
 
-Partitions scanned sessions into the plan buckets — the pure decision at the centre of
+Partitions scanned sessions into the plan buckets: the pure decision at the centre of
 materialization, taking the watermark and the quiescence policy as data.
 
 `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159-211`
@@ -154,7 +154,7 @@ it in the same module.
 class EmbedSettings(BaseSettings):
 ```
 
-Env-driven settings for the embedding pipeline — model, batch size, concurrency, and the LanceDB URI.
+Env-driven settings for the embedding pipeline: model, batch size, concurrency, and the LanceDB URI.
 
 `packages/atif-embed/src/atif_embed/infrastructure/settings.py:19-64`
 
@@ -187,7 +187,7 @@ def estimate_cost(spec: ModelSpec, *, input_tokens: int, output_tokens: int) -> 
 ```
 
 USD estimate for one call or an accumulated pipeline against the prices carried on `spec`, returning
-`None` when either price is unknown — which a caller must render as pricing unavailable, never as
+`None` when either price is unknown, which a caller must render as pricing unavailable, never as
 zero.
 
 `packages/atif-models/src/atif_models/domain/registry.py:125-137`
@@ -343,7 +343,7 @@ finished.
 class RefusalError(DomainError):
 ```
 
-Terminal error for a model refusal — a content filter or a refusal finish reason — as distinct from a
+Terminal error for a model refusal (a content filter or a refusal finish reason), as distinct from a
 retryable provider fault.
 
 `packages/atif-models/src/atif_models/domain/ports.py:43-48`

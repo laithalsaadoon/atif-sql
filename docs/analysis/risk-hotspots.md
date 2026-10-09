@@ -6,7 +6,7 @@ checker located in the file; `E` and `W` count `error`- and `warn`-severity scan
 the scanner report tier (`mise.toml:596-611`); `C` counts complexity ratchets the ruff config
 sets at a function living in this file (`pyproject.toml:258-281`); `H` counts distinct unguarded
 concurrency or IO windows, where a window whose own docstring names its recovery does not count;
-and `U` is uncovered units — missed lines plus missed branches — under the branch-coverage config
+and `U` is uncovered units (missed lines plus missed branches) under the branch-coverage config
 at `pyproject.toml:535`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
 `pyproject.toml:560`, so `U/10` puts a
 file's share of the remaining uncovered units on the same scale as one located defect.
@@ -14,14 +14,14 @@ file's share of the remaining uncovered units on the same scale as one located d
 Churn is rejected as a signal. The log sits under a single bot
 identity with no human authors, so commit frequency measures authoring order rather
 than defect density and ranking by it would produce confident noise. The `Trend` column below still
-runs the mechanical 30-day slope rule — `↑ rising` is anything more than one standard deviation
-above the median commit count — but it contributes zero weight to the score, and
+runs the mechanical 30-day slope rule (`↑ rising` is anything more than one standard deviation
+above the median commit count), but it contributes zero weight to the score, and
 `↓ falling` is unreachable because every file in the repo has more than one commit. `Top owner` is
 likewise the bot identity on every row and carries no bus-factor information. Further limits: the
 scanner tier yields no `error`-severity findings workspace-wide, so `E` never discriminates, and
 `packages/atif-embed/src/atif_embed/domain/ports.py` is excluded from the ranking despite reading
 as uncovered, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
-(`pyproject.toml:561-568`) — that is a measurement artifact, not a gap.
+(`pyproject.toml:561-568`); that is a measurement artifact, not a gap.
 
 Note (2026-09-27): the scores, LOC figures, and coverage below were measured before the trajectory
 and structural pipelines were cut. `atif_analytics.application.use_cases.trajectory`, `.community`,
@@ -48,8 +48,8 @@ The open findings are `B608` hardcoded-SQL sites plus a build-configuration find
 `[tool.uv]` at `pyproject.toml:102`, which asks for an `exclude-newer` dependency cooldown. All of them
 map to `warn`: `B608` carries `MEDIUM` severity at `LOW` or `MEDIUM` confidence with rule precision
 `low`, and the cooldown rule's default level is `warning`. The SQL sites are exactly the ones that
-ruff suppresses per line — `ruff check --select S608 packages/` exits clean while the same run with
-`--ignore-noqa` over `packages/*/src` reports those same sites — and each `# noqa: S608` names what it
+ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
+`--ignore-noqa` over `packages/*/src` reports those same sites), and each `# noqa: S608` names what it
 interpolates (`pyproject.toml:150-152`). The scanner tier therefore carries no unaudited exposure,
 which is why coverage, complexity, and concurrency carry the ranking instead.
 
@@ -65,10 +65,10 @@ follows a register-or-fail-loud contract: log through `logger.exception` and re-
 failure (`:31-32`, `:816-819`, `:1217-1220`).
 
 **Recent activity.** Commits in the 30-day window sit well above the median, so `↑ rising` under the
-mechanical rule — which here means the file was written and rewritten during the short authoring
+mechanical rule, which here means the file was written and rewritten during the short authoring
 run, not that it is destabilizing.
 
-**Owners.** The bot identity at 100% — every commit touching the path, merges included —
+**Owners.** The bot identity at 100% (every commit touching the path, merges included),
 a bot identity.
 
 **Findings.** Most of the workspace's `B608` sites live here, each carrying a per-line
@@ -81,7 +81,7 @@ reachable by an in-process embedding caller even though the CLI never passes one
 uncovered units cluster in exactly the paths no test drives: `register_views` (`:333-819`),
 `register_macros` (`:1005-1220`), `register_vss` (`:846-967`),
 `_warn_incomplete_session_dirs` (`:175-193`), and `_pricing_values_clause` itself. The
-`register_vss` gap is the load-bearing one — the ATTACH-failure arm that degrades a Lance directory
+`register_vss` gap is the load-bearing one: the ATTACH-failure arm that degrades a Lance directory
 to an empty-store fallback and logs rather than raising (`:906-910`) is untested silent degradation.
 
 ### `atif_analytics.infrastructure.parquet_cache`
@@ -97,7 +97,7 @@ or unreadable stats (`:116-156`), which is the safe direction.
 signals alone with no help from churn, which is the clearest demonstration that the two are
 independent here.
 
-**Owners.** The bot identity at 100% — every commit touching the path — a bot identity.
+**Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
 
 **Findings.** No scanner findings, and several of the workspace's unguarded IO windows, all in the
 same file. `write_part`'s sharded branch drops `part-<time_ns>.parquet` straight into the live
@@ -117,23 +117,23 @@ a large share of its uncovered units are in `replace_sessions` and `write_part`.
 ### `atif_cli.app`
 
 **What's there.** The cyclopts composition root and the only module importing atif-converter,
-atif-corpus, and atif-duck together, wiring every cross-package seam — the `ConverterPort` adapter,
+atif-corpus, and atif-duck together, wiring every cross-package seam: the `ConverterPort` adapter,
 the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:3-15`). Heavy
 imports are deferred into the command bodies so the `schema` / `--help` fast path stays lean, a
 property pinned by a fresh-interpreter test rather than by a lint (`:22-26`).
 
-**Recent activity.** The most commits of any file in the repo, so `↑ rising` — expected of a
+**Recent activity.** The most commits of any file in the repo, so `↑ rising`, which is expected of a
 composition root that gains a wiring line whenever any member changes.
 
-**Owners.** The bot identity at 100% — every commit touching the path, merges included —
+**Owners.** The bot identity at 100% (every commit touching the path, merges included),
 a bot identity.
 
 **Findings.** A `B608` at the `search` kNN query, whose `# noqa` records that `dim` is
 `len(vector)` while the session id, `k`, and the vector itself are `?`-bound (`:925-937`). It
 carries the `max-args = 19` ratchet through `search`, whose parameters are the CLI flags
 cyclopts binds (`pyproject.toml:264`, `:180`; the function at
-`packages/atif-cli/src/atif_cli/app.py:860`). Its uncovered units — the largest single-file gap
-in the workspace — concentrate in the commands that reach outward: `analyze`
+`packages/atif-cli/src/atif_cli/app.py:860`). Its uncovered units (the largest single-file gap
+in the workspace) concentrate in the commands that reach outward: `analyze`
 (`:627-725`), `convert` (`:225-291`), and `status` (`:412-488`), with a few in `search`
 (`:828-948`) and `main` (`:1093-1103`). `analyze`, `embed`, and `search` are the
 billable commands that call Bedrock, so the least-covered command body in the tree is also the one
@@ -142,7 +142,7 @@ applies the budget ceilings a crontab line depends on (`:691-707`).
 
 ### `atif_converter.domain.enrichment`
 
-**What's there.** A pure function over a trajectory dict plus raw records — no harbor import, no IO —
+**What's there.** A pure function over a trajectory dict plus raw records (no harbor import, no IO)
 that repairs some of the named fidelity gaps by re-running harbor's deterministic
 normalization order (`packages/atif-converter/src/atif_converter/domain/enrichment.py:3-30`). It
 exists because harbor 0.22.0 puts no record identity in `step.extra`: it reads `requestId` off the
@@ -151,9 +151,9 @@ lands in extra and there is nothing to join on (`:15-20`).
 
 **Recent activity.** Commits well above the median, so `↑ rising`.
 
-**Owners.** The bot identity at 100% — every commit touching the path — a bot identity.
+**Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
 
-**Findings.** No scanner findings, no IO windows — this is a pure function — and both
+**Findings.** No scanner findings, no IO windows (this is a pure function), and both
 complexity ratchets in the workspace that a single function sets: `max-branches = 39` and
 `max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:267`, `:181`,
 `:185-190`; the function at
@@ -175,14 +175,14 @@ views bind to those literal values, so the vocabulary is a fixed contract (`:29-
 
 **Recent activity.** Commits well above the median, so `↑ rising`.
 
-**Owners.** The bot identity at 100% — every commit touching the path — a bot identity.
+**Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
 
 **Findings.** No scanner findings, and the `max-statements = 119` ratchet, set at `_friction_async`
 (`pyproject.toml:269`, `:183`; the function at
 `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:240`). The coverage
 gap and the complexity outlier are the same region: most of the file's uncovered units sit inside
 `_friction_async` (`:240-528`), with the rest in `detect_user_friction` (`:531-635`) and
-`deterministic_stamps` (`:178-232`). This is the file where the two signals coincide most tightly —
+`deterministic_stamps` (`:178-232`). This is the file where the two signals coincide most tightly:
 the longest function in the workspace is also the least-exercised, and it is the function that
 decides which candidate messages cross into the billable LLM tier. The budget-guard posture that
 governs that decision assumes every candidate reaches the LLM even though roughly half survive the

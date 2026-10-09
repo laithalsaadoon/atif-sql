@@ -14,7 +14,7 @@ its signature. It reads a static catalog rather than the corpus, so it answers i
 of a second, needs no materialized data, and doubles as a liveness check on the install. Its output
 ends with a pointer to the examples command.
 
-`atif-sql examples` — the same thing as `atif-sql query --examples` — prints a runnable query per view
+`atif-sql examples` (the same thing as `atif-sql query --examples`) prints a runnable query per view
 and per macro. Those queries are **derived from the catalog**, never hardcoded per object, and every
 one is executed against a fixture corpus by `atif-duck`'s test suite. Filter with
 `--requires core|analytics|vss` and `--category view|table-macro|scalar-macro`. Piped output is JSON.
@@ -31,14 +31,14 @@ adds what a schema cannot state: what a silence means, and which surface you are
 
 - **The materialized corpus is what the views read, not `~/.claude`.** `atif-sql` converts each
   session to ATIF once, writes it under the corpus root, and every view reads those artifacts. A
-  session that has not been materialized is absent from every view — not empty, absent. `atif-sql
+  session that has not been materialized is absent from every view: not empty, absent. `atif-sql
   materialize` is what makes it visible, and `atif-sql status` replays the same planning decision
   read-only, so it answers "what would a materialize pass do right now" without converting anything.
 
 - **A session still being written is skipped on purpose.** Materialization is gated on quiescence: a
   session is converted when its newest source file has been silent for longer than the quiesce
-  threshold and is newer than the recorded watermark. So the most interesting session — the one open
-  in another terminal — is the one deliberately not in the corpus yet. `--force` overrides the
+  threshold and is newer than the recorded watermark. So the most interesting session (the one open
+  in another terminal) is the one deliberately not in the corpus yet. `--force` overrides the
   watermark; nothing overrides physics, so wait for the write to settle.
 
 - **`requires` on an example is a precondition, not a hint.** An example tagged `analytics` needs
@@ -54,7 +54,7 @@ adds what a schema cannot state: what a silence means, and which surface you are
 - **Conversion loss is accounted for, not hidden.** Every materialized session carries a loss report
   beside its trajectory, and each known upstream conversion gap is a named type in the converter's
   fidelity policy rather than a paragraph in a changelog. A field absent from the ATIF document is not
-  evidence that it was absent from the transcript — read the loss report before concluding that.
+  evidence that it was absent from the transcript. Read the loss report before concluding that.
 
 - **Branch on the exit code, never on the message text.** The codes are a stable wire contract: `64`
   for malformed input or malformed SQL, `65` for a catalog miss or a store written by another embedding
@@ -64,18 +64,18 @@ adds what a schema cannot state: what a silence means, and which surface you are
 
 ## 3. Which surface you are on
 
-The test for each row is free — readable from your tool list, your shell, or the repository — and
+The test for each row is free (readable from your tool list, your shell, or the repository) and
 never a call that has to fail first.
 
 | Signal | Surface | Entry point |
 | --- | --- | --- |
 | You can run a shell command | CLI | `atif-sql schema`, then the command you need |
 | You can execute Python in this workspace | In-process library | Import the package that owns the capability: `atif_duck` to register views on a connection, `atif_corpus` to materialize |
-| Neither | Read-only | You are reading documentation. Fetch the Markdown, not the HTML — section 7 has the URLs |
+| Neither | Read-only | You are reading documentation. Fetch the Markdown, not the HTML; section 7 has the URLs |
 
 The CLI and the library are the same implementation: `atif-cli` is a composition root and holds no
 query logic of its own, so a fact learned on one surface transfers to the other. The layering is
-enforced rather than documented — import-linter fails the build when a leaf package imports another
+enforced rather than documented: import-linter fails the build when a leaf package imports another
 leaf package.
 
 :::agent
@@ -96,7 +96,7 @@ atif-sql query 'SELECT * FROM tool_rank(30) LIMIT 10'
 ```
 
 Two habits change the shape of everything after. Output adapts to the channel: a TTY gets a plain
-table, a pipe gets JSON — so redirect when you intend to parse, and never parse the table. And an
+table, a pipe gets JSON, so redirect when you intend to parse, and never parse the table. And an
 example is meant to be copied verbatim before it is adapted: the session-id exemplar in every example
 is a subquery over `sessions`, so a pasted example runs against any corpus rather than needing an id
 you do not have yet.
@@ -133,7 +133,7 @@ fixed by changing the environment.
 
 This table is built at publish time from the set of pages the site actually wrote, so a page added to
 the documentation tree appears here without an edit and a removed page cannot leave a row behind. The
-right-hand column is that page's raw Markdown twin — fetch that instead of the page.
+right-hand column is that page's raw Markdown twin; fetch that instead of the page.
 
 GENERATED-READ-NEXT-TABLE
 
@@ -156,7 +156,7 @@ instead: that is the string you can hand to a grep.
 :::agent
 
 **For an agent.** Fetch `llms-small.txt` before `llms-full.txt`. When you already know which page you
-want, fetch that page's `.md` twin instead of either bundle — a fraction of the tokens for the same
+want, fetch that page's `.md` twin instead of either bundle: a fraction of the tokens for the same
 text.
 
 :::

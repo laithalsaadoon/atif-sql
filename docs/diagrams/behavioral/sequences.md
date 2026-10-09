@@ -28,20 +28,20 @@ sequenceDiagram
 
 Sources, in dispatch order:
 
-- CLI materialize — `packages/atif-cli/src/atif_cli/app.py:352`; report rendered at `:299`.
-- materialize UC — `packages/atif-corpus/src/atif_corpus/application/materialize.py:476`;
+- CLI materialize: `packages/atif-cli/src/atif_cli/app.py:352`; report rendered at `:299`.
+- materialize UC: `packages/atif-corpus/src/atif_corpus/application/materialize.py:476`;
   `read_watermark` at `:160` called from `:521`, `scan_sources` called at `:522`, `build_plan` called
   at `:572`, `_write_session` at `:179` called from `:588`, watermark advanced at `:610`, report
   built at `:613`.
-- scanner — `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:143`.
-- build_plan — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`.
-- RealConverter — `packages/atif-cli/src/atif_cli/converter_adapter.py:51`, calling
+- scanner: `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:143`.
+- build_plan: `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`.
+- RealConverter: `packages/atif-cli/src/atif_cli/converter_adapter.py:51`, calling
   `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:105`.
-- converter — our ported Claude Code converter,
+- converter: our ported Claude Code converter,
   `packages/atif-converter/src/atif_converter/domain/claude_code_conversion.py:75`, reached from the
   seam at `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:83`; harbor
   supplies only the data classes and the validator (`:68`).
-- corpus artifacts — path arithmetic in
+- corpus artifacts: path arithmetic in
   `packages/atif-corpus/src/atif_corpus/domain/layout.py:26`; the artifacts written and the
   directory swapped at `packages/atif-corpus/src/atif_corpus/application/materialize.py:222-240`
   through `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:64` and `:98`.
@@ -74,23 +74,23 @@ sequenceDiagram
 
 Sources, in dispatch order:
 
-- CLI query — `packages/atif-cli/src/atif_cli/app.py:529`; `duckdb.connect()` at `:591`, `register`
+- CLI query: `packages/atif-cli/src/atif_cli/app.py:529`; `duckdb.connect()` at `:591`, `register`
   called at `:594`, `_harden_query_connection` at `:137` called from `:601`, caller SQL executed at
   `:606`, emit at `:612`.
-- atif_duck register — `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`, whose
+- atif_duck register: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`, whose
   documented order is fixed at `:1283-1294`: `register_raw` `:196`, `register_views` `:333`,
   `register_vss` `:846`, `register_macros` `:1005`, then the analytics pair.
-- DuckDB in-process — the connection opened by the CLI; the sandbox settings and
+- DuckDB in-process: the connection opened by the CLI; the sandbox settings and
   `lock_configuration` are issued against it at `packages/atif-cli/src/atif_cli/app.py:180-188`.
-- corpus artifacts — session globs read through `read_json` at
+- corpus artifacts: session globs read through `read_json` at
   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:210-213`; the analytics parquets bind
   through `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`, with the analytics
   macros at `:225`.
-- LanceDB store — reached through DuckDB's lance extension:
+- LanceDB store: reached through DuckDB's lance extension;
   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:878-887` installs, loads, and
   ATTACHes it; the stamped `(model, dim)` identity is read at `:937` and checked by
   `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:46`.
-- stdout emitter — `packages/atif-cli/src/atif_cli/output.py:154`; a registration failure routes
+- stdout emitter: `packages/atif-cli/src/atif_cli/output.py:154`; a registration failure routes
   through `packages/atif-cli/src/atif_cli/duck_errors.py:66` instead.
 
 ## analyze
@@ -115,30 +115,30 @@ sequenceDiagram
 
 Sources, in dispatch order:
 
-- CLI analyze — `packages/atif-cli/src/atif_cli/app.py:1240`; settings resolved at `:1296`,
+- CLI analyze: `packages/atif-cli/src/atif_cli/app.py:1240`; settings resolved at `:1296`,
   `run_analyze` called at `:1312`.
-- run_analyze — `packages/atif-analytics/src/atif_analytics/application/analyze.py:36`; the
+- run_analyze: `packages/atif-analytics/src/atif_analytics/application/analyze.py:36`; the
   `stages` list at `:97-102`, each stage invoked at `:123`.
-- CorpusReader — `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`,
+- CorpusReader: `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`,
   constructed once per run at
   `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`; `session_text` at
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:289`.
-- LLM stages — the classify exemplar at
+- LLM stages: the classify exemplar at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`; provider built
   by `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36`, structured
   call dispatched at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:214`.
-- Bedrock runtime — `OpenAiBedrockProvider.classify_structured`
+- Bedrock runtime: `OpenAiBedrockProvider.classify_structured`
   `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:217`, blocking
   `invoke_model` at `:261` on the `bedrock-runtime` client built at `:195`.
-- analytics dir — `<corpus_root>/analytics/`, defined at
+- analytics dir: `<corpus_root>/analytics/`, defined at
   `packages/atif-analytics/src/atif_analytics/domain/layout.py:51`, holding both the sharded parquet
   caches (`write_part`
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`, called at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:278`) and the single
   SQLite WAL `state.db`
   (`packages/atif-analytics/src/atif_analytics/domain/layout.py:81`).
-- analytics dir, SQLite arm — `filter_unchanged`
+- analytics dir, SQLite arm: `filter_unchanged`
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:137` called
   at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:111`;
   `mark_completed`

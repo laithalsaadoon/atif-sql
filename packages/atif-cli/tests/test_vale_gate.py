@@ -8,10 +8,14 @@ fixture stays green, a scope of zero files is a failure rather than an empty pas
 matches fewer files than its floor fails naming that glob, and on the real tree Vale checks
 exactly the files an independent walk of the scope finds.
 
-The warning ratchet carries the same proof: a planted em dash beside the real tree turns it red
-naming Google.EmDash, a rule deleted from the baseline is red naming that rule, one warning
-fewer than the baseline is green and asks for the baseline to come down, and a baseline that is
-missing, empty, unparsable or not counts fails before Vale runs.
+A spaced em dash is an error, not a warning: one planted on its own, one in a wrapped list item
+(where Vale 3.24.0 can fold two alerts into one) and one beside the real tree each turn the gate
+red on Google.EmDash, and the rule is not in the baseline.
+
+The warning ratchet carries the same proof: a planted Google.Will warning beside the real tree
+turns it red naming that rule, a rule deleted from the baseline is red naming that rule, one
+warning fewer than the baseline is green and asks for the baseline to come down, and a baseline
+that is missing, empty, unparsable or not counts fails before Vale runs.
 
 The fixtures live under `.vale/fixtures/`, outside the gate's scope, so the real tree stays
 clean while the plants stay committed. Vale is the mise-pinned binary: run this through
@@ -84,6 +88,31 @@ def test_banned_phrase_fails_on_its_rule() -> None:
     assert ".vale/fixtures/planted-phrase.md:3:" in result.stdout
     assert "proselint.Cliches: 'for free' is a cliche." in result.stdout
     assert _checked(result.stdout) == (1, 1, 1)
+
+
+_EMDASH = "Google.EmDash: Don't put a space before or after a dash."
+
+
+@pytest.mark.parametrize(
+    ("name", "line"),
+    [
+        ("planted-emdash.md", 3),
+        # The only dash on the page sits in a list item that wraps onto a second line, the shape
+        # whose alert Vale 3.24.0 can merge into a later one: alone, it is still reported.
+        ("wrapped-emdash.md", 3),
+        # Two dashes that Vale reports as one alert: a merge folds two errors into one, never
+        # into none, so the page is red either way.
+        ("merged-emdash.md", 4),
+    ],
+)
+def test_spaced_em_dash_fails_as_an_error(name: str, line: int) -> None:
+    result = _run(FIXTURES / name)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f".vale/fixtures/{name}:{line}:" in result.stdout
+    assert _EMDASH in result.stdout
+    checked, total, errors = _checked(result.stdout)
+    assert (checked, total) == (1, 1)
+    assert errors >= 1
 
 
 def test_misspelling_fails_on_spelling() -> None:
@@ -327,23 +356,44 @@ def test_committed_baseline_is_usable() -> None:
     baseline = gate.load_baseline(gate.BASELINE)
     assert baseline, baseline
     assert all(rule.split(".")[0] in {"Vale", "Google", "proselint"} for rule in baseline)
+    # An error-level rule fails on one alert; a baseline entry for it would read as a budget.
+    assert "Google.EmDash" not in baseline, baseline
 
 
-def test_planted_em_dash_fails_naming_its_rule(
+def test_planted_em_dash_beside_the_tree_fails_as_an_error(
     real_counts: dict[str, int],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # One more spaced em dash on a docs page than the baseline allows: the real tree plus a
-    # page carrying exactly one, under the real tree's own counts.
+    # The real tree carries no spaced dash, so one page carrying one is red as an error under
+    # the real tree's own warning counts, with no ratchet line: no budget absorbs it.
     gate = _gate_with_baseline(monkeypatch, tmp_path, real_counts)
     by_glob = cast("dict[str, list[Path]]", gate.scope_by_glob())
     by_glob["docs/**/*.md"] = [*by_glob["docs/**/*.md"], FIXTURES / "planted-emdash.md"]
     assert _main_with(monkeypatch, gate, by_glob) == 1
     out, err = capsys.readouterr()
-    base = real_counts["Google.EmDash"]
-    assert err.splitlines() == [f"selftest: Google.EmDash: {base + 1} warnings, baseline {base}"]
+    assert out.splitlines()[0] == f".vale/fixtures/planted-emdash.md:3:50: {_EMDASH}"
+    assert ": 1 error, " in out
+    assert "0 rules above the baseline" in out
+    assert err == ""
+
+
+def test_planted_warning_fails_naming_its_rule(
+    real_counts: dict[str, int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # One more Google.Will on a docs page than the baseline allows: the real tree plus a page
+    # carrying exactly one, under the real tree's own counts.
+    gate = _gate_with_baseline(monkeypatch, tmp_path, real_counts)
+    by_glob = cast("dict[str, list[Path]]", gate.scope_by_glob())
+    by_glob["docs/**/*.md"] = [*by_glob["docs/**/*.md"], FIXTURES / "planted-warning.md"]
+    assert _main_with(monkeypatch, gate, by_glob) == 1
+    out, err = capsys.readouterr()
+    base = real_counts["Google.Will"]
+    assert err.splitlines() == [f"selftest: Google.Will: {base + 1} warnings, baseline {base}"]
     assert "1 rule above the baseline" in out
     assert gate.LOWER_HINT not in out
 
@@ -370,13 +420,13 @@ def test_one_warning_fewer_passes_and_asks_to_lower(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # The tree one Google.EmDash below its baseline: green, and the gate says to ratchet down.
-    base = real_counts["Google.EmDash"]
-    gate = _gate_with_baseline(monkeypatch, tmp_path, {**real_counts, "Google.EmDash": base + 1})
+    # The tree one Google.Will below its baseline: green, and the gate says to ratchet down.
+    base = real_counts["Google.Will"]
+    gate = _gate_with_baseline(monkeypatch, tmp_path, {**real_counts, "Google.Will": base + 1})
     assert gate.main(["--label", "selftest"]) == 0
     out, err = capsys.readouterr()
     assert err == ""
-    assert f"selftest: Google.EmDash: {base} warnings, baseline {base + 1}" in out
+    assert f"selftest: Google.Will: {base} warnings, baseline {base + 1}" in out
     assert f"selftest: {gate.LOWER_HINT}" in out
     assert "0 rules above the baseline" in out
 
@@ -426,7 +476,7 @@ def test_path_mode_ignores_the_baseline(
     # The selftest's PATH mode stays error-only: no baseline is read, so a missing one is fine.
     gate = _load_gate()
     monkeypatch.setattr(gate, "BASELINE", tmp_path / "absent.json")
-    assert gate.main(["--label", "selftest", str(FIXTURES / "planted-emdash.md")]) == 0
+    assert gate.main(["--label", "selftest", str(FIXTURES / "planted-warning.md")]) == 0
     assert "1 warning (reported, not gated)" in capsys.readouterr().out
 
 
@@ -435,19 +485,19 @@ def test_path_mode_ignores_the_baseline(
     reason=(
         "Vale 3.24.0 anchors an alert by searching for its matched text, so the dash of a list "
         "item that wraps onto a second line lands on a later ' \u2014 ' that carries its own "
-        "alert, and the two report as one (vale-cli/vale#1147 is the same anchoring). A plant "
-        "appended after such an item can lower the Google.EmDash count instead of raising it."
+        "alert, and the two report as one (vale-cli/vale#1147 is the same anchoring). A warning "
+        "plant appended after such an item can lower a rule's count instead of raising it."
     ),
 )
 def test_vale_reports_every_spaced_dash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Two spaced dashes, so two warnings. Strict: the day Vale reports both, this XPASS fails,
+    # Two spaced dashes, so two errors. Strict: the day Vale reports both, this XPASS fails,
     # and the xfail and the caveat in scripts/vale_gate.py come out together.
     gate = _load_gate()
     monkeypatch.setattr(gate, "BASELINE", tmp_path / "absent.json")
-    assert gate.main(["--label", "selftest", str(FIXTURES / "merged-emdash.md")]) == 0
-    assert "2 warnings (reported, not gated)" in capsys.readouterr().out
+    assert gate.main(["--label", "selftest", str(FIXTURES / "merged-emdash.md")]) == 1
+    assert ": 2 errors, 0 warnings (reported, not gated)" in capsys.readouterr().out
 
 
 def test_ratchet_names_rises_new_rules_and_falls() -> None:
@@ -467,7 +517,7 @@ def test_write_baseline_rewrites_from_the_tree(
     # A stale baseline: one rule too high, one too low, one retired, one missing.
     missing = min(real_counts)
     stale = {k: v for k, v in real_counts.items() if k != missing}
-    stale["Google.EmDash"] += 5
+    stale["Google.Headings"] += 5
     stale["Google.WordListCase"] -= 1
     stale["Retired.Rule"] = 2
     gate = _gate_with_baseline(monkeypatch, tmp_path, stale)
@@ -476,8 +526,8 @@ def test_write_baseline_rewrites_from_the_tree(
     written = json.loads(gate.BASELINE.read_text())
     assert written == {**real_counts, "Retired.Rule": 0}
     assert list(written) == sorted(written)
-    em, wl = real_counts["Google.EmDash"], real_counts["Google.WordListCase"]
-    assert f"selftest: Google.EmDash: lowered {em + 5} -> {em}" in out
+    hd, wl = real_counts["Google.Headings"], real_counts["Google.WordListCase"]
+    assert f"selftest: Google.Headings: lowered {hd + 5} -> {hd}" in out
     assert (
         f"selftest: Google.WordListCase: raised {wl - 1} -> {wl}: a baseline only goes down" in out
     )

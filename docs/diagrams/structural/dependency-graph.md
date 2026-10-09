@@ -82,7 +82,7 @@ from a file under the source member's `src/`.
 | atif-analytics to atif-models | the `forbidden` contract's single permitted edge (`pyproject.toml:519-523`); declared `packages/atif-analytics/pyproject.toml:24` |
 
 Absences carry meaning too. atif-cli imports atif_models in no source file even though it composes
-everything else — it reaches the model registry through atif-analytics, and its
+everything else; it reaches the model registry through atif-analytics, and its
 `[project.dependencies]` list omits atif-models accordingly (`packages/atif-cli/pyproject.toml:32-39`).
 And no edge exists in either direction between atif-converter, atif-corpus, atif-duck, atif-embed, or
 atif-models: they communicate only by writing and reading the corpus on disk. Adding any such edge
@@ -114,15 +114,15 @@ on import-site count, then on the member's own src line count, descending.
 
 What the drawn edge deliberately compresses:
 
-- **loguru is universal.** Every member declares it — `packages/atif-analytics/pyproject.toml:24`,
+- **loguru is universal.** Every member declares it (`packages/atif-analytics/pyproject.toml:24`,
   `packages/atif-cli/pyproject.toml:43`, `packages/atif-converter/pyproject.toml:31`,
   `packages/atif-corpus/pyproject.toml:19`, `packages/atif-duck/pyproject.toml:21`,
-  `packages/atif-embed/pyproject.toml:23`, `packages/atif-models/pyproject.toml:25` — and the edge is
+  `packages/atif-embed/pyproject.toml:23`, `packages/atif-models/pyproject.toml:25`), and the edge is
   drawn from atif-converter only because more of the importing files are its than any other
   member's. The edge label states
   the real fan-out.
-- **atif-corpus has no drawn external edge.** It declares its externals — loguru
-  (`packages/atif-corpus/pyproject.toml:19`), pydantic (`:20`), pydantic-settings (`:21`) — and each is
+- **atif-corpus has no drawn external edge.** It declares its externals: loguru
+  (`packages/atif-corpus/pyproject.toml:19`), pydantic (`:20`), pydantic-settings (`:21`). Each is
   imported more often, or in more sites, by another member, so the attribution rule sources all of them
   elsewhere. Its own import sites are real: `packages/atif-corpus/src/atif_corpus/infrastructure/settings.py:19`
   and `packages/atif-corpus/src/atif_corpus/domain/sessions.py:29`.
