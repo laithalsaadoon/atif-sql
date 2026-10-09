@@ -8,6 +8,11 @@ fixture stays green, a scope of zero files is a failure rather than an empty pas
 matches fewer files than its floor fails naming that glob, and on the real tree Vale checks
 exactly the files an independent walk of the scope finds.
 
+The warning ratchet carries the same proof: a planted em dash beside the real tree turns it red
+naming Google.EmDash, a rule deleted from the baseline is red naming that rule, one warning
+fewer than the baseline is green and asks for the baseline to come down, and a baseline that is
+missing, empty, unparsable or not counts fails before Vale runs.
+
 The fixtures live under `.vale/fixtures/`, outside the gate's scope, so the real tree stays
 clean while the plants stay committed. Vale is the mise-pinned binary: run this through
 `mise run test` or `mise run check`, which put it on PATH.
@@ -16,6 +21,7 @@ clean while the plants stay committed. Vale is the mise-pinned binary: run this 
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import shutil
 import subprocess
@@ -288,3 +294,210 @@ def test_real_tree_is_clean_and_fully_checked() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert _checked(result.stdout) == (len(expected), len(expected), 0)
+    assert "0 rules above the baseline" in result.stdout, result.stdout
+
+
+# --- the warning ratchet: a rule above its baseline is red, naming the rule -----------------
+
+
+@pytest.fixture(scope="module")
+def real_counts(tmp_path_factory: pytest.TempPathFactory) -> dict[str, int]:
+    """The real tree's warnings per rule, as the gate's own writer measures them."""
+    gate = _load_gate()
+    path = tmp_path_factory.mktemp("baseline") / ".vale-baseline.json"
+    setattr(gate, "BASELINE", path)  # noqa: B010 - a fresh module instance, not the shared one
+    assert gate.main(["--label", "selftest", "--write-baseline"]) == 0
+    counts = cast("dict[str, int]", json.loads(path.read_text()))
+    assert sum(counts.values()) > 0, counts
+    return counts
+
+
+def _gate_with_baseline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, baseline: object
+) -> ModuleType:
+    gate = _load_gate()
+    path = tmp_path / ".vale-baseline.json"
+    path.write_text(baseline if isinstance(baseline, str) else json.dumps(baseline))
+    monkeypatch.setattr(gate, "BASELINE", path)
+    return gate
+
+
+def test_committed_baseline_is_usable() -> None:
+    gate = _load_gate()
+    baseline = gate.load_baseline(gate.BASELINE)
+    assert baseline, baseline
+    assert all(rule.split(".")[0] in {"Vale", "Google", "proselint"} for rule in baseline)
+
+
+def test_planted_em_dash_fails_naming_its_rule(
+    real_counts: dict[str, int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # One more spaced em dash on a docs page than the baseline allows: the real tree plus a
+    # page carrying exactly one, under the real tree's own counts.
+    gate = _gate_with_baseline(monkeypatch, tmp_path, real_counts)
+    by_glob = cast("dict[str, list[Path]]", gate.scope_by_glob())
+    by_glob["docs/**/*.md"] = [*by_glob["docs/**/*.md"], FIXTURES / "planted-emdash.md"]
+    assert _main_with(monkeypatch, gate, by_glob) == 1
+    out, err = capsys.readouterr()
+    base = real_counts["Google.EmDash"]
+    assert err.splitlines() == [f"selftest: Google.EmDash: {base + 1} warnings, baseline {base}"]
+    assert "1 rule above the baseline" in out
+    assert gate.LOWER_HINT not in out
+
+
+def test_rule_deleted_from_baseline_fails_naming_it(
+    real_counts: dict[str, int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    rule = max(real_counts, key=real_counts.__getitem__)
+    rest = {k: v for k, v in real_counts.items() if k != rule}
+    gate = _gate_with_baseline(monkeypatch, tmp_path, rest)
+    assert gate.main(["--label", "selftest"]) == 1
+    err = capsys.readouterr().err
+    assert err.splitlines() == [
+        f"selftest: {rule}: {real_counts[rule]} warnings, not in the baseline"
+    ]
+
+
+def test_one_warning_fewer_passes_and_asks_to_lower(
+    real_counts: dict[str, int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The tree one Google.EmDash below its baseline: green, and the gate says to ratchet down.
+    base = real_counts["Google.EmDash"]
+    gate = _gate_with_baseline(monkeypatch, tmp_path, {**real_counts, "Google.EmDash": base + 1})
+    assert gate.main(["--label", "selftest"]) == 0
+    out, err = capsys.readouterr()
+    assert err == ""
+    assert f"selftest: Google.EmDash: {base} warnings, baseline {base + 1}" in out
+    assert f"selftest: {gate.LOWER_HINT}" in out
+    assert "0 rules above the baseline" in out
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        (None, "is missing"),
+        ("", "does not parse"),
+        ("{", "does not parse"),
+        ("null", "must be a JSON object"),
+        ("[]", "must be a JSON object"),
+        ("{}", "is empty"),
+        ('{"EmDash": 3}', "is not a rule name"),
+        ('{"Google.EmDash": -1}', "not an integer of 0 or more"),
+        ('{"Google.EmDash": "449"}', "not an integer of 0 or more"),
+        ('{"Google.EmDash": true}', "not an integer of 0 or more"),
+        ('{"Google.EmDash": 1.5}', "not an integer of 0 or more"),
+    ],
+)
+def test_unusable_baseline_fails_before_vale_runs(
+    text: str | None,
+    reason: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    gate = _load_gate()
+    path = tmp_path / ".vale-baseline.json"
+    if text is not None:
+        path.write_text(text)
+    monkeypatch.setattr(gate, "BASELINE", path)
+
+    def _no_vale(*_args: object) -> None:
+        pytest.fail("vale ran with an unusable baseline")
+
+    monkeypatch.setattr(gate, "_vale", _no_vale)
+    assert gate.main(["--label", "selftest"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("selftest: .vale-baseline.json"), err
+    assert reason in err
+
+
+def test_path_mode_ignores_the_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The selftest's PATH mode stays error-only: no baseline is read, so a missing one is fine.
+    gate = _load_gate()
+    monkeypatch.setattr(gate, "BASELINE", tmp_path / "absent.json")
+    assert gate.main(["--label", "selftest", str(FIXTURES / "planted-emdash.md")]) == 0
+    assert "1 warning (reported, not gated)" in capsys.readouterr().out
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Vale 3.24.0 anchors an alert by searching for its matched text, so the dash of a list "
+        "item that wraps onto a second line lands on a later ' \u2014 ' that carries its own "
+        "alert, and the two report as one (vale-cli/vale#1147 is the same anchoring). A plant "
+        "appended after such an item can lower the Google.EmDash count instead of raising it."
+    ),
+)
+def test_vale_reports_every_spaced_dash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Two spaced dashes, so two warnings. Strict: the day Vale reports both, this XPASS fails,
+    # and the xfail and the caveat in scripts/vale_gate.py come out together.
+    gate = _load_gate()
+    monkeypatch.setattr(gate, "BASELINE", tmp_path / "absent.json")
+    assert gate.main(["--label", "selftest", str(FIXTURES / "merged-emdash.md")]) == 0
+    assert "2 warnings (reported, not gated)" in capsys.readouterr().out
+
+
+def test_ratchet_names_rises_new_rules_and_falls() -> None:
+    over, under = _load_gate().ratchet(
+        {"A.x": 3, "B.y": 1, "D.w": 2}, {"A.x": 2, "C.z": 4, "D.w": 2}
+    )
+    assert over == ["A.x: 3 warnings, baseline 2", "B.y: 1 warning, not in the baseline"]
+    assert under == ["C.z: 0 warnings, baseline 4"]
+
+
+def test_write_baseline_rewrites_from_the_tree(
+    real_counts: dict[str, int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A stale baseline: one rule too high, one too low, one retired, one missing.
+    missing = min(real_counts)
+    stale = {k: v for k, v in real_counts.items() if k != missing}
+    stale["Google.EmDash"] += 5
+    stale["Google.WordListCase"] -= 1
+    stale["Retired.Rule"] = 2
+    gate = _gate_with_baseline(monkeypatch, tmp_path, stale)
+    assert gate.main(["--label", "selftest", "--write-baseline"]) == 0
+    out = capsys.readouterr().out
+    written = json.loads(gate.BASELINE.read_text())
+    assert written == {**real_counts, "Retired.Rule": 0}
+    assert list(written) == sorted(written)
+    em, wl = real_counts["Google.EmDash"], real_counts["Google.WordListCase"]
+    assert f"selftest: Google.EmDash: lowered {em + 5} -> {em}" in out
+    assert (
+        f"selftest: Google.WordListCase: raised {wl - 1} -> {wl}: a baseline only goes down" in out
+    )
+    assert "selftest: Retired.Rule: lowered 2 -> 0" in out
+    assert f"selftest: {missing}: added at {real_counts[missing]}" in out
+    # The tree now sits exactly at its baseline: green with nothing to lower.
+    assert gate.main(["--label", "selftest"]) == 0
+    out = capsys.readouterr().out
+    assert gate.LOWER_HINT not in out
+    assert "0 rules above the baseline" in out
+
+
+def test_write_baseline_takes_no_path() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        _load_gate().main(["--write-baseline", str(FIXTURES / "clean.md")])
+    assert exit_info.value.code == 2
+
+
+def test_write_baseline_refuses_to_write_nothing(tmp_path: Path) -> None:
+    gate = _load_gate()
+    with pytest.raises(gate.BaselineError, match="nothing to write"):
+        gate.write_baseline(tmp_path / ".vale-baseline.json", {})
+    assert not (tmp_path / ".vale-baseline.json").exists()
