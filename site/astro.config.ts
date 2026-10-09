@@ -17,6 +17,7 @@ import { agentNotePlugin } from "./src/lib/agent-note.js"
 import { baseRawLinks } from "./src/lib/base-raw-links.js"
 import { citationLinks } from "./src/lib/citation-links.js"
 import { COLLECTION_ROOT, sidebar, syncedTreePaths } from "./src/lib/content-tree.js"
+import { type MarkdownLinksOptions, markdownLinks, rawTwinLinks } from "./src/lib/markdown-links.js"
 import mermaid, { beautifulMermaid } from "./src/lib/mermaid-integration.js"
 import { PERMALINK_COMMIT, REPO_URL, SITE_BASE, SITE_ORIGIN } from "./src/lib/repo.js"
 
@@ -28,6 +29,21 @@ const treeRoot = fileURLToPath(new URL("../docs", import.meta.url))
 
 /** The base with no trailing slash, which is the route prefix a citation link is built from. */
 const routePrefix = SITE_BASE.replace(/\/$/, "")
+
+/**
+ * What the relative `.md` link rewrite needs, shared by its mdast pass (the rendered page and the
+ * llms bundles) and its `astro:build:done` half (the raw twins). See `src/lib/markdown-links.ts`.
+ */
+const markdownLinkOptions: MarkdownLinksOptions = {
+  collectionRoot: fileURLToPath(new URL(`./${COLLECTION_ROOT}`, import.meta.url)),
+  repoRoot,
+  treeDir: "docs",
+  authoredDir: "site/authored",
+  syncedPaths: syncedTreePaths(projectRoot),
+  repoUrl: REPO_URL,
+  commit: PERMALINK_COMMIT,
+  siteBase: routePrefix
+}
 
 const SITE_DESCRIPTION =
   "ATIF-native analytics over Claude Code agent trajectories: sessions converted to ATIF, " +
@@ -88,7 +104,16 @@ export default defineConfig({
              * otherwise become an intra-site link to a route the build never wrote.
              */
             publishedTreePaths: syncedTreePaths(projectRoot)
-          })
+          }),
+        /*
+         * The tree links page to page by relative `.md` path, which a directory route resolves one
+         * level too deep: 75 of the deployed site's 404s on 2026-10-09. This turns each into the
+         * page's route under the base, or the GitHub blob for a Markdown file the site does not
+         * publish. It never throws, for the reason the mermaid integration gives: a render error
+         * ships an empty page from a green build. What it cannot resolve stays relative, and the
+         * links validator below fails the build on it.
+         */
+        () => markdownLinks(markdownLinkOptions)
       ]
     })
   },
@@ -100,6 +125,11 @@ export default defineConfig({
      * touched. `starlight-base-path` fixes the tree; this fixes the twins. It is idempotent.
      */
     baseRawLinks(SITE_BASE),
+    /*
+     * The twin half of the relative `.md` link rewrite, and the root twin's move from the dotfile
+     * `.md` (which `actions/upload-pages-artifact` drops with every hidden file) to `index.md`.
+     */
+    rawTwinLinks(markdownLinkOptions),
     /*
      * Diagrams render at BUILD time. A client-rendered diagram is absent from the raw twin, from all
      * three llms bundles, and from any fetch that runs no JavaScript — which withholds the densest
@@ -187,9 +217,15 @@ export default defineConfig({
          * no exclusion. A broken ccu cross-link therefore fails the build, which is the intended
          * loud failure: the fix belongs to the tree, and a 404 on the Markdown surface is invisible
          * to everyone except the agent that follows it.
+         *
+         * `errorOnRelativeLinks` is ON. Off, the validator skipped every relative link, and all 75
+         * relative `.md` links shipped as 404s past a green "All internal links are valid". The
+         * rewrite above leaves no relative link it can resolve, so one left behind is a defect.
+         * The built site is gated again, offline, by `mise run docs:links` (scripts/docs_links.py),
+         * which also covers the chrome, the head and the raw twins this validator never reads.
          */
         starlightLinksValidator({
-          errorOnRelativeLinks: false,
+          errorOnRelativeLinks: true,
           errorOnInvalidHashes: true
         })
       ]

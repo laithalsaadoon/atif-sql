@@ -155,7 +155,7 @@ const isSkippedDirectory = (name: string): boolean => name.startsWith(".")
  */
 const trackedByCommit = new Map<string, ReadonlySet<string>>()
 
-const trackedAtCommit = (repoRoot: string, commit: string): ReadonlySet<string> => {
+export const trackedAtCommit = (repoRoot: string, commit: string): ReadonlySet<string> => {
   /* A NUL joins the two halves: it is the one byte a filesystem path and a SHA cannot contain, so
      two different pairs cannot collide into one key. Written as an escape, never as a raw byte. */
   const key = `${repoRoot}\u0000${commit}`
@@ -192,7 +192,7 @@ const githubPermalink = (repoUrl: string, commit: string, target: CitationTarget
 const slugSegment = (segment: string): string | undefined =>
   /^[A-Za-z0-9_-]+$/.test(segment) ? segment.toLowerCase() : undefined
 
-const slugFor = (treePath: string): string | undefined => {
+export const slugFor = (treePath: string): string | undefined => {
   if (!treePath.endsWith(".md")) return undefined
   const segments = treePath.slice(0, -".md".length).split("/")
   if (segments.some((segment) => isSkippedDirectory(segment))) return undefined

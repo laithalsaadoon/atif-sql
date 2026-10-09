@@ -25,7 +25,7 @@
  * as asserted.
  */
 
-import { siteUrl, type SiteContext } from "./agent-surface.js"
+import { rawMarkdownUrl, siteUrl, type SiteContext } from "./agent-surface.js"
 
 /**
  * The site node, described once.
@@ -96,7 +96,7 @@ const pageUrl = (entryId: string, context: SiteContext): URL =>
  * makes the other redundant, because they are read by different consumers.
  */
 const markdownEncoding = (entryId: string, context: SiteContext) => {
-  const href = siteUrl(`${entryId === "index" ? "" : entryId}.md`, context).href
+  const href = rawMarkdownUrl(entryId, context).href
   return {
     "@type": "MediaObject" as const,
     "@id": href,
