@@ -43,34 +43,37 @@ tool needs a credential.
 
 ## What you can do
 
-Every `atif-sql` command, by task. Each command links to its flags and exit codes in
-[the CLI reference](docs/reference/cli.md). Rows marked **costs money** call Amazon Bedrock and
-are dry runs until you ask them to spend.
+Start with the question you want to answer or the work you want to keep. Each command links
+to its flags and exit codes in [the CLI reference](docs/reference/cli.md).
+
+Analysis, embedding, and text search use Amazon Bedrock. `analyze` previews by default;
+`embed` needs `--dry-run` to preview an explicit scope; `search` charges for a query embedding
+on each successful call. Rows marked **costs money** describe paid execution.
 
 | Task | Command | Outcome |
 | --- | --- | --- |
-| Build the corpus from Claude Code transcripts | [`atif-sql materialize`](docs/reference/cli.md#materialize) | Scans `~/.claude/projects`, converts each quiet session to ATIF, and writes it to the corpus under `~/.atif-sql/corpus`. Re-runs convert only sessions that changed. |
-| Build the corpus from Codex CLI rollouts | [`atif-sql materialize --agent codex`](docs/reference/cli.md#materialize) | The same pass over `$CODEX_HOME/sessions` into a separate Codex corpus. |
-| Convert one transcript | [`atif-sql convert <session.jsonl>`](docs/reference/cli.md#convert) | One ATIF trajectory plus its loss report and edges, on stdout or at `--trajectory-out`. |
-| Check corpus freshness | [`atif-sql status`](docs/reference/cli.md#status) | Read-only report of watermark age, session counts, bytes, and what the next `materialize` would convert. |
-| Load every corpus into the lake | [`atif-sql lake rebuild`](docs/reference/cli.md#lake-rebuild) | Builds the DuckLake beside the old one and swaps it in. Afterward `materialize` keeps it current and `query` reads it instead of per-session files. |
-| Check the lake against the corpus | [`atif-sql lake verify`](docs/reference/cli.md#lake-verify) | Compares each session's lake rows with its artifacts. Exits 65 on a difference. |
-| See the lake's state | [`atif-sql lake status`](docs/reference/cli.md#lake-status) | Whether the lake exists and is current, its corpora, snapshots, files, and last write. |
-| Keep the lake small | [`atif-sql lake compact`](docs/reference/cli.md#lake-compact) | Merges small files, expires old snapshots, and removes files nothing references. |
-| List the views and macros | [`atif-sql schema`](docs/reference/cli.md#schema) | Every view with its columns and every macro signature, each tagged `core`, `analytics`, or `vss`. No corpus needed. |
-| Get runnable example queries | [`atif-sql examples`](docs/reference/cli.md#examples) | Tested queries for every view and macro, filtered by `--requires` and `--category`. |
-| Run any SQL over your sessions | [`atif-sql query '<sql>'`](docs/reference/cli.md#query) | Rows as a table on a terminal and JSON on a pipe, from a read-only sandboxed connection. |
-| Query every corpus at once | [`atif-sql query --all-corpora '<sql>'`](docs/reference/cli.md#query) | The views span Claude Code and Codex; `sessions.corpus` says which a row came from. Needs the lake. |
-| Rank the most-used tools | [`atif-sql query 'SELECT * FROM tool_rank(30) LIMIT 10'`](docs/reference/cli.md#query) | Tool call counts over the last 30 days, most used first. |
-| Estimate what a session cost | [`atif-sql query 'SELECT * FROM cost_estimate((SELECT session_id FROM sessions LIMIT 1)) LIMIT 10'`](docs/reference/cli.md#query) | Estimated USD from token counts and prices. The priced and unpriced step counts say how far to trust it. |
-| Count friction by label | [`atif-sql query 'SELECT * FROM friction_counts(30) LIMIT 10'`](docs/reference/cli.md#query) | Friction labels over the last 30 days. Needs `analyze` to have run. |
-| Classify sessions and find conflicts, friction, and perceived errors | [`atif-sql analyze`](docs/reference/cli.md#analyze) | **Costs money.** A dry run by default: prints the plan and a cost estimate. `--no-dry-run` runs classify, conflicts, friction, and perceived, and fills the `session_classifications`, `session_conflicts`, `user_friction`, and `perceived_errors` views. |
-| Embed steps for semantic search | [`atif-sql embed`](docs/reference/cli.md#embed) | **Costs money.** Needs `--limit N` or `--all`. `--dry-run` previews the plan; a real run embeds unembedded steps with Cohere Embed v4 into LanceDB. |
-| Search sessions by meaning | [`atif-sql search '<text>'`](docs/reference/cli.md#search) | **Costs money** (one query embedding per call). Top-k nearest steps with `session_id`, `snippet`, and `sim`. |
-| Search every corpus at once | [`atif-sql search --all-corpora '<text>'`](docs/reference/cli.md#search) | **Costs money.** The same search across every corpus's embedding store, with a `corpus` column. Needs the lake. |
-| Shrink a corpus written by an older version | [`atif-sql corpus slim`](docs/reference/cli.md#corpus-slim) | Reports how many bytes it would free. `--no-dry-run` compresses the JSON files and then deletes the parquet files once the lake agrees. |
-| Schedule the refresh | [`atif-sql cron install`](docs/reference/cli.md#cron-install) | Prints the crontab block for the refresh lanes. It never writes your crontab. |
-| Check the scheduled refresh | [`atif-sql cron status`](docs/reference/cli.md#cron-status) | Each lane's lock holder and its last run and skip from the refresh log. |
+| Keep a history of your Claude Code work | [`atif-sql materialize`](docs/reference/cli.md#materialize) | Saves quiet sessions for later queries and keeps them when source transcripts disappear. Re-runs update changed sessions and those with an older converter generation. |
+| Bring your Codex work into the same analysis workflow | [`atif-sql materialize --agent codex`](docs/reference/cli.md#materialize) | Saves Codex rollouts in a separate corpus with the same query surface as Claude Code. |
+| Inspect or share one conversation as ATIF | [`atif-sql convert <session.jsonl>`](docs/reference/cli.md#convert) | Prints its trajectory and loss report. Add `--trajectory-out` to save the trajectory and adjacent `edges.jsonl` file. |
+| Know whether your recent work is included | [`atif-sql status`](docs/reference/cli.md#status) | Shows corpus freshness, session counts, and what another `materialize` pass would update, without changing data. |
+| Query a large history without rereading every transcript | [`atif-sql lake rebuild`](docs/reference/cli.md#lake-rebuild) | Builds the shared DuckLake query store. Later `materialize` passes keep it current. |
+| Check that query results match your saved conversations | [`atif-sql lake verify`](docs/reference/cli.md#lake-verify) | Compares stored rows with session artifacts and exits 65 if they differ. |
+| Diagnose missing or stale query data | [`atif-sql lake status`](docs/reference/cli.md#lake-status) | Shows whether the lake exists, is current, and contains the expected corpora, plus its last write. |
+| Recover disk space from query storage | [`atif-sql lake compact`](docs/reference/cli.md#lake-compact) | Merges small files, expires old snapshots, and removes unreferenced files while keeping current rows. |
+| Find the fields you need to answer a question | [`atif-sql schema`](docs/reference/cli.md#schema) | Lists columns and macro signatures, tagged by required data: `core`, `analytics`, or `vss`. No corpus needed. |
+| Start with a query that already works | [`atif-sql examples`](docs/reference/cli.md#examples) | Gives tested queries to copy or adapt. Filters select the required data and query type. |
+| Answer your own question about past sessions | [`atif-sql query '<sql>'`](docs/reference/cli.md#query) | Returns a table to read or JSON to pipe into another tool, through a read-only sandboxed connection. |
+| Compare work across Claude Code and Codex | [`atif-sql query --all-corpora 'SELECT agent, count(*) FROM sessions GROUP BY agent'`](docs/reference/cli.md#query) | Counts sessions by agent across all corpora in the lake. Other queries can use `sessions.corpus` to identify each source. Needs the lake. |
+| See which tools your agents rely on most | [`atif-sql query 'SELECT * FROM tool_rank(30) LIMIT 10'`](docs/reference/cli.md#query) | Ranks tool use by call count over the last 30 days. |
+| Estimate the cost of a session | [`atif-sql query 'SELECT * FROM cost_estimate((SELECT session_id FROM sessions LIMIT 1)) LIMIT 10'`](docs/reference/cli.md#query) | Gives a lower-bound USD estimate and priced/unpriced step counts. Unpriced steps and cache-read charges are excluded. Replace the subquery to choose a session. |
+| Find recurring moments when you correct your agents | [`atif-sql query 'SELECT * FROM friction_counts(30) LIMIT 10'`](docs/reference/cli.md#query) | Counts detected friction labels over the last 30 days, after paid analysis has run. |
+| Plan a review of agent interactions before paying | [`atif-sql analyze`](docs/reference/cli.md#analyze) | Previews the work and estimated cost. **Costs money** with `--no-dry-run`, which fills the classifications, conflicts, user friction, and perceived errors views. |
+| Preview how much history to prepare for semantic search | [`atif-sql embed --limit 100 --dry-run`](docs/reference/cli.md#embed) | Previews embedding up to 100 steps. Removing `--dry-run` **costs money** and prepares those steps for search. |
+| Find prior work when you remember the topic, not the words | [`atif-sql search '<text>'`](docs/reference/cli.md#search) | **Costs money** for one query embedding. Finds similar steps with session identifiers and snippets. Needs existing embeddings from `embed`. |
+| Find related work across both agent histories | [`atif-sql search --all-corpora '<text>'`](docs/reference/cli.md#search) | **Costs money.** Searches all corpora's embedding stores and identifies each result's corpus. Needs the lake and existing embeddings. |
+| Free space in a corpus from an older version | [`atif-sql corpus slim`](docs/reference/cli.md#corpus-slim) | Previews byte savings. `--no-dry-run` compresses JSON and removes old parquet only after lake verification succeeds. |
+| Keep your history refreshed without remembering each run | [`atif-sql cron install --script <refresh-script>`](docs/reference/cli.md#cron-install) | Prints a schedule to review and install manually. The schedule includes paid embedding and analytics. Obtain `scripts/atif-sql-refresh.sh` from a repo checkout; packaged installs need its explicit path. |
+| Check whether scheduled refreshes ran | [`atif-sql cron status --script <refresh-script>`](docs/reference/cli.md#cron-status) | Shows each lane's last completion, skip, and current lock holder from the refresh script's logs. |
 
 ## How the source is organized
 
