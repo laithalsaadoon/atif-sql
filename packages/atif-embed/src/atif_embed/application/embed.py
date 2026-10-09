@@ -82,8 +82,9 @@ async def run_backfill(
     settings
         Embedding settings (model, batch size, concurrency, lance uri).
     embedder
-        Optional :class:`EmbeddingProvider`; defaults to the Cohere-on-Bedrock
-        adapter (imported lazily so dry runs never load boto3).
+        Optional :class:`EmbeddingProvider`; defaults to the provider
+        ``settings.embed_provider`` selects (imported lazily so dry runs never
+        load boto3 or torch).
     text_rows
         Optional :class:`TextRowsPort`; defaults to the contract-layout
         DuckDB reader.
@@ -99,7 +100,8 @@ async def run_backfill(
     -------
     int | dict
         Under ``dry_run=True``, a plan dict with ``{pipeline, discovery,
-        candidates, batches, batch_size, concurrency, model, limit, dry_run}``.
+        candidates, batches, batch_size, concurrency, provider, model, dim,
+        store, limit, dry_run}``.
         Otherwise, count of newly written rows (0 when nothing is pending).
     """
     import polars as pl
@@ -112,15 +114,16 @@ async def run_backfill(
     if store is None:
         from atif_embed.infrastructure.lance_store import LanceVectorStore
 
-        store = LanceVectorStore(lance_uri, dim=int(settings.output_dimension))
+        store = LanceVectorStore(lance_uri, dim=settings.embedding_dim)
 
     plan_model = settings.expected_embedding_identity()[0]
+    batch_size = settings.active_batch_size
     stored = store.get_embedded_hashes()
     pending = text_rows.iter_unembedded(corpus_root, embedded=stored, limit=limit)
 
     if dry_run:
         candidates = sum(1 for _ in pending)
-        n_batches = (candidates + settings.batch_size - 1) // settings.batch_size
+        n_batches = (candidates + batch_size - 1) // batch_size
         if candidates == 0:
             logger.info("No unembedded steps found - nothing to do")
         else:
@@ -129,7 +132,7 @@ async def run_backfill(
                 "dry_run=True - skipping embedding calls",
                 candidates,
                 n_batches,
-                settings.embed_concurrency,
+                settings.active_concurrency,
                 plan_model,
             )
         return {
@@ -137,16 +140,19 @@ async def run_backfill(
             "discovery": text_rows.discovery,
             "candidates": candidates,
             "batches": n_batches,
-            "batch_size": settings.batch_size,
-            "concurrency": settings.embed_concurrency,
+            "batch_size": batch_size,
+            "concurrency": settings.active_concurrency,
+            "provider": settings.embed_provider,
             "model": plan_model,
+            "dim": settings.embedding_dim,
+            "store": str(lance_uri),
             "limit": limit,
             "dry_run": True,
         }
 
     # Chunk must be a multiple of batch_size so a checkpoint boundary never
-    # splits a Bedrock batch.
-    chunk_size = max(settings.batch_size * 4, 256)
+    # splits a provider batch.
+    chunk_size = max(batch_size * 4, 256)
     rows = iter(pending)
     first_chunk = list(islice(rows, chunk_size))
     if not first_chunk:
@@ -155,12 +161,12 @@ async def run_backfill(
         return 0
 
     # Build the provider once for the whole run. dimension / model_id become
-    # the single contract source. Deferred import keeps boto3 off the
-    # dry-run / nothing-pending paths above, which return before this point.
+    # the single contract source. Deferred import keeps boto3 and torch off
+    # the dry-run / nothing-pending paths above, which return before this point.
     if embedder is None:
-        from atif_embed.infrastructure.cohere_bedrock import CohereBedrockEmbedder
+        from atif_embed.infrastructure.providers import build_embedder
 
-        embedder = CohereBedrockEmbedder(settings)
+        embedder = build_embedder(settings)
     model_id = embedder.model_id
     dim = embedder.dimension
 
@@ -274,13 +280,14 @@ async def run_backfill(
 def embed_query(text: str, *, settings: EmbedSettings) -> list[float]:
     """Embed a single query string for nearest-neighbor search.
 
-    Thin shim over the Cohere adapter (imported lazily): returns a float
-    query vector of length ``settings.output_dimension`` — Cohere forces
-    ``float`` for queries even when documents were stored int8.
+    Thin shim over the selected provider (imported lazily): returns a float
+    query vector of length ``settings.embedding_dim``. Cohere forces ``float``
+    for queries even when documents were stored int8; EmbeddingGemma 2 embeds
+    under its ``SearchQuery`` prompt.
     """
-    from atif_embed.infrastructure.cohere_bedrock import CohereBedrockEmbedder
+    from atif_embed.infrastructure.providers import build_embedder
 
-    return CohereBedrockEmbedder(settings).embed_query(text)
+    return build_embedder(settings).embed_query(text)
 
 
 __all__ = ["discover_unembedded", "embed_query", "run_backfill"]

@@ -339,15 +339,25 @@ fi
 
 embed_store_dir() {
   # Resolve the corpus's Lance store directory the same way atif-embed does:
-  # the ATIF_SQL_LANCE_URI override, else <corpus_root>/embeddings_lance.
+  # the ATIF_SQL_LANCE_URI override, else the selected provider's directory
+  # under the corpus root, which `atif-sql status` reports as embeddings_store
+  # (embeddings_lance for Cohere, embeddings_lance_gemma for EmbeddingGemma 2).
   # `atif-sql status` is read-only and fast, and it answers under the SAME
-  # CLAUDE_CONFIG_DIR/ATIF_SQL_SOURCE_ROOT exports this tick runs under.
+  # CLAUDE_CONFIG_DIR/ATIF_SQL_SOURCE_ROOT exports this tick runs under. A
+  # status without embeddings_store (an older CLI) falls back to Cohere's.
   if [ -n "${ATIF_SQL_LANCE_URI:-}" ]; then
     printf '%s\n' "$ATIF_SQL_LANCE_URI"
     return
   fi
-  local corpus_root
-  corpus_root="$("$ATIF_SQL" status --format json 2>/dev/null 9>&- \
+  local status_json store corpus_root
+  status_json="$("$ATIF_SQL" status --format json 2>/dev/null 9>&-)"
+  store="$(printf '%s\n' "$status_json" \
+    | sed -n 's/.*"embeddings_store": *"\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -n "$store" ]; then
+    printf '%s\n' "$store"
+    return
+  fi
+  corpus_root="$(printf '%s\n' "$status_json" \
     | sed -n 's/.*"corpus_root": *"\([^"]*\)".*/\1/p' | head -n 1)"
   [ -n "$corpus_root" ] && printf '%s/embeddings_lance\n' "$corpus_root"
 }
