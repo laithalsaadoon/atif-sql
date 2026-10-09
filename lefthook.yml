@@ -172,6 +172,21 @@ pre-push:
       # edit that trips an error-level rule is cheaper to reword here than after a CI round trip.
       run: mise run docs:prose
 
+    - name: docs-links
+      # The site build plus `docs:links`, the offline crawl of site/dist that fails on any
+      # internal 404 GitHub Pages would serve. Only when the push touches the docs tree or the
+      # site: about a minute on the devbox, beside `test` under `parallel`, and a docs-only change
+      # is the one place a broken link comes from. `docs:install` first, because a fresh clone has
+      # no site/node_modules; a warm pnpm store makes it a no-op.
+      run: mise run docs:install && mise run docs:links
+      glob:
+        - "docs/**"
+        - "site/**"
+      skip:
+        - merge
+        - rebase
+      fail_text: "A docs link 404s on the built site: run `mise run docs:links` and fix what it names."
+
     - name: test
       run: mise run test
       skip:

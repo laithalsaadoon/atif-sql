@@ -16,9 +16,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Weekly, Monday 07:17 UTC: the live crawl alone (`live-links`), so a page that starts to 404
+  # without a push (a Pages outage, a deleted environment, an expired custom domain) is found
+  # within a week. A scheduled run builds and deploys nothing.
+  schedule:
+    - cron: "17 7 * * 1"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # The schedule's crawl gets a group of its own: sharing main's, `cancel-in-progress` would let
+  # a weekly crawl cancel a deploy that is halfway out, or a push cancel the crawl.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'schedule' && 'live' || 'build' }}
   cancel-in-progress: true
 
 permissions:
@@ -27,6 +34,7 @@ permissions:
 jobs:
   build:
     name: build and gate the docs site
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read # check out the tree the site is built from
@@ -82,3 +90,32 @@ jobs:
     steps:
       - id: deploy
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # The deployed site, crawled from its sitemap: every internal href and src of every page, twin
+  # and llms bundle must answer 200, and every fragment must name an id. `docs:gate` already
+  # crawled site/dist offline; this is the check on what Pages actually serves, which is where
+  # the 76 internal 404s of 2026-10-09 were found, after the build had passed every gate.
+  #
+  # External links are lychee's (links.yml). The ChatGPT, Claude and Cursor deep links are
+  # never fetched: they answer 403 to a crawler and work in a browser (DEEP_LINK_HOSTS in
+  # scripts/docs_links.py). The script is stdlib Python, so the job needs no toolchain beyond
+  # the runner's python3, and it retries a non-200 three times to ride out a CDN still
+  # catching up with the deploy.
+  live-links:
+    name: crawl the deployed docs site
+    needs: deploy
+    if: >-
+      always() &&
+      (github.event_name == 'schedule' ||
+       (github.ref == 'refs/heads/main' && needs.deploy.result == 'success'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the crawl script
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same task a laptop runs, without mise: the floor below is the one in `mise.toml`'s
+      # `docs:links:live`, three quarters of the 20 pages published on 2026-10-09.
+      - run: python3 scripts/docs_links.py live --min-pages 15

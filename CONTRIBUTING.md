@@ -56,6 +56,22 @@ prints `lower the baseline: mise run docs:prose:baseline`: run that task and com
 the change. A baseline only goes down in review, so a diff that raises a count in it needs the
 same scrutiny as a widened `ignore` list.
 
+## The docs site: `mise run docs:gate`
+
+A change under `docs/` or `site/` also needs `mise run docs:install && mise run docs:gate`, which
+`check` leaves out because it needs node and a site build. CI runs it in `.github/workflows/docs.yml`,
+and the pre-push hook runs its link crawl when a push touches either tree.
+
+| Task | Command | What fails you |
+| --- | --- | --- |
+| `docs:build` | `pnpm run build` in `site/` | a relative link the build left unresolved (`starlight-links-validator` with `errorOnRelativeLinks`), a fragment naming no heading, or a citation to a path absent at the pinned commit |
+| `docs:links` | `python3 scripts/docs_links.py dist` | any internal `href` or `src` in `site/dist` (pages, head, raw `.md` twins, the `llms.txt` bundles) that GitHub Pages would answer with a 404, hidden paths included, or a fragment naming no `id`; also 0 pages, 0 internal links, or a page of the content collection with no route or twin in the build |
+| `docs:gate` | `pnpm run check && pnpm run test` in `site/`, after `docs:build` and `docs:links` | `astro check` and the `vitest` probes over `site/dist` |
+
+`mise run docs:links:live` runs the same crawl over the deployed site, from its sitemap. The
+`live-links` job in `docs.yml` runs it after every deploy and every Monday, and fails on any
+internal link that does not answer 200.
+
 Never reach green by relaxing a gate. Widening an `ignore` list, adding a
 blanket per-file ignore, or deleting a contract is a change to the project's
 standards, not a fix to your branch — raise it in the pull request instead.
@@ -78,7 +94,8 @@ The other hooks in `lefthook.yml` run a subset of the gate early, so a clean
   (both `stage_fixed: true`, so fixes are re-staged for you), `ty check`, and
   `lint-imports`. Plus `uv lock --check` whenever a `pyproject.toml` or
   `uv.lock` is staged.
-- **pre-push**: `pytest --no-header -q`.
+- **pre-push**: `pytest --no-header -q`, plus `mise run docs:links` (a site build and the
+  crawl of `site/dist`) when the push touches `docs/` or `site/`.
 
 `ty`, `lint-imports`, and the pre-push pytest are skipped during a merge or
 rebase (`skip: [merge, rebase]`); `mise run check` is what covers those.
