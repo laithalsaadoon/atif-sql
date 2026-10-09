@@ -1,8 +1,33 @@
 # atif-embed
 
-Embedding pipeline for the atif-sql workspace: Cohere Embed v4 on Bedrock,
-a local LanceDB vector store, and the backfill use case that discovers and
+Embedding pipeline for the atif-sql workspace: two embedders behind one
+port (Cohere Embed v4 on Bedrock, or EmbeddingGemma 2 on this machine), a
+local LanceDB vector store, and the backfill use case that discovers and
 embeds corpus steps with no current embedding.
+
+## Providers
+
+`ATIF_SQL_EMBED_PROVIDER` selects one, and `providers.build_embedder` is the
+only place that names a concrete adapter.
+
+| | `cohere` (default) | `gemma` |
+| --- | --- | --- |
+| Model | `global.cohere.embed-v4:0` on Bedrock | `google/embeddinggemma-2`, text-only, pinned revision |
+| Where it runs | Amazon Bedrock, billed | this machine, free, after a 1.5 GB download |
+| Widths (`ATIF_SQL_OUTPUT_DIMENSION`) | 1024 (default), 256, 512, 1536 | 768 (default), 512, 256, 128 |
+| Default store | `<corpus_root>/embeddings_lance` | `<corpus_root>/embeddings_lance_gemma` |
+| Install | always | the `local` extra (torch, transformers, sentence-transformers, torchvision, pillow) |
+
+The Gemma adapter loads the model lazily, once, through sentence-transformers
+with the vision and audio encoders dropped. Documents embed under the model's
+`Document` prompt and queries under `SearchQuery`, truncated to the width and
+re-normalized. It runs bfloat16 on a CUDA device that supports it and float32
+everywhere else, never float16, which the model card says returns NaN or
+degraded vectors. Batches form shortest first under a padded-character budget,
+so a long step never pads a whole batch to its length, and the loader caps
+each text at the model's 8,192-token window. torch and its libraries are
+imported by name inside the adapter, so the default path, CI and both type
+checkers run without the extra.
 
 ## Layout
 
@@ -18,6 +43,9 @@ atif_embed/
   infrastructure/
     cohere_bedrock.py    Cohere Embed v4 adapter (batch 96, semaphore 8,
                          int8 docs / float queries, 50K clip, truncate RIGHT)
+    gemma_local.py       EmbeddingGemma 2 adapter (text-only, pinned revision,
+                         Document / SearchQuery prompts, bf16 or fp32)
+    providers.py         build_embedder — the adapter the settings select
     lance_store.py       LanceDB embeddings table + IvfHnswSq cosine index
     corpus_text_rows.py  DuckDbTextRows — TextRowsPort over the contract corpus
     lake_text_rows.py    LakeTextRows — TextRowsPort over LakeStepsPort, with
@@ -87,7 +115,8 @@ implements it over atif-duck's `infrastructure.lake_steps`, and
 ## Store contract
 
 Lance table `embeddings` at `ATIF_SQL_LANCE_URI`
-(default `<corpus_root>/embeddings_lance`):
+(default `<corpus_root>/embeddings_lance` for Cohere and
+`<corpus_root>/embeddings_lance_gemma` for Gemma):
 
 | column      | type                  |
 |-------------|-----------------------|

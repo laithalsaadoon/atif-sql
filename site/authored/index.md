@@ -37,7 +37,7 @@ flowchart LR
 | `atif-duck` | The DuckDB views and macros over the materialized corpus, declared in a drift-tested static catalog |
 | `atif-models` | The model alias registry and the structured-output LLM client. No other package names a Bedrock model id |
 | `atif-analytics` | The LLM pipelines: classify, conflicts, friction, perceived |
-| `atif-embed` | Cohere Embed v4 on Bedrock, a LanceDB vector store, and the embedding backfill |
+| `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine, a LanceDB vector store, and the embedding backfill |
 | `atif-cli` | The cyclopts CLI that composes the rest |
 
 Each package is layered, and the independence contract is enforced by import-linter rather than by
