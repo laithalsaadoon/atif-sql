@@ -43,7 +43,7 @@ that.
 | `lint:imports` | `uv run lint-imports` | the import contracts below |
 | `lint:pnpm-lock` | `python3 scripts/verify_single_yaml_document.py site/pnpm-lock.yaml` | `site/pnpm-lock.yaml` holding more than one YAML document, which GitHub's dependency graph cannot read |
 | `security:vex:check` | `uv run python scripts/vex_to_osv_config.py ... --check` | `osv-scanner.toml` or the `allow-ghsas:` line of `.github/workflows/dependency-review.yml` drifting from `security/atif-sql.openvex.json`, or a ledger PURL version that `uv.lock` or `site/pnpm-lock.yaml` no longer locks; `mise run security:vex` re-renders both |
-| `docs:prose` | `python3 scripts/vale_gate.py` | an error-level Vale alert in `docs/**/*.md`, `site/authored/**/*.md`, `README.md` or `AGENTS.md`, or a run that checked fewer files than that scope holds; `.vale.ini` names the rules and why each one below error sits there, and a new term goes in `.vale/styles/config/vocabularies/atif-sql/accept.txt` |
+| `docs:prose` | `python3 scripts/vale_gate.py` | an error-level Vale alert in `docs/**/*.md`, `site/authored/**/*.md`, `README.md`, `AGENTS.md` or `CONTRIBUTING.md`, a run that checked fewer files than that scope holds, or a glob that matched fewer files than its floor in `scripts/vale_gate.py` (`docs/**/*.md` at least 15, `site/authored/**/*.md` at least 2, each root file at least 1); `.vale.ini` names the rules and why each one below error sits there, and a new term goes in `.vale/styles/config/vocabularies/atif-sql/accept.txt` |
 | `test` | `uv run pytest --no-header -q` | `[tool.pytest.ini_options] testpaths = ["packages/*/tests"]` |
 
 Most gates declare `sources`, so mise skips one whose inputs have not moved by
@@ -149,8 +149,8 @@ member's `src/` imports either one.
 (RFC 0001) and `harbor.utils.trajectory_validator` live in
 `atif_converter.domain.atif`, copied from harbor 0.24.0 under Apache-2.0. Each file
 carries an attribution header and is otherwise upstream's file byte for byte, with
-the import path rewritten; ruff and ty skip the directory so nobody reformats it
-into ours. `UPSTREAM_VERSION` in its `__init__` records the release, and `meta.json`
+the import path rewritten; ruff and ty skip the directory so no formatter rewrites
+it into ours. `UPSTREAM_VERSION` in its `__init__` records the release, and `meta.json`
 stamps it as `harbor_version`. The conversion from a Claude Code session or a Codex
 rollout to a `Trajectory` is ours, in `atif_converter.domain.claude_code_conversion`
 and `atif_converter.domain.codex_conversion`, ported from harbor and held to parity
@@ -207,7 +207,7 @@ pipelines) and `atif-sql embed` (Cohere Embed v4). Each is guarded, and the
 guards are part of the contract:
 
 - `analyze` is dry-run by default; `--no-dry-run` is what makes it spend.
-- `embed` refuses an unscoped real run — no `--limit` and no `--all` exits 64.
+- `embed` refuses a real run with no scope — no `--limit` and no `--all` exits 64.
 
 The test suite must stay offline: fake the port, never the credential. If a
 change makes a Bedrock call reachable from `pytest`, that is a defect in the
@@ -219,4 +219,4 @@ change.
 per experiment. Nothing there is wired into a gate — pytest's `testpaths` only
 collects `packages/*/tests`, and outputs are written to `experiments/**/out/`,
 which `.gitignore` excludes. An experiment's recorded numbers are measurements;
-if you re-run one, add your measurement rather than editing someone else's.
+if you re-run one, add your measurement rather than editing the one already recorded.
