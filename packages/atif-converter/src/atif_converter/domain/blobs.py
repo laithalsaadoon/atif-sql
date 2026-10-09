@@ -422,6 +422,26 @@ def _rewrite_codex_items(
     return refs
 
 
+def _rewrite_nested_mcp_result(
+    payload: dict[str, Any], collector: BlobCollector, index: BlobIndex
+) -> None:
+    """Lift the images out of a completed ``McpToolCall`` item's result content.
+
+    A code-mode script's nested MCP call becomes a tool call of its own
+    (:mod:`atif_converter.domain.codex_nested_calls`), keyed by the item's
+    ``id``, so its images are indexed under that id, by the tool output rule.
+    """
+    item = payload.get("item") if payload.get("type") == "item_completed" else None
+    if not isinstance(item, dict) or item.get("type") != "McpToolCall":
+        return
+    result = item.get("result")
+    content = result.get("content") if isinstance(result, dict) else None
+    if isinstance(content, list):
+        index.add_tool_result(
+            item.get("id"), _rewrite_codex_items(content, collector, tool_output=True)
+        )
+
+
 def extract_codex_blobs(
     records: Sequence[Any],
     collector: BlobCollector,
@@ -431,7 +451,9 @@ def extract_codex_blobs(
 
     An ``input_image`` data URL is lifted from message content and tool
     outputs; an MCP ``image`` block with inline base64 only from a tool output
-    list, by :func:`codex_tool_image_ref`'s rule.
+    list, by :func:`codex_tool_image_ref`'s rule. The result content of a
+    completed ``McpToolCall`` item (a code-mode script's nested MCP call) is a
+    tool output list too, indexed by the item's ``id``.
 
     ``record_keys`` (parallel to ``records``) names each record the way the
     enrichment pass names it in ``source_uuids``; without it, attachments in
@@ -440,10 +462,15 @@ def extract_codex_blobs(
     """
     index = BlobIndex()
     for position, record in enumerate(records):
-        if not isinstance(record, dict) or record.get("type") != "response_item":
+        if not isinstance(record, dict):
             continue
         payload = record.get("payload")
         if not isinstance(payload, dict):
+            continue
+        if record.get("type") == "event_msg":
+            _rewrite_nested_mcp_result(payload, collector, index)
+            continue
+        if record.get("type") != "response_item":
             continue
         payload_type = payload.get("type")
         if payload_type == "message" and isinstance(payload.get("content"), list):

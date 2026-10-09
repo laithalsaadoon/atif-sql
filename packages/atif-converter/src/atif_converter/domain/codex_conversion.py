@@ -185,6 +185,17 @@ def _tool_output_content(blocks: list[dict[str, Any]]) -> str:
     return "\n".join(_tool_output_block_text(block) for block in blocks)
 
 
+def structured_output_text(value: Any) -> str | None:
+    """:func:`_tool_output_content`'s text for a list of content blocks or items, else ``None``.
+
+    Not part of harbor's converter: the result-signals pass renders a code-mode
+    script's nested MCP result through it
+    (:mod:`atif_converter.domain.codex_nested_calls`), so the blocks of a
+    nested call read the way the same blocks read in a top-level tool output.
+    """
+    return _tool_output_content(value) if _is_tool_output_content(value) else None
+
+
 def _tool_output_block_text(block: dict[str, Any]) -> str:
     block_type = block["type"]
     text = block.get("text")
@@ -1022,4 +1033,4 @@ def convert_codex_records(
     )
 
 
-__all__ = ["convert_codex_records"]
+__all__ = ["convert_codex_records", "structured_output_text"]
