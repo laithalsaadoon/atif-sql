@@ -709,7 +709,7 @@ description = "Vale over the published prose: fail on an error-level alert, a sh
 # every one of those files, so a broken glob, a moved tree or an emptied directory is a red gate
 # rather than "0 errors in 5 files". Warnings are a ratchet: .vale-baseline.json holds the count
 # per rule, and a rule above its count, or a warning from a rule it does not name, fails naming
-# the rule (`Google.EmDash: 450 warnings, baseline 449`). A count below passes and asks for
+# the rule (`Google.WordListCase: 121 warnings, baseline 120`). A count below passes and asks for
 # `mise run docs:prose:baseline`. A missing, empty or unparsable baseline fails. No `sources`: a
 # few seconds, and a skipped gate reads like a passing one.
 #

@@ -4,8 +4,8 @@ Binding for all packages. Orchestrator-owned; change only via this file.
 
 This file binds the corpus layout, the enrichment pass, the
 transcript-derived view/macro surface, and the CLI shapes below. What sits on
-top of them — the analytics pipelines, VSS, the model registry, the cron
-lanes — is bound by `docs/CONTRACT-V2.md`.
+top of them (the analytics pipelines, VSS, the model registry, the cron
+lanes) is bound by `docs/CONTRACT-V2.md`.
 
 ## Scope: the transcript-derived surface
 The views
@@ -15,7 +15,7 @@ task_creations/task_updates/tasks_state_current,
 skill_invocations + macros ago, model_used, cost_estimate, tool_rank,
 todo_velocity, subagent_fanout, skill_rank, skill_source_mix; CLI query/schema/status.
 VSS/semantic_search and the analytics pipelines are shipped commands, bound
-by CONTRACT-V2 rather than by this file — their absence from the list above
+by CONTRACT-V2 rather than by this file; their absence from the list above
 divides labour between the two contracts and does not deny they exist. Lean
 proofs are out of scope for the workspace.
 
@@ -340,7 +340,7 @@ SUPERSET of the prior implementation (workflow-nested files are visible);
 (f) enrichment covers >= 99% of assistant uuids; (g) sidechain step token
 sums equal an independent raw subagent-file sum.
 
-All gates passed — first on a small sample, then on a larger set of sessions
+All gates passed: first on a small sample, then on a larger set of sessions
 across many project dirs. Neither the runners nor the recorded verdicts are
 tracked here. Parity is not a standing gate: the comparison target is not a
 dependency of this repo, so re-running the oracle would need an install this

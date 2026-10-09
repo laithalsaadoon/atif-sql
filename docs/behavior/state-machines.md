@@ -3,8 +3,8 @@
 No entity in this workspace carries a `status` enum with declared transitions. The enums the workspace
 declares aren't lifecycles either. `RecordType` (`packages/atif-converter/src/atif_converter/domain/fidelity.py:18`)
 and `FidelityGap` (`:44`) are closed classification vocabularies whose members never move into one
-another. `OutputFormat` (`packages/atif-cli/src/atif_cli/output.py:58`) has one resolution —
-`resolve_format` maps `AUTO` to `TABLE` on a TTY and `JSON` otherwise (`:79-81`) — but that is an
+another. `OutputFormat` (`packages/atif-cli/src/atif_cli/output.py:58`) has one resolution:
+`resolve_format` maps `AUTO` to `TABLE` on a TTY and `JSON` otherwise (`:79-81`), but that is an
 idempotent pure function evaluated per emit, a no-op for every explicit format (`:74-80`), whose result
 is never stored and never advances again. One irreversible resolution with no persisted state is not a
 lifecycle.
@@ -16,7 +16,7 @@ names and transition labels are verbatim source text from each machine's `Define
 ## Corpus session materialization
 
 Every pass over the raw transcript corpus reclassifies each discovered session from scratch, so the
-state is not a stored field — it is the pair "what the watermark records" and "whether the session's
+state is not a stored field; it is the pair "what the watermark records" and "whether the session's
 artifact directory exists". The classification is the `if / elif / else` at
 `packages/atif-corpus/src/atif_corpus/domain/sessions.py:200-206`, and the outcome states are the
 counters and id tuples of `MaterializationReport`
@@ -40,7 +40,7 @@ stateDiagram-v2
 
 - `skipped_live` is the entry state, not an error state. A transcript is appended to many times per
   turn, and a session qualifies to convert only once its newest source mtime is at least
-  `quiesce_seconds` old — 300 by default (`packages/atif-corpus/src/atif_corpus/domain/sessions.py:81`).
+  `quiesce_seconds` old, 300 by default (`packages/atif-corpus/src/atif_corpus/domain/sessions.py:81`).
   `force` overrides staleness but never quiescence, because converting a half-written transcript
   produces a wrong artifact rather than a stale one (`:170-174`).
 - `failures --> to_materialize` is the retry, and it works only because `_advance_watermark` retains
@@ -48,7 +48,7 @@ stateDiagram-v2
   entry *is* the retry signal; dropping it would classify the session `up_to_date` forever
   (`packages/atif-corpus/src/atif_corpus/application/materialize.py:435-448`).
 - `up_to_date --> to_materialize: _unmaterialized_session_ids` is the crash-recovery edge. It is
-  reachable exactly one way — a pass killed inside the directory swap, after the previous generation
+  reachable exactly one way: a pass killed inside the directory swap, after the previous generation
   was renamed aside and before the new one landed. The watermark records source mtimes only and cannot
   express a missing artifact directory, so the directory check is what force-replans it (`:302-328`).
 - `unreadable_session_ids` is a parking state, and the only state a session can starve in. A transient
@@ -87,7 +87,7 @@ stateDiagram-v2
   `truncated`; `unrecorded` is a store whose columns are already current but whose sidecar is absent,
   which `read_schema_version` reports as `None` (`:141-154`).
 - `v1 --> v2` is online and metadata-only. `migrate_pre_stamp_table` adds the two columns through
-  Lance schema evolution with SQL default expressions — no rows dropped, no vectors re-embedded, and
+  Lance schema evolution with SQL default expressions: no rows dropped, no vectors re-embedded, and
   readers keep working throughout (`:164-190`). `text_hash` backfills to `_PRE_STAMP_SENTINEL`, the
   literal `<pre-stamp>` (`:71`), whose angle brackets make it impossible to equal a real blake2b
   digest; every migrated row therefore mismatches its corpus hash in the discovery anti-join and
@@ -95,7 +95,7 @@ stateDiagram-v2
 - `v2 --> v2: _has_table` is idempotent reopening. `migrate_pre_stamp_table` returns early when
   nothing is missing (`:180-181`) and the sidecar stamp is left alone.
 - The machine has no terminal state in source. `v2` is absorbing; the store is never dropped here.
-  A breaking change — a provider or dimension switch — is refused rather than migrated, and stays
+  A breaking change (a provider or dimension switch) is refused rather than migrated, and stays
   fail-loud through `embedding_guard` (`:25-27`).
 
 Defined at: `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:195`
@@ -119,8 +119,8 @@ stateDiagram-v2
 ```
 
 - The first `enqueue` lands in `backoff`, never `due`: it stamps `next_attempt_at` at now plus
-  `_backoff_delta(1)`, which is two minutes (`:78-81`, `:109`). Backoff is exponential in minutes —
-  2, 4, 8, 16, 32 — and `_BACKOFF_CAP_MIN` clamps it at 60 (`:43`, `:79`). That clamp is defensive
+  `_backoff_delta(1)`, which is two minutes (`:78-81`, `:109`). Backoff is exponential in minutes
+  (2, 4, 8, 16, 32), and `_BACKOFF_CAP_MIN` clamps it at 60 (`:43`, `:79`). That clamp is defensive
   rather than reachable at the shipped default: `drain` admits a unit only while
   `attempts < max_attempts` (`:145`), so with `MAX_ATTEMPTS_DEFAULT` of 5 (`:42`) the largest value
   `_backoff_delta` receives is 5 and the longest real wait is 32 minutes.
@@ -147,8 +147,8 @@ stateDiagram-v2
 
 Every pipeline named by `PIPELINE_NAMES`
 (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:37-42`) fire
-the identical call sequence — `drain`, then `blocked_units`, then `enqueue` on failure and
-`mark_done` on success:
+the identical call sequence (`drain`, then `blocked_units`, then `enqueue` on failure and
+`mark_done` on success):
 
 | pipeline | `drain` | `blocked_units` | `enqueue` | `mark_done` |
 | --- | --- | --- | --- | --- |

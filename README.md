@@ -13,15 +13,15 @@ Claude Code sessions (`~/.claude/projects/**/*.jsonl`) and Codex CLI rollouts
 (`~/.codex/sessions/**/rollout-*.jsonl`) are converted to ATIF (Harbor's Agent
 Trajectory Interchange Format, see the Harbor ATIF RFC: RFC-0001 in
 <https://github.com/laude-institute/harbor>), materialized as a corpus, and
-queried through DuckDB views. Converting once at the boundary — with an
-explicit, tested fidelity policy for what upstream drops — beats re-deriving
+queried through DuckDB views. Converting once at the boundary (with an
+explicit, tested fidelity policy for what upstream drops) beats re-deriving
 trajectory semantics inside every SQL view. Both agents land in the same views,
 and `sessions.agent` says which one a row came from.
 
 ## Install
 
 One command, one package, every capability. Conversion, materialization, the DuckDB surface,
-the LLM analytics pipelines, and semantic search are all in the box — there are no extras to
+the LLM analytics pipelines, and semantic search are all in the box; there are no extras to
 choose and nothing to install afterwards to make a command work.
 
 ```bash
@@ -140,7 +140,7 @@ pick which, or `--agent codex` to get the Codex default. `--all-corpora` reads
 every corpus the lake holds at once, and `sessions.corpus` says which one a
 row came from.
 
-Working on `atif-sql` itself is a different setup — a clone, `mise`, and `mise run check` as the
+Working on `atif-sql` itself is a different setup: a clone, `mise`, and `mise run check` as the
 definition of done. `CONTRIBUTING.md` has it.
 
 ## Agent workflow: schema → examples → query
@@ -152,7 +152,7 @@ atif-sql query 'SELECT * FROM tool_rank(30) LIMIT 10'
 ```
 
 `atif-sql examples` (or `atif-sql query --examples`) emits runnable queries
-derived from the catalog — not hardcoded strings — and every one is executed
+derived from the catalog, not hardcoded strings, and every one is executed
 by the test suite against a fixture corpus, so the listing cannot rot.
 Piped output is JSON; filter with `--requires core|analytics|vss` and
 `--category view|table-macro|scalar-macro`.
@@ -162,7 +162,7 @@ Piped output is JSON; filter with `--requires core|analytics|vss` and
 Setup, the gates `mise run check` runs, the import-linter contracts you will trip, and the
 Conventional Commit rule the `commit-msg` hook enforces: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
-Releases are cut by commitizen and published to PyPI over OIDC Trusted Publishing —
+Releases are cut by commitizen and published to PyPI over OIDC Trusted Publishing;
 **[RELEASING.md](RELEASING.md)** covers the flow, the versioning model, and the install-weight
 measurements.
 

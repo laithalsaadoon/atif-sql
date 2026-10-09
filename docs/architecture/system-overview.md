@@ -5,7 +5,7 @@
 `atif-sql` is a command-line analytics tool over agent trajectories from Claude Code and Codex CLI. It reads the
 session transcripts Claude Code leaves at `~/.claude/projects/**/*.jsonl` and the rollouts Codex CLI
 leaves at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`, converts each one to
-ATIF — Harbor's Agent Trajectory Interchange Format — materializes the results as an on-disk
+ATIF (Harbor's Agent Trajectory Interchange Format), materializes the results as an on-disk
 corpus, and answers SQL against that corpus through DuckDB (`README.md:12`). The design bet is
 stated in the README itself: converting once at the boundary, with an explicit and tested fidelity
 policy for what the upstream converter drops, beats re-deriving trajectory semantics inside every
@@ -14,13 +14,13 @@ moves the default source and corpus roots with it
 (`packages/atif-corpus/src/atif_corpus/infrastructure/settings.py`); one corpus holds one agent, and
 the `sessions` view reports which (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:428`).
 The reader it serves is an engineer or an agent asking how sessions
-actually went — which tools ran, where tokens went, where a session turned into friction.
+actually went: which tools ran, where tokens went, where a session turned into friction.
 
 Users get one installable distribution and one console script,
 `atif-sql = "atif_cli.app:main"` (`packages/atif-cli/pyproject.toml:42`), installed with
 `uv tool install atif-sql` (`README.md:26`). The command surface is the commands registered
 with `@app.command` in `packages/atif-cli/src/atif_cli/app.py` plus the `cron` sub-app
-attached at `:65`. Nothing here is a server — DuckDB is embedded
+attached at `:65`. Nothing here is a server; DuckDB is embedded
 (`packages/atif-duck/pyproject.toml:20`), as are the SQLite analytics state file and the LanceDB
 vector store. The commands `analyze` / `embed` / `search` call Amazon Bedrock and spend money
 per invocation, and each is dry-run by default (`README.md:37`).
@@ -111,7 +111,7 @@ process exit codes at the CLI edge (`:38`).
 ## Module map
 
 Nodes are the uv workspace members. Every edge is an import confirmed at an import site.
-There is no `atif-corpus` to `atif-converter` edge — the independence contract forbids it, and
+There is no `atif-corpus` to `atif-converter` edge: the independence contract forbids it, and
 `RealConverter` in `packages/atif-cli/src/atif_cli/converter_adapter.py:44` satisfies
 `ConverterPort` by importing both from the composition root (`:36`, `:38`). `atif-duck`,
 `atif-analytics`, and `atif-embed` exchange data through corpus files on disk, never through an

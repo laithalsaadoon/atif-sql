@@ -5,8 +5,8 @@ atif-sql is a uv workspace whose root is also the one published distribution:
 which bundles every module tree) and `[tool.uv.workspace] members =
 ["packages/*"]`. The packages under `packages/` are development members,
 not install targets. Everything below is read off the
-checked-in config — `mise.toml`, `pyproject.toml`, `lefthook.yml`, and
-`AGENTS.md` — so if a claim here and a config file disagree, the config file
+checked-in config (`mise.toml`, `pyproject.toml`, `lefthook.yml`, and
+`AGENTS.md`), so if a claim here and a config file disagree, the config file
 wins and this document is the bug.
 
 ## First-time setup
@@ -28,7 +28,7 @@ settles on 3.14.
 Drive every command through `mise run <task>` rather than calling `uv`, `ruff`,
 or `ty` directly. The mise `[env]` block sets `PYTHONDONTWRITEBYTECODE=1` and
 `UV_LINK_MODE=copy`, and `[settings] python.uv_venv_auto = "create|source"`
-creates and sources the workspace venv — a bare tool invocation can miss all of
+creates and sources the workspace venv; a bare tool invocation can miss all of
 that.
 
 ## Definition of done: `mise run check`
@@ -56,6 +56,10 @@ prints `lower the baseline: mise run docs:prose:baseline`: run that task and com
 the change. A baseline only goes down in review, so a diff that raises a count in it needs the
 same scrutiny as a widened `ignore` list.
 
+`Google.EmDash` is an error, not a ratchet: a dash with a space on each side (a line break counts as
+a space) fails `docs:prose` on its own. Write a colon, comma, period, or parentheses in its place,
+whichever keeps the sentence's sense; `.vale.ini` says why the rule sits at error.
+
 ## The docs site: `mise run docs:gate`
 
 A change under `docs/` or `site/` also needs `mise run docs:install && mise run docs:gate`, which
@@ -74,13 +78,13 @@ internal link that does not answer 200.
 
 Never reach green by relaxing a gate. Widening an `ignore` list, adding a
 blanket per-file ignore, or deleting a contract is a change to the project's
-standards, not a fix to your branch — raise it in the pull request instead.
+standards, not a fix to your branch. Raise it in the pull request instead.
 
 ## Commits
 
 Commit messages must be [Conventional Commits](https://www.conventionalcommits.org):
 `type(scope): subject` with `type` one of `feat|fix|chore|docs|refactor|test|perf|ci`.
-This is enforced, not advisory — `lefthook.yml`'s `commit-msg` hook runs
+This is enforced, not advisory: `lefthook.yml`'s `commit-msg` hook runs
 `uv run cz check --allow-abort --commit-msg-file {1}`, configured by
 `[tool.commitizen]` in
 `pyproject.toml` (`name = "cz_conventional_commits"`, with
@@ -109,7 +113,7 @@ root packages. These shape the whole workspace:
 
 1. **Independence.** `atif_converter`, `atif_corpus`, `atif_duck`,
    `atif_models`, and `atif_embed` may never import each other. If you need
-   two of them in one flow, compose them in `atif_cli` — it is the only
+   two of them in one flow, compose them in `atif_cli`; it is the only
    composition root and may import them all.
 2. **`atif_analytics` composes `atif_models` and nothing else of ours.** A
    `forbidden` contract pins its remaining edges shut: it may not import
@@ -120,7 +124,7 @@ root packages. These shape the whole workspace:
 The rest are `layers` contracts:
 `application > infrastructure > domain` for `atif_converter`, `atif_corpus`,
 `atif_embed`, and `atif_analytics`, and `infrastructure > domain` for
-`atif_models`. Dependencies point inward — a `domain` module importing from
+`atif_models`. Dependencies point inward: a `domain` module importing from
 `infrastructure` fails `lint:imports`.
 
 Other rules live in ruff rather than import-linter:
@@ -140,7 +144,7 @@ failure.
 
 **A dependency on a sibling package.** Declare it in the member's
 `[project.dependencies]` *and* add `[tool.uv.sources] <pkg> = { workspace = true }`
-— both, per `AGENTS.md`. The independence contract above still applies.
+(both, per `AGENTS.md`). The independence contract above still applies.
 
 **A new package.** `packages/*` is globbed as a workspace member, but these
 places in the root `pyproject.toml` list packages explicitly and will not pick
@@ -153,14 +157,14 @@ The new member also needs the license wiring every existing member has:
 a `LICENSE` symlink to the repo root (`ln -s ../../LICENSE
 packages/<name>/LICENSE`). `license-files` globs are resolved inside the
 member's own directory and `..` is rejected, so the symlink is what puts the
-license text into the wheel's `dist-info/licenses/` — Apache-2.0 §4(a) requires
+license text into the wheel's `dist-info/licenses/`; Apache-2.0 §4(a) requires
 it, and `uv build` fails outright if the file is missing.
 
 **A DuckDB view or macro.** The catalog is static and drift-tested. Per
 `AGENTS.md`, adding an object means adding a `DESCRIPTIONS` entry in
 `atif_duck/domain/catalog.py`, an `ARG_EXEMPLARS` entry for any new parameter
 name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and a derived
-example that actually executes — or a documented `EXCLUSIONS` entry. The tests
+example that actually executes (or a documented `EXCLUSIONS` entry). The tests
 in `packages/atif-duck/tests/` fail until that is true.
 
 ## harbor and litellm are test oracles, not dependencies
@@ -231,7 +235,7 @@ pipelines) and `atif-sql embed` (Cohere Embed v4). Each is guarded, and the
 guards are part of the contract:
 
 - `analyze` is dry-run by default; `--no-dry-run` is what makes it spend.
-- `embed` refuses a real run with no scope — no `--limit` and no `--all` exits 64.
+- `embed` refuses a real run with no scope: no `--limit` and no `--all` exits 64.
 
 The test suite must stay offline: fake the port, never the credential. If a
 change makes a Bedrock call reachable from `pytest`, that is a defect in the
@@ -240,7 +244,7 @@ change.
 ## Experiments
 
 `experiments/` holds numbered protocols with a README (and, once run, a REPORT)
-per experiment. Nothing there is wired into a gate — pytest's `testpaths` only
+per experiment. Nothing there is wired into a gate: pytest's `testpaths` only
 collects `packages/*/tests`, and outputs are written to `experiments/**/out/`,
 which `.gitignore` excludes. An experiment's recorded numbers are measurements;
 if you re-run one, add your measurement rather than editing the one already recorded.

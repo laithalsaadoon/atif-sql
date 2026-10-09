@@ -1,10 +1,10 @@
 ---
 title: atif-sql
-description: ATIF-native analytics over Claude Code and Codex CLI agent trajectories — convert sessions to ATIF, materialize a corpus, query it through DuckDB views.
+description: "ATIF-native analytics over Claude Code and Codex CLI agent trajectories: convert sessions to ATIF, materialize a corpus, query it through DuckDB views."
 ---
 
 atif-sql reads Claude Code session transcripts and Codex CLI rollouts, converts each session to
-[ATIF](https://github.com/laude-institute/harbor) — Harbor's Agent Trajectory Interchange Format —
+[ATIF](https://github.com/laude-institute/harbor) (Harbor's Agent Trajectory Interchange Format),
 materializes the results as a corpus of ATIF documents on disk, and layers DuckDB views and macros
 over that corpus. Converting once at the boundary, with an explicit and tested fidelity policy for
 what the upstream adapter drops, replaces re-deriving trajectory semantics inside every SQL view.
@@ -53,7 +53,7 @@ atif-sql query 'SELECT * FROM tool_rank(30) LIMIT 10'
 ```
 
 `atif-sql examples` derives its output from the catalog rather than carrying hardcoded strings, and
-every example is executed against a fixture corpus by `atif-duck`'s own test suite — so the listing
+every example is executed against a fixture corpus by `atif-duck`'s own test suite, so the listing
 cannot drift from the schema it documents.
 
 :::agent

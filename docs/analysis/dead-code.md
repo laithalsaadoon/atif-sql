@@ -14,7 +14,7 @@ definitions under `packages/*/src` have no reference
 outside their own file, and **none** has no reference anywhere. Every one of
 those resolves to a call, construction, or annotation site inside its own module.
 What the two tables below record is a narrower defect: an **export declaration
-with no consumer** — a name in an `__all__` that nothing imports.
+with no consumer**: a name in an `__all__` that nothing imports.
 
 **Technique, and what it cannot see.** No code index covers this repo (there is no `.codegraph/`, no LSP index, no AST
 symbol graph), and no dead-code analyzer is wired into the project: `grep -n
@@ -28,8 +28,8 @@ finding set is therefore derived, in these passes:
    `__all__` membership, and whether its module declares an `__all__` at
    all.
 2. **Unanchored reference index.** For each name, the whole-word pattern
-   `(?<![\w.])NAME(?![\w])` against every line of every git-tracked text file —
-   every path `git ls-files -z` yields, all readable as text — excluding the
+   `(?<![\w.])NAME(?![\w])` against every line of every git-tracked text file
+   (every path `git ls-files -z` yields, all readable as text), excluding the
    defining file. Driving the search from `git ls-files` is what guarantees that
    no citation here lands in a gitignored path and that `.md`, `.toml`, and
    `.yml` surfaces are searched, not only Python.
@@ -50,14 +50,14 @@ The limits of this derivation, stated because no index backs it:
   cross-attributes symbols that share a name across packages, and this repo has
   such collisions on purpose: `DomainError` is declared independently in
   atif-models, atif-converter, and atif-embed, and `EmbeddingProviderMismatch`
-  in more than one. The direction of that error is conservative — it inflates reference
+  in more than one. The direction of that error is conservative: it inflates reference
   counts, so it can hide a dead symbol but cannot invent one.
 - **A textual match is not a semantic reference.** Every reference that keeps a
   symbol off these tables was read at its site rather than counted.
 - **Import position is irrelevant to the method, deliberately.** Because
   `PLC0415` is off (`pyproject.toml:164`) to satisfy the lean-import assertion at
   `packages/atif-cli/tests/test_lean_import.py:17-32`, atif-cli's cross-package
-  imports sit *inside* command bodies —
+  imports sit *inside* command bodies:
   `packages/atif-cli/src/atif_cli/app.py:201`,
   `packages/atif-cli/src/atif_cli/app.py:253`, and
   `packages/atif-cli/src/atif_cli/app.py:615` are all indented. The import graph
@@ -68,7 +68,7 @@ The limits of this derivation, stated because no index backs it:
   string: the only `importlib` uses are
   `packages/atif-cli/src/atif_cli/app.py:83` and
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:128`.
-  No `getattr` targets a module object — every site takes an instance or an
+  No `getattr` targets a module object; every site takes an instance or an
   upstream class, including
   `packages/atif-models/src/atif_models/infrastructure/settings.py:73` and
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`.
@@ -76,7 +76,7 @@ The limits of this derivation, stated because no index backs it:
 Enforced gates are why the list is short rather than thin. ruff runs
 `select = ["ALL"]` (`pyproject.toml:146`) at zero, so `F401`, `F811`, `F841` and
 `ERA001` leave no unused import, no redefinition, no unused local, and no
-commented-out code — with exactly one carve-out, `pyproject.toml:224`
+commented-out code, with exactly one carve-out, `pyproject.toml:224`
 (`"**/__init__.py" = ["F401", "E402"]`). pyright runs
 `typeCheckingMode = "strict"` (`pyproject.toml:596`) over every `src/` and
 `tests/` tree (`pyproject.toml:597-613`) at zero errors, which enforces
@@ -88,7 +88,7 @@ tables below fill.
 ## Unreferenced exports
 
 The names below appear in their own module's `__all__` and in no other tracked file.
-The symbol is live inside its module — the unreferenced thing is the export
+The symbol is live inside its module; the unreferenced thing is the export
 declaration, so the fix is to narrow `__all__`, not to delete code. Each row's
 intra-module use site is named after the table.
 
@@ -166,14 +166,14 @@ numbers follow it as plain numbers.
 
 Further public-by-naming symbols have no outside reference and are **not**
 listed, because their modules make no export claim about them. Most live in
-modules that declare no `__all__` at all —
-`packages/atif-converter/src/atif_converter/domain/edges.py:60`,
+modules that declare no `__all__` at all
+(`packages/atif-converter/src/atif_converter/domain/edges.py:60`,
 `packages/atif-converter/src/atif_converter/domain/edges.py:93`,
 `packages/atif-converter/src/atif_converter/infrastructure/raw_records.py:45`,
 `packages/atif-corpus/src/atif_corpus/application/materialize.py:108`,
 `packages/atif-corpus/src/atif_corpus/domain/layout.py:22`,
 `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:35`, and
-`packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:43` — so
+`packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:43`), so
 they are module-internal helpers. The last,
 `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:77`
 (`DistanceMetric`), sits in a module that does declare an `__all__` and is
@@ -205,7 +205,7 @@ empty:
 `__init__.py` is the only tree where `F401` is off (`pyproject.toml:224`), so it
 is the only place an import with no consumer survives lint. atif-duck is the only
 member whose `__init__.py` files re-export anything, and **every re-export is
-consumed by nothing** — in-repo or out. Each name is listed in its file's
+consumed by nothing**, in-repo or out. Each name is listed in its file's
 `__all__`, which is what keeps the statement alive to the linter; no tracked file
 imports any of them from the package root, and the members are not
 independently installable, so no external consumer exists either.
@@ -238,9 +238,9 @@ independently installable, so no external consumer exists either.
 The absence is checked against the exact import form a consumer would have to
 write, over every tracked file:
 
-- `from atif_duck import ...` — no site.
-- `from atif_duck.domain import ...` — no site.
-- `from atif_duck.infrastructure import ...` — only sites that import the
+- `from atif_duck import ...`: no site.
+- `from atif_duck.domain import ...`: no site.
+- `from atif_duck.infrastructure import ...`: only sites that import the
   **submodule** `analytics`, never one of the re-exported `register*` names:
   `packages/atif-duck/tests/test_analytics_views.py:23` and
   `packages/atif-duck/tests/test_examples.py:42`.
@@ -251,11 +251,11 @@ write, over every tracked file:
 Every real consumer bypasses the facade for the deep module:
 
 - `packages/atif-cli/src/atif_cli/app.py:615` and
-  `packages/atif-cli/src/atif_cli/app.py:906` —
+  `packages/atif-cli/src/atif_cli/app.py:906`:
   `from atif_duck.infrastructure.registry import register`.
-- `packages/atif-cli/src/atif_cli/app.py:1022` —
+- `packages/atif-cli/src/atif_cli/app.py:1022`:
   `from atif_duck.domain.examples import ...`.
-- `packages/atif-cli/src/atif_cli/app.py:1099` —
+- `packages/atif-cli/src/atif_cli/app.py:1099`:
   `from atif_duck.domain.catalog import MACRO_SIGNATURES, VIEW_SCHEMA`.
 - `packages/atif-cli/src/atif_cli/duck_errors.py:26`,
   `packages/atif-cli/tests/test_app.py:78`, and
@@ -264,15 +264,15 @@ Every real consumer bypasses the facade for the deep module:
 The one dynamic reference to the package,
 `packages/atif-cli/tests/test_lean_import.py:21`, names
 `"atif_duck.infrastructure"` inside the `_FORBIDDEN_EAGER_IMPORTS` tuple at
-`packages/atif-cli/tests/test_lean_import.py:17-32` — an assertion that the
+`packages/atif-cli/tests/test_lean_import.py:17-32`, an assertion that the
 module must **not** load on `import atif_cli.app`, which is the opposite of a
 consumer.
 
 Each `__init__.py` presents the facade as intentional:
 `packages/atif-duck/src/atif_duck/__init__.py:6` documents
 `register(con, corpus_root)` as the package entry point. Read against
-`pyproject.toml:17` — one distribution named `atif-sql`, bundling every module
-tree in a single wheel rather than shipping any of them as an install target —
+`pyproject.toml:17` (one distribution named `atif-sql`, bundling every module
+tree in a single wheel rather than shipping any of them as an install target),
 the facade has no addressable consumer, and the CLI is the public contract
 instead.
 

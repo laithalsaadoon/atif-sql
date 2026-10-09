@@ -3,13 +3,13 @@
 Every process in this system starts as a CLI invocation. There is one console
 script, `atif-sql = "atif_cli.app:main"`
 (`packages/atif-cli/pyproject.toml:42`), and its commands are the complete
-initiator set — the `@app.command` sites plus the `cron` sub-App registered at
+initiator set: the `@app.command` sites plus the `cron` sub-App registered at
 `packages/atif-cli/src/atif_cli/app.py:66`. No HTTP route, RPC tool, message
 handler, or job queue exists to initiate anything else; the only scheduled
 initiator is a crontab line into `scripts/atif-sql-refresh.sh`. Long-running
 work is in-process async under `anyio` and `asyncio.run`, not a worker.
 
-## materialize — sync the materialized corpus
+## materialize: sync the materialized corpus
 
 Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
 
@@ -17,18 +17,18 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
    `--corpus-root` re-derives the corpus root from the overridden source's slug
    so re-pointing the source cannot overwrite another corpus, and the CLI hands
    in the wall clock plus the harbor and converter version pins alongside
-   `RealConverter` behind `ConverterPort` — `:190`,
-   `packages/atif-cli/src/atif_cli/converter_adapter.py:44`.
+   `RealConverter` behind `ConverterPort` (`:190`,
+   `packages/atif-cli/src/atif_cli/converter_adapter.py:44`).
 2. Sweep `.staging/`: an entry whose `tmp-<pid>` owner is a dead pid is crash
    debris and is removed, while a live pid belongs to a concurrent pass and is
-   left alone —
-   `packages/atif-corpus/src/atif_corpus/application/materialize.py:274`.
+   left alone
+   (`packages/atif-corpus/src/atif_corpus/application/materialize.py:274`).
 3. Read `watermark.json` as a path-to-mtime map; an unreadable or wrongly
    shaped file degrades to empty, costing one full re-materialization rather
-   than refusing to sync — `packages/atif-corpus/src/atif_corpus/application/materialize.py:160`.
+   than refusing to sync: `packages/atif-corpus/src/atif_corpus/application/materialize.py:160`.
 4. Scan the source root for main transcripts and every side-file, then fold
    sessions living under a directory that would not list into the unreadable
-   set using the watermark as the only record of what lived there —
+   set using the watermark as the only record of what lived there:
    `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:143`,
    `packages/atif-corpus/src/atif_corpus/application/materialize.py:342`.
 5. Guard, then retain sourceless sessions: zero scanned sessions over a
@@ -39,22 +39,22 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
    not evidence of deletion (`_retain_sourceless_sessions`).
 6. Build the pure `MaterializationPlan` from quiescence and the watermark,
    force-replanning sessions the watermark calls current whose artifact
-   directory is missing — the one state reachable by a kill inside the swap
-   window — `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`,
+   directory is missing (the one state reachable by a kill inside the swap
+   window): `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`,
    `packages/atif-corpus/src/atif_corpus/application/materialize.py:313`.
 7. Per planned session: convert, write trajectory, loss report, edges, then
    run the `ArtifactProducer` (the typed columnar parquet files, unless
    `--no-columnar`), and `meta.json` last into a staging directory, then rename the whole directory
    into `sessions/<id>/` so a reader observes only a complete generation; a
-   session that raises is recorded and the pass continues — `packages/atif-corpus/src/atif_corpus/application/materialize.py:228`,
-   `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:98`.
+   session that raises is recorded and the pass continues (`packages/atif-corpus/src/atif_corpus/application/materialize.py:228`,
+   `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:98`).
    With `--workers` above 1 this step runs on a spawn-context process pool;
    each worker runs the same per-session function under its own pid, outcomes
-   are folded back in plan order, and a single planned session runs inline —
+   are folded back in plan order, and a single planned session runs inline:
    `packages/atif-corpus/src/atif_corpus/application/materialize.py:385`.
 8. Advance the watermark for succeeded sessions only, retaining every entry of
    a failed, unplanned, or unreadable session so staleness still signals a
-   retry, and write it atomically before emitting the report —
+   retry, and write it atomically before emitting the report:
    `packages/atif-corpus/src/atif_corpus/application/materialize.py:428`,
    `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:64`.
 
@@ -66,12 +66,12 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:352`
 - `packages/atif-corpus/src/atif_corpus/infrastructure/atomic.py:43`
 - `packages/atif-cli/src/atif_cli/app.py:312`
 
-## convert — one session to ATIF plus a loss audit
+## convert: one session to ATIF plus a loss audit
 
 Entry point: `packages/atif-cli/src/atif_cli/app.py:226`
 
 1. Reject a path that is not an existing `.jsonl` file before any harbor work,
-   which the CLI maps to exit 64 —
+   which the CLI maps to exit 64:
    `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:163`.
 2. Read every source file once: the main transcript and each discovered
    side-file under `<stem>/`, workflow-nested ones included. Each file is
@@ -119,32 +119,32 @@ the audit never read the session separately.
 - `packages/atif-converter/src/atif_converter/domain/fidelity.py:44`
 - `packages/atif-cli/src/atif_cli/errors.py:25`
 
-## analyze — orchestrate the analytics stages
+## analyze: orchestrate the analytics stages
 
 Entry point: `packages/atif-cli/src/atif_cli/app.py:1240`
 
 1. Resolve `AnalyticsSettings`, reusing the corpus-root resolution the other
    commands share, then let `--max-sessions` and `--max-cost-usd` override the
-   env ceilings so a crontab line carries its spend cap visibly — `:1307`.
+   env ceilings so a crontab line carries its spend cap visibly (`:1307`).
    `--llm-only` is accepted and dropped, since every stage is an LLM stage.
 2. Open the lake's session source when the lake holds the corpus, else warn
-   once and read the files (`--no-lake` forces the files) —
+   once and read the files (`--no-lake` forces the files):
    `packages/atif-cli/src/atif_cli/app.py:1624`. Build one `CorpusReader` over
    it, shared by every stage: the steps memo is the expensive part and every
-   stage walks the same sessions —
-   `packages/atif-analytics/src/atif_analytics/application/analyze.py:62`,
-   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:263`.
+   stage walks the same sessions
+   (`packages/atif-analytics/src/atif_analytics/application/analyze.py:62`,
+   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:263`).
 3. Construct the run-wide `RunBudget` from `llm_max_cost_usd_per_run`, priced
-   from the providers' running actual usage rather than estimates —
+   from the providers' running actual usage rather than estimates:
    `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:94`.
 4. Walk the stages (classify, conflicts, friction, perceived) in
    declaration order. A stage entered with the budget already exhausted is
    skipped with nothing stamped, its consecutive-skip streak persisted, and the
-   log escalates to ERROR at three consecutive runs —
+   log escalates to ERROR at three consecutive runs:
    `packages/atif-analytics/src/atif_analytics/application/analyze.py:97`,
    `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:218`.
 5. Emit the per-stage summary carrying `budget_exhausted` and, on a real run,
-   `llm_spent_usd` —
+   `llm_spent_usd`:
    `packages/atif-analytics/src/atif_analytics/application/analyze.py:144`,
    `packages/atif-cli/src/atif_cli/app.py:1322`.
 
@@ -155,7 +155,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1240`
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36`
 - `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`
 
-## classify — the LLM analytics stage shape
+## classify: the LLM analytics stage shape
 
 Entry point: `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`
 
@@ -165,40 +165,39 @@ admit only `interactive` sessions; friction and perceived read only human
 turns, the main-chain user steps whose author is `human`.
 
 1. Resolve the layout, the reader, and the sharded parquet cache, then resolve
-   the model through the atif-models registry by pipeline size — no pipeline
-   writes down a model id — `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`,
+   the model through the atif-models registry by pipeline size (no pipeline
+   writes down a model id): `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`,
    `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:32`.
 2. Under `dry_run`, the default, return a plan dict whose input tokens are
    measured from the actually rendered transcripts and whose session count is
-   the same newest-first cap the real run applies —
+   the same newest-first cap the real run applies:
    `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:293`.
 3. Anti-join the cache for session ids already written, then drop sessions
-   whose last-step timestamp and mtime bounds are unchanged since the last run
-   — `:74`,
-   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:136`.
+   whose last-step timestamp and mtime bounds are unchanged since the last run (`:74`,
+   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:136`).
 4. Drain the retry queue back into the admission set, then subtract units with
-   a live entry — inside backoff or past the attempt cap — because the retry
+   a live entry (inside backoff or past the attempt cap) because the retry
    queue is the single re-admission gate and the checkpoint path would re-bill
-   them —
+   them:
    `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:145`,
    `:159`.
 5. Walk newest-first and stop admitting at `llm_max_sessions_per_run` so a
    deferred session is never rendered; a session that renders to nothing, or
    whose kind isn't `interactive`, is checkpointed at current bounds instead of
-   re-rendered every tick —
+   re-rendered every tick:
    `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:146`.
 6. Dispatch each write chunk in budget-checked sub-batches of
    `BUDGET_CHECK_BATCH`, advancing the cursor by what was actually sent so a
    mid-chunk budget stop leaves the remainder unstamped rather than silently
-   skipped —
+   skipped:
    `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:155`,
    `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:217`.
 7. Route each result: a `RefusalError` is terminal and writes the documented
    `goal='[refused]'` sentinel row so the refusal is queryable and never
-   re-billed, while any other exception enqueues a retry —
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:219`.
+   re-billed, while any other exception enqueues a retry
+   (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:219`).
 8. Write the chunk as a parquet part, checkpoint the completed sessions at
-   current bounds, and clear them from the retry queue —
+   current bounds, and clear them from the retry queue:
    `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:268`,
    `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:272`.
 
@@ -210,53 +209,53 @@ turns, the main-chain user steps whose author is `human`.
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:191`
 - `packages/atif-models/src/atif_models/domain/ports.py:116`
 
-## embed — backfill step embeddings into LanceDB
+## embed: backfill step embeddings into LanceDB
 
 Entry point: `packages/atif-cli/src/atif_cli/app.py:766`
 
 1. Refuse a real run with no scope: without `--limit`, `--all`, or
    `--dry-run` the command exits 64, so a mistyped invocation cannot start a
-   full backfill — `:778`.
+   full backfill (`:778`).
 2. Resolve the Lance URI from `EmbedSettings`, defaulting to
-   `<corpus_root>/embeddings_lance` —
-   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:51`.
+   `<corpus_root>/embeddings_lance`
+   (`packages/atif-embed/src/atif_embed/infrastructure/settings.py:51`).
 3. Read the store's uuid-to-text-hash map once, then stream candidates whose
    hash is absent or stale through `TextRowsPort`; the staleness comparison
    happens before the limit cap so `--limit N` always makes N rows of progress
-   — `packages/atif-embed/src/atif_embed/domain/discovery.py`. With a lake
+   (`packages/atif-embed/src/atif_embed/domain/discovery.py`). With a lake
    that holds the corpus, the rows come from its `steps` table
    (`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py`,
    over `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py`),
    and only the uuids a lake snapshot touched since the watermark in the
    store directory are read; otherwise every session's `trajectory.json` is
-   read — `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py`.
+   read (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py`).
 4. Under `--dry-run`, count candidates and return the plan dict, returning
-   before boto3 is ever imported —
+   before boto3 is ever imported:
    `packages/atif-embed/src/atif_embed/application/embed.py:120`.
 5. Build the Cohere-on-Bedrock provider once, then refuse to append when the
    store's stamped model and dimension differ from the live embedder's, because
-   mixing vector spaces corrupts kNN silently — `:157`,
-   `packages/atif-embed/src/atif_embed/domain/embedding_guard.py:38`.
+   mixing vector spaces corrupts kNN silently (`:157`,
+   `packages/atif-embed/src/atif_embed/domain/embedding_guard.py:38`).
 6. Per chunk, a multiple of the batch size so a checkpoint boundary never
    splits a Bedrock batch: embed the texts and drop rows the provider failed,
-   leaving them pending for the next run —
-   `packages/atif-embed/src/atif_embed/application/embed.py:147`,
-   `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:309`.
+   leaving them pending for the next run
+   (`packages/atif-embed/src/atif_embed/application/embed.py:147`,
+   `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:309`).
 7. Delete stale rows under the same uuid before appending the fixed-size
    float32 array frame, so text that changed cannot leave two rows fanning the
-   kNN join out — `packages/atif-embed/src/atif_embed/application/embed.py:207`,
+   kNN join out: `packages/atif-embed/src/atif_embed/application/embed.py:207`,
    `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:402`.
 8. Compact every eight chunks to bound fragment count, then optimize and
-   ensure the HNSW index on the way out so `search` pays no brute-force scan —
+   ensure the HNSW index on the way out so `search` pays no brute-force scan:
    `packages/atif-embed/src/atif_embed/application/embed.py:243`,
    `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:414`.
 9. When no row failed, hand the store's row count to `TextRowsPort.commit`:
    the lake reader moves its watermark to the snapshot it read, unless the
-   run stopped at `--limit` — `packages/atif-embed/src/atif_embed/application/embed.py`.
+   run stopped at `--limit` (`packages/atif-embed/src/atif_embed/application/embed.py`).
 
 `embed --prune-orphans` is a separate path: it compares the store's uuids with
 every step's primary uuid in the lake and reports (or, with `--no-dry-run`,
-deletes) the ones no step names — `packages/atif-embed/src/atif_embed/application/prune.py`.
+deletes) the ones no step names (`packages/atif-embed/src/atif_embed/application/prune.py`).
 
 ### Related
 
@@ -266,26 +265,26 @@ deletes) the ones no step names — `packages/atif-embed/src/atif_embed/applicat
 - `packages/atif-embed/src/atif_embed/domain/errors.py:29`
 - `packages/atif-cli/src/atif_cli/app.py:833`
 
-## query — one SQL statement over the catalog
+## query: one SQL statement over the catalog
 
 Entry point: `packages/atif-cli/src/atif_cli/app.py:529`
 
 1. Short-circuit `--examples` to the examples listing without opening DuckDB;
-   a missing statement emits a classified parse error and exits 64 — `:564`.
+   a missing statement emits a classified parse error and exits 64 (`:564`).
 2. Resolve the corpus root and the expected embedder identity, then open an
-   in-memory DuckDB connection — `:586`.
+   in-memory DuckDB connection (`:586`).
 3. Register the raw readers over the contract layout (trajectory rows come
    from `read_parquet` for sessions with current columnar artifacts and from
    `read_json` for the rest, unioned per surface),
    gating trajectory, edges, and loss on `meta.json` presence so a torn session
-   directory contributes nothing to any view —
+   directory contributes nothing to any view:
    `packages/atif-duck/src/atif_duck/infrastructure/registry.py:180`.
 4. Create the core views, then bind `message_embeddings` over the Lance store
    guard-before-bind: a store written by another provider raises rather than
-   returning numerically valid garbage cosine scores — `:333`, `:846`.
+   returning numerically valid garbage cosine scores (`:333`, `:846`).
 5. Create the macros, then the analytics views and analytics macros over the
    analytics parquets, which bind against both the parquets and the base views
-   — `:1005`, `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`.
+   (`:1005`, `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:124`).
 6. Harden the connection in a fixed order (the memory cap, thread count and
    private spill directory were set before step 3, since registration is what
    needs them): a directory allowlist holding only the spill area, a file
@@ -298,9 +297,9 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:529`
    caller's statement and stream the cursor: a plain table on a TTY, a JSON
    array of row objects on a pipe (`packages/atif-cli/src/atif_cli/output.py:154`).
    The spill directory is removed on exit.
-8. Classify any DuckDB failure into parse, catalog, or runtime — or an
-   embedding-provider mismatch — and exit 64, 65, or 70 with a JSON error
-   envelope — `packages/atif-cli/src/atif_cli/duck_errors.py:34`, `:66`.
+8. Classify any DuckDB failure into parse, catalog, or runtime (or an
+   embedding-provider mismatch) and exit 64, 65, or 70 with a JSON error
+   envelope: `packages/atif-cli/src/atif_cli/duck_errors.py:34`, `:66`.
 
 ### Related
 
@@ -310,39 +309,39 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:529`
 - `packages/atif-cli/src/atif_cli/output.py:202`
 - `packages/atif-cli/src/atif_cli/errors.py:25`
 
-## search — semantic top-k over step embeddings
+## search: semantic top-k over step embeddings
 
 Entry point: `packages/atif-cli/src/atif_cli/app.py:860`
 
 1. Resolve the corpus root, the Lance URI, and the expected model and
-   dimension from `EmbedSettings` — `:878`,
-   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:57`.
+   dimension from `EmbedSettings` (`:878`,
+   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:57`).
 2. Attach the lake as `query` does (or fall back to the per-session
    artifacts with a warning), then register the full catalog on a fresh
    in-memory connection; a registration failure or a provider mismatch leaves
-   through the classified-error path with exit 65 —
+   through the classified-error path with exit 65:
    `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1212`,
    `packages/atif-cli/src/atif_cli/duck_errors.py:66`. `--all-corpora` scopes
    the steps to every corpus the lake holds and binds `message_embeddings`
    over each corpus's store (`register_vss_stores`).
 3. Count `message_embeddings` first: an empty or absent store exits 2 with the
    backfill hint instead of returning an empty result that reads like "no
-   matches" — `packages/atif-cli/src/atif_cli/app.py:930`.
-4. Embed the query text in Cohere `search_query` float mode — Cohere forces
-   float for queries even when documents were stored int8 —
+   matches" (`packages/atif-cli/src/atif_cli/app.py:930`).
+4. Embed the query text in Cohere `search_query` float mode (Cohere forces
+   float for queries even when documents were stored int8):
    `packages/atif-embed/src/atif_embed/application/embed.py:265`,
    `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:400`.
 5. Bind the query vector, the optional session filter, and `k` as parameters
-   rather than interpolating them — `packages/atif-cli/src/atif_cli/app.py:945`.
+   rather than interpolating them: `packages/atif-cli/src/atif_cli/app.py:945`.
 6. Order by `array_cosine_distance` ascending: that is what triggers the cosine
    HNSW index lookup, and cosine is the only magnitude-invariant choice against
-   int8-cast document vectors whose magnitudes run into the thousands — `:919`.
+   int8-cast document vectors whose magnitudes run into the thousands (`:919`).
 7. Join back to `steps` on the first entry of `source_uuids` for a
-   200-character snippet, selecting cosine similarity as the reported score —
-   `:933`.
+   200-character snippet, selecting cosine similarity as the reported score
+   (`:933`).
 8. Emit uuid, session id, similarity, and snippet; a DuckDB error classifies to
-   its own exit code — `:946`,
-   `packages/atif-cli/src/atif_cli/output.py:129`.
+   its own exit code (`:946`,
+   `packages/atif-cli/src/atif_cli/output.py:129`).
 
 ### Related
 
@@ -351,40 +350,40 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:860`
 - `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:414`
 - `packages/atif-cli/src/atif_cli/errors.py:25`
 
-## refresh lane — the scheduled driver
+## refresh lane: the scheduled driver
 
 Entry point: `scripts/atif-sql-refresh.sh:109`
 
 1. Pin the identity trio once from the invoking environment and unset
    `AWS_PROFILE` and `AWS_DEFAULT_PROFILE`, because an inherited profile name
    with no matching config entry makes botocore raise at credential resolution
-   before Bedrock is reached — `:84`, `:96`.
+   before Bedrock is reached (`:84`, `:96`).
 2. Normalize the lane argument before it names a lock file, so two spellings of
    one lane cannot take two locks; an unknown mode exits 64 rather than
    defaulting to a plane. The removed `structural` lane (and `struct`) still
-   parses: it logs one "lane removed" line and exits 0 — `:138`, `:143`.
+   parses: it logs one "lane removed" line and exits 0 (`:138`, `:143`).
 3. Read the rotated Bedrock bearer token at run time and export it only when
    non-empty, because botocore treats an empty value as a real broken
-   credential and skips the default chain — `:122`.
-4. Resolve the corpus list — the primary config directory first, then each
-   `ATIF_SQL_EXTRA_CONFIG_DIRS` entry — and export both `CLAUDE_CONFIG_DIR` and
+   credential and skips the default chain (`:122`).
+4. Resolve the corpus list (the primary config directory first, then each
+   `ATIF_SQL_EXTRA_CONFIG_DIRS` entry) and export both `CLAUDE_CONFIG_DIR` and
    `ATIF_SQL_SOURCE_ROOT` per corpus so the source root and the corpus slug
-   stay coherent — `:134`, `:312`.
+   stay coherent (`:134`, `:312`).
 5. Resolve the CLI through the override, then a user install, then the
    workspace venv script, and take a nonblocking per-lane `flock`: a busy lane
-   skips this tick rather than queueing behind it — `:151`, `:166`.
+   skips this tick rather than queueing behind it (`:151`, `:166`).
 6. On the `llm` lane, probe `atif-sql --help` for `analyze` and exit 0 when it
    is absent, so an armed crontab line against an older CLI is a no-op instead
-   of a nightly error — `:260`.
+   of a nightly error (`:260`).
 7. Run the lane per corpus: `materialize` plus a bounded `embed --limit 500`
    piggyback, or
-   `analyze --no-dry-run --llm-only --max-sessions 1000000 --max-cost-usd 1000000`
-   — the only spending line in the file, with both caps set out of reach on
-   purpose — `:334`, `:371`.
+   `analyze --no-dry-run --llm-only --max-sessions 1000000 --max-cost-usd 1000000`,
+   the only spending line in the file, with both caps set out of reach on
+   purpose (`:334`, `:371`).
 8. On embed exit 78, write a terminal marker keyed on the store path and its
    mtime and suppress further embeds for that corpus until the mtime changes;
-   every other nonzero exit stays transient and retries next tick — `:217`,
-   `:244`.
+   every other nonzero exit stays transient and retries next tick (`:217`,
+   `:244`).
 9. The `compact` lane runs `atif-sql lake compact --memory-limit 2GiB` once
    (not per corpus; `ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT` changes the
    budget) under a 4G scope, after taking the materialize lane's lock too (waiting up to
@@ -400,26 +399,26 @@ Entry point: `scripts/atif-sql-refresh.sh:109`
 
 ## Minor flows
 
-- status — entry at `packages/atif-cli/src/atif_cli/app.py:444`. Read-only
+- status: entry at `packages/atif-cli/src/atif_cli/app.py:444`. Read-only
   freshness report: scans source mtimes and replays the same pure plan
   `materialize` would build without converting anything, so its stale,
   up-to-date, and live counts are exactly what a pass would do
   (`packages/atif-corpus/src/atif_corpus/domain/sessions.py:159`).
-- examples — entry at `packages/atif-cli/src/atif_cli/app.py:995`. Derives one
+- examples: entry at `packages/atif-cli/src/atif_cli/app.py:995`. Derives one
   runnable example per view and macro from the static catalog and filters by
   `--category` and `--requires`; an unknown value exits 64
   (`packages/atif-duck/src/atif_duck/domain/examples.py:191`).
-- schema — entry at `packages/atif-cli/src/atif_cli/app.py:1727`. Dumps the
+- schema: entry at `packages/atif-cli/src/atif_cli/app.py:1727`. Dumps the
   core and analytics view schemas and macro signatures, each with its
   `requires` value, from the static catalog with no DuckDB import and no
   connection (`packages/atif-duck/src/atif_duck/domain/catalog.py:56`).
-- cron install — entry at `packages/atif-cli/src/atif_cli/cron.py:185`. Renders
+- cron install: entry at `packages/atif-cli/src/atif_cli/cron.py:185`. Renders
   the crontab block, plus one comment per removed lane, for a human to paste and never writes the
   crontab itself (`:79`).
-- cron status — entry at `packages/atif-cli/src/atif_cli/cron.py:198`. Probes
+- cron status: entry at `packages/atif-cli/src/atif_cli/cron.py:198`. Probes
   each lane's flock nonblocking, so the probe perturbs nothing, and parses the
   last completion and last skip per lane out of the refresh log (`:91`, `:109`).
-- main — entry at `packages/atif-cli/src/atif_cli/app.py:1125`. Replaces
+- main: entry at `packages/atif-cli/src/atif_cli/app.py:1125`. Replaces
   loguru's default DEBUG sink with WARNING-and-up so routine reads keep stderr
   quiet, then hands control to cyclopts.
 

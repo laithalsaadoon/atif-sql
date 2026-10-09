@@ -28,7 +28,7 @@ Errors fail the gate and print as `path:line:col: Rule: message`. Warnings are a
 the default scope: `.vale-baseline.json` at the root holds `{rule: count}` for every
 warning-level rule, and the gate fails when any rule's count rises above its baseline or a rule
 the baseline does not name raises a warning, one stderr line per rule
-(`Google.EmDash: 450 warnings, baseline 449`). A count below its baseline passes and prints
+(`Google.WordListCase: 121 warnings, baseline 120`). A count below its baseline passes and prints
 `lower the baseline: mise run docs:prose:baseline`. The baseline itself must be usable: a
 missing, unparsable, empty or non-count file fails the gate before Vale runs, so a lost
 baseline is never a pass. `.vale.ini` says why each rule below error is there.
@@ -36,11 +36,13 @@ baseline is never a pass. `.vale.ini` says why each rule below error is there.
 One limit is Vale's, not this script's: Vale 3.24.0 places an alert by searching the file for
 its matched text, and an alert from a Markdown list item that wraps onto a second line can land
 on a later occurrence of the same text. When that occurrence raises the same rule, the two
-report as one, so a page that adds a spaced em dash after such an item can count fewer
-Google.EmDash warnings, not more (`.vale/fixtures/merged-emdash.md` reproduces it, and a strict
-xfail in the selftest turns red when Vale fixes it). The ratchet holds Vale's count as Vale
-reports it; a count that falls on a change that added a warning is that merge, so leave the
-baseline where it is.
+report as one (`.vale/fixtures/merged-emdash.md` reproduces it with two spaced em dashes, and a
+strict xfail in the selftest turns red when Vale fixes it). A warning count can therefore fall
+on a change that added a warning; the ratchet holds Vale's count as Vale reports it, so a count
+that falls on such a change is that merge, and the baseline stays where it is. The rule this hit
+hardest, Google.EmDash, is an error for that reason and is not in the baseline: a merge folds two
+errors into one, never into none, so one added spaced dash is red, wrapped list item or not
+(`.vale/fixtures/wrapped-emdash.md`).
 
 `--write-baseline` (`mise run docs:prose:baseline`) rewrites `.vale-baseline.json` from the
 current tree, after the same scope checks. A rule that drops to zero keeps its entry at 0, so
@@ -169,7 +171,7 @@ def _baseline_problem(name: str, doc: object) -> str:
         return f"{name} is empty: a baseline naming no rule would gate nothing"
     for rule, count in cast("dict[object, object]", doc).items():
         if not isinstance(rule, str) or "." not in rule:
-            return f"{name}: {rule!r} is not a rule name such as Google.EmDash"
+            return f"{name}: {rule!r} is not a rule name such as Google.WordListCase"
         if isinstance(count, bool) or not isinstance(count, int) or count < 0:
             return f"{name}: {rule} has count {count!r}, not an integer of 0 or more"
     return ""

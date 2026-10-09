@@ -1,4 +1,4 @@
-# atif-sql — operating manual
+# atif-sql: operating manual
 
 ATIF-native analytics over agent trajectories from Claude Code
 (`~/.claude/projects/**/*.jsonl`) and Codex CLI
@@ -12,7 +12,7 @@ documents, and layers DuckDB views on top. One corpus holds one agent, and
 
 uv WORKSPACE (virtual root, members under `packages/*`):
 
-- `packages/atif-converter` — converts Claude Code and Codex transcripts to
+- `packages/atif-converter`: converts Claude Code and Codex transcripts to
   ATIF (ported from harbor's converters, on the ATIF models vendored in
   `atif_converter.domain.atif`); owns the fidelity policy per agent (the known Claude Code
   gaps in `atif_converter.domain.fidelity`, the Codex ones in
@@ -23,7 +23,7 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `domain.pricing` prices each step (`total_cost_usd`, Codex `cost_usd`) from
   the vendored `domain/model_prices.json` with litellm's arithmetic; a model
   it can't price is NULL. Layered: `application` > `infrastructure` > `domain`.
-- `packages/atif-corpus` — corpus materialization: discovery, watermarks,
+- `packages/atif-corpus`: corpus materialization, covering discovery, watermarks,
   quiescence, atomic artifact writes (the bulk JSON artifacts zstd-compressed),
   in-place compression of an old-layout session for `corpus slim`, the
   `ArtifactProducer` port that lets a composition root add per-session files
@@ -37,7 +37,7 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   before it becomes a corpus path (rejected ids are reported, never
   written); atif-duck carries the twin. Layered: `application` >
   `infrastructure` > `domain`.
-- `packages/atif-duck` — DuckDB views + macros over the materialized corpus:
+- `packages/atif-duck`: DuckDB views + macros over the materialized corpus:
   core views and macros plus the analytics views and macros, all declared in
   a static drift-tested catalog. Who wrote a user
   step is decided ONCE, in `domain.authorship` (a prefix rule table rendered
@@ -52,12 +52,12 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   DuckLake every corpus is queried through (`domain.lake` declares the tables,
   `infrastructure.lake` writes, reads, verifies and compacts it; see
   "Storage" below). Layered: `infrastructure` > `domain`.
-- `packages/atif-models` — model alias registry + structured-output LLM
+- `packages/atif-models`: model alias registry + structured-output LLM
   client. No other package hardcodes a Bedrock model id. Layered:
   `infrastructure` > `domain`.
-- `packages/atif-analytics` — the LLM pipelines that spend money at
+- `packages/atif-analytics`: the LLM pipelines that spend money at
   Bedrock and are checkpointed per session (classify, conflicts, friction,
-  perceived — see `PIPELINE_NAMES` in
+  perceived; see `PIPELINE_NAMES` in
   `infrastructure/sqlite_state/checkpointer.py`). They read human turns only
   (`domain.authorship`), and classify and conflicts skip automated review
   (`turn_audit`) and one-shot-job sessions. Session data comes through the
@@ -69,12 +69,12 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   cluster/terms/community pipelines were cut on 2026-09-27; outcome is the
   deterministic `session_outcomes` view now. Layered: `application` >
   `infrastructure` > `domain`.
-- `packages/atif-embed` — Cohere Embed v4 on Bedrock + LanceDB store + the
+- `packages/atif-embed`: Cohere Embed v4 on Bedrock + LanceDB store + the
   backfill and orphan-prune use cases. Discovery reads the lake's `steps`
   through the `LakeStepsPort` port (atif-cli implements it over atif-duck's
   `infrastructure.lake_steps`), and falls back to the per-session reader.
   Layered: `application` > `infrastructure` > `domain`.
-- `packages/atif-cli` — cyclopts CLI composing the rest into commands
+- `packages/atif-cli`: cyclopts CLI composing the rest into commands
   (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`,
   `search`, `examples`, `schema`, `cron`, `lake`, `corpus`).
 
@@ -83,7 +83,7 @@ Rules of the road:
 - Independence contract (import-linter, `pyproject.toml`): converter /
   corpus / duck / models / embed may NEVER import each other. atif-cli is
   the composition root and may import them all. atif-analytics is the one
-  exception — it may import atif-models and nothing else among our
+  exception: it may import atif-models and nothing else among our
   packages (a `forbidden` contract pins its other edges shut).
 - Inter-package deps: declare in the member's `[project.dependencies]` AND
   `[tool.uv.sources] <pkg> = { workspace = true }`.
@@ -372,25 +372,25 @@ copy of the queryable rows:
 
 For an LLM agent driving `atif-sql`, the discovery loop is this:
 
-1. `atif-sql schema` — every view (with columns) and macro signature, core
+1. `atif-sql schema`: every view (with columns) and macro signature, core
    and analytics, each with what it `requires`, from the static catalog in
    <50 ms. Its output ends with an `examples_hint`.
-2. `atif-sql examples` (alias: `atif-sql query --examples`) — runnable
+2. `atif-sql examples` (alias: `atif-sql query --examples`): runnable
    example queries for every view and macro, DERIVED from the catalog (never
    hardcoded per object) and each one EXECUTED by
-   `packages/atif-duck/tests/test_examples.py` against a fixture corpus —
+   `packages/atif-duck/tests/test_examples.py` against a fixture corpus, and
    the header's "test-executed against this version" is literal. Piped
    output is JSON `{note, examples: [{name, sql, description, requires,
    category}]}`; filter with `--requires core|analytics|vss` and
    `--category view|table-macro|scalar-macro`.
-3. `atif-sql query '<sql>'` — run it. `--agent codex` points it at the Codex
+3. `atif-sql query '<sql>'`: run it. `--agent codex` points it at the Codex
    corpus without spelling the path, and `--all-corpora` runs it over every
    corpus the lake holds (`sessions.corpus` names each row's corpus). Copy an example verbatim (the `sid`
    exemplar is a subquery over `sessions`, so it works on any corpus) or
    adapt it. `requires: analytics` needs `atif-sql analyze` to have run;
    `requires: vss` needs `atif-sql embed --all --no-dry-run` (a bare `embed`
    exits 64: a real run needs an explicit scope). For semantic search over TEXT,
-   prefer `atif-sql search 'query'` — it embeds the text first, then runs
+   prefer `atif-sql search 'query'`, which embeds the text first, then runs
    the same `semantic_search` kNN.
 
    What the query sandbox will and won't do: `SELECT`, `EXPLAIN`, `SET
@@ -407,14 +407,14 @@ For an LLM agent driving `atif-sql`, the discovery loop is this:
 Adding a view/macro? The drift tests force: a `DESCRIPTIONS` entry in
 `atif_duck/domain/catalog.py`, an `ARG_EXEMPLARS` entry for any new
 parameter name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and
-the derived example must execute — or a documented `EXCLUSIONS` entry.
+the derived example must execute (or a documented `EXCLUSIONS` entry).
 
 ## Definition of done
 
 `mise run check` fully green (lint + fmt + typecheck + lint:imports + lint:workflows +
 lint:hooks + lint:pnpm-lock + security:vex:check + docs:prose + test). `docs:prose` is Vale over
 the published prose (docs/, site/authored/, README.md, AGENTS.md, CONTRIBUTING.md) at error level,
-with a file floor per glob so a shrunken scope is red, and a per-rule warning ratchet against `.vale-baseline.json`: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. When a count falls, run `mise run docs:prose:baseline` and commit the lower file; never raise it. `mise run security` is the report-only tier beside it: findings do not fail
+with a file floor per glob so a shrunken scope is red, and a per-rule warning ratchet against `.vale-baseline.json`: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. When a count falls, run `mise run docs:prose:baseline` and commit the lower file; never raise it. A spaced dash is an error (`Google.EmDash`), not a warning: write a colon, comma, period, or parentheses instead. `mise run security` is the report-only tier beside it: findings do not fail
 it, a scanner that produced no usable SARIF does.
 A change under docs/ or site/ also needs `mise run docs:gate`: the site build, then `docs:links`,
 which crawls site/dist as GitHub Pages serves it and fails on any internal 404. Link page to page by
@@ -426,7 +426,7 @@ First-time setup: `mise trust && mise install && mise run install`.
 
 `experiments/` holds numbered experiment protocols (README per experiment).
 Outputs go to `experiments/**/out/` (gitignored). No experiment is wired
-into a gate — `mise run check` and pytest's `testpaths` both skip the
+into a gate: `mise run check` and pytest's `testpaths` both skip the
 directory.
 
 Migration parity oracles are not part of this repo. Parity is not a standing
