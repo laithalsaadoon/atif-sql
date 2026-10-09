@@ -96,6 +96,7 @@ traceback(?:'s)?
 repo(?:'s)?
 allowlist
 lockfile
+rebase
 cooldown
 gitignored
 globbed
