@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
 
     from atif_corpus.application.materialize import MaterializationReport
+    from atif_embed.infrastructure.settings import EmbedSettings
 
 app = cyclopts.App(
     name="atif-sql",
@@ -1031,20 +1032,45 @@ def materialize(
 # ---------------------------------------------------------------------------
 
 
-def _vector_surface(corpus_root: Path) -> dict[str, Any]:
+def _embed_settings(fmt: OutputFormat) -> EmbedSettings:
+    """The embedding settings from the environment, or exit 64 naming the bad one.
+
+    A width the selected provider cannot emit (``ATIF_SQL_OUTPUT_DIMENSION=1024``
+    with ``ATIF_SQL_EMBED_PROVIDER=gemma``) is malformed input, not a traceback.
+    """
+    from pydantic import ValidationError
+
+    from atif_embed.infrastructure.settings import EmbedSettings
+
+    try:
+        return EmbedSettings()
+    except ValidationError as exc:
+        reasons = "; ".join(str(e["msg"]).removeprefix("Value error, ") for e in exc.errors())
+        err = ClassifiedError(
+            kind="invalid_input",
+            exit_code=EXIT_CODES["invalid_input"],
+            message=f"invalid embedding settings: {reasons}",
+            hint="check the ATIF_SQL_EMBED_PROVIDER and ATIF_SQL_OUTPUT_DIMENSION variables",
+        )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code) from exc
+
+
+def _vector_surface(corpus_root: Path, fmt: OutputFormat) -> dict[str, Any]:
     """How ``query`` and ``search`` will see the embeddings store, without installing anything.
 
     The extension check reads ``duckdb_extensions()`` on a throwaway
     connection (the local extension directory, a few milliseconds, no
     network); the store check is the directory ``embed`` writes, resolved the
-    way ``query`` and ``search`` resolve it (``ATIF_SQL_LANCE_URI`` wins).
+    way ``query`` and ``search`` resolve it (``ATIF_SQL_LANCE_URI`` wins, then
+    the selected provider's directory under the corpus root).
     """
     import duckdb
 
     from atif_duck.infrastructure.registry import lance_extension_installed
-    from atif_embed.infrastructure.settings import EmbedSettings
 
-    store = EmbedSettings().resolve_lance_uri(corpus_root)
+    embed_settings = _embed_settings(fmt)
+    store = embed_settings.resolve_lance_uri(corpus_root)
     con = duckdb.connect()
     try:
         installed = lance_extension_installed(con)
@@ -1062,6 +1088,8 @@ def _vector_surface(corpus_root: Path) -> dict[str, Any]:
     else:
         state, note = "no_store", "no embeddings store; run `atif-sql embed --all --no-dry-run`"
     return {
+        "embed_provider": embed_settings.embed_provider,
+        "embeddings_store": str(store),
         "lance_extension_installed": installed,
         "embeddings_store_present": store_present,
         "vector_search": state,
@@ -1209,7 +1237,7 @@ def status(
     }
     coverage = columnar_coverage(settings.corpus_root)
     storage = storage_layout(settings.corpus_root)
-    vector = _vector_surface(settings.corpus_root)
+    vector = _vector_surface(settings.corpus_root, fmt)
     lake_block = _lake_surface(settings.corpus_root)
     if resolve_format(fmt) is OutputFormat.TABLE:
         print(f"agent:        {settings.agent.value}")
@@ -1429,10 +1457,9 @@ def query(
 
     from atif_cli.duck_errors import REGISTRATION_ERRORS, classify_registration_error
     from atif_duck.infrastructure.registry import analytics_roots, register
-    from atif_embed.infrastructure.settings import EmbedSettings
 
     settings = _corpus_settings(None, corpus_root, agent)
-    embed_settings = EmbedSettings()
+    embed_settings = _embed_settings(fmt)
     expected_model, expected_dim = embed_settings.expected_embedding_identity()
     lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)
     if all_corpora and not lake:
@@ -1782,7 +1809,17 @@ def embed(
     corpus_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
-    """Embed unembedded corpus steps with Cohere Embed v4 and append to LanceDB.
+    """Embed unembedded corpus steps and append them to LanceDB.
+
+    Provider
+    --------
+    ``ATIF_SQL_EMBED_PROVIDER`` picks the embedder. ``cohere`` (the default)
+    calls Cohere Embed v4 on Bedrock and writes ``<corpus_root>/embeddings_lance``.
+    ``gemma`` runs EmbeddingGemma 2 on this machine, text-only, and writes
+    ``<corpus_root>/embeddings_lance_gemma``; it needs the ``local`` extra and
+    downloads about 1.5 GB into the Hugging Face cache on first use. Each
+    store is stamped with its model and width, so ``search`` reads the store
+    of the provider selected when it runs.
 
     Discovery
     ---------
@@ -1821,9 +1858,10 @@ def embed(
 
     Cost
     ----
-    Calls Bedrock (``global.cohere.embed-v4:0``) on every unembedded step
-    (main + sidechain text >= 32 chars, keyed by the step's primary
-    source uuid). A REAL run requires an explicit scope: either ``--limit N``
+    With Cohere, calls Bedrock (``global.cohere.embed-v4:0``) on every
+    unembedded step (main + sidechain text >= 32 chars, keyed by the step's
+    primary source uuid); with Gemma, the same steps embed on this machine
+    for no charge. A REAL run requires an explicit scope: either ``--limit N``
     or ``--all`` — a bare ``atif-sql embed`` exits 64 with a hint, so an
     accidental full backfill (potentially every step ever recorded) can't
     happen from a mistyped command. ``--dry-run`` needs no scope: it spends
@@ -1842,13 +1880,16 @@ def embed(
     Output
     ------
     Dry run: the plan JSON ``{pipeline, discovery, candidates, batches,
-    batch_size, concurrency, model, limit, dry_run}``. Real run:
+    batch_size, concurrency, provider, model, dim, store, limit, dry_run}``.
+    Real run:
     ``{"pipeline": "embed", "rows_processed": N, "dry_run": false}``.
 
-    Exit codes: 0 success, 64 missing --limit/--all, 70 runtime
-    (Bedrock / DuckDB / Lance failure — transient, safe to retry), 78 terminal
-    state (the store or its config requires operator action; retrying without
-    intervention cannot succeed, so unattended lanes suppress retries on 78).
+    Exit codes: 0 success, 64 missing --limit/--all or an embedding setting
+    the provider cannot take, 70 runtime (Bedrock / local model / DuckDB /
+    Lance failure — transient, safe to retry), 78 terminal state (the store
+    or its config requires operator action, such as the gemma provider without
+    the ``local`` extra; retrying without intervention cannot succeed, so
+    unattended lanes suppress retries on 78).
     """
     if install_extension:
         _install_lance_extension(fmt)
@@ -1862,7 +1903,6 @@ def embed(
     from atif_embed.application.embed import run_backfill
     from atif_embed.domain.errors import DomainError
     from atif_embed.infrastructure.corpus_text_rows import DuckDbTextRows
-    from atif_embed.infrastructure.settings import EmbedSettings
 
     dry_run = bool(dry_run)
     if not dry_run and limit is None and not all_steps:
@@ -1878,7 +1918,7 @@ def embed(
         raise SystemExit(EXIT_CODES["invalid_input"])
 
     settings = _corpus_settings(None, corpus_root)
-    embed_settings = EmbedSettings()
+    embed_settings = _embed_settings(fmt)
     if not dry_run:
         _install_lance_extension(fmt, quiet=True)
     text_rows: Any = DuckDbTextRows()
@@ -1930,10 +1970,9 @@ def _prune_orphans(corpus_root: Path | None, *, dry_run: bool, fmt: OutputFormat
     from atif_corpus.domain.layout import CorpusLayout
     from atif_embed.application.prune import prune_orphans
     from atif_embed.infrastructure.lance_store import LanceVectorStore
-    from atif_embed.infrastructure.settings import EmbedSettings
 
     settings = _corpus_settings(None, corpus_root)
-    embed_settings = EmbedSettings()
+    embed_settings = _embed_settings(fmt)
     lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)
     pending = read_sink_pending(CorpusLayout(corpus_root=settings.corpus_root).sink_pending_path)
     if pending and not dry_run:
@@ -1951,7 +1990,7 @@ def _prune_orphans(corpus_root: Path | None, *, dry_run: bool, fmt: OutputFormat
     report = prune_orphans(
         settings.corpus_root,
         lake=lake_steps_port(),
-        store=LanceVectorStore(lance_uri, dim=int(embed_settings.output_dimension)),
+        store=LanceVectorStore(lance_uri, dim=embed_settings.embedding_dim),
         dry_run=dry_run,
     )
     if report is None:
@@ -1991,7 +2030,9 @@ def search(
 
     Pipeline
     --------
-    1. Embed ``query_text`` with Cohere Embed v4 ``search_query`` mode (float).
+    1. Embed ``query_text`` with the selected provider: Cohere Embed v4
+       ``search_query`` mode (float) by default, or EmbeddingGemma 2's
+       ``SearchQuery`` prompt on this machine with ``ATIF_SQL_EMBED_PROVIDER=gemma``.
     2. DuckDB cosine-kNN against the Lance-backed ``message_embeddings`` view
        (``register_vss`` guard-before-bind: a store written by a different
        provider raises instead of returning garbage scores).
@@ -2027,10 +2068,11 @@ def search(
 
     Exit codes: 0 success, 2 no_embeddings, 64 --all-corpora with --no-lake,
     65 embedding_mismatch (the store was written by another provider), 70
-    runtime, 77 root_refused (uid 0 without ``ATIF_SQL_ALLOW_ROOT=1``), 78
+    runtime (the query embedding failed), 77 root_refused (uid 0 without ``ATIF_SQL_ALLOW_ROOT=1``), 78
     extension_missing (a store exists but the lance DuckDB extension is not
-    installed; run ``atif-sql embed --install-extension``) or
-    lake_unavailable (``--all-corpora`` without a usable lake).
+    installed; run ``atif-sql embed --install-extension``), lake_unavailable
+    (``--all-corpora`` without a usable lake) or terminal_state (the gemma
+    provider is selected and the ``local`` extra is not installed).
     """
     _refuse_root("search", fmt)
 
@@ -2043,7 +2085,7 @@ def search(
     )
     from atif_duck.infrastructure.registry import lance_extension_installed, register
     from atif_embed.application.embed import embed_query
-    from atif_embed.infrastructure.settings import EmbedSettings
+    from atif_embed.domain.errors import DomainError
 
     if all_corpora and not lake:
         err = ClassifiedError(
@@ -2056,7 +2098,7 @@ def search(
         raise SystemExit(err.exit_code)
 
     settings = _corpus_settings(None, corpus_root)
-    embed_settings = EmbedSettings()
+    embed_settings = _embed_settings(fmt)
     expected_model, expected_dim = embed_settings.expected_embedding_identity()
     lance_uri = embed_settings.resolve_lance_uri(settings.corpus_root)
 
@@ -2113,7 +2155,14 @@ def search(
             )
             raise SystemExit(EXIT_CODES["no_embeddings"])
 
-        qv = embed_query(query_text, settings=embed_settings)
+        try:
+            qv = embed_query(query_text, settings=embed_settings)
+        except DomainError as exc:
+            kind = "terminal_state" if exc.terminal else "runtime_error"
+            emit_error(
+                ClassifiedError(kind=kind, exit_code=EXIT_CODES[kind], message=str(exc)), fmt
+            )
+            raise SystemExit(EXIT_CODES[kind]) from exc
         try:
             columns, rows = search_rows(
                 con, qv, k=k, session_id=session_id, with_corpus=all_corpora

@@ -305,7 +305,7 @@ class CohereBedrockEmbedder:
     @property
     def dimension(self) -> int:
         """The output vector width this embedder requests from Cohere."""
-        return int(self._settings.output_dimension)
+        return self._settings.embedding_dim
 
     async def embed_documents(self, texts: list[str]) -> list[list[float] | None]:
         """Embed corpus documents in parallel; one slot per input text, in order.

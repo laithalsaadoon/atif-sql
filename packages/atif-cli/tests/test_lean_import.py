@@ -29,6 +29,12 @@ _FORBIDDEN_EAGER_IMPORTS = (
     "lancedb",
     "boto3",
     "polars",
+    # The local embedding stack (the optional `local` extra): torch alone takes
+    # seconds to import, and only `embed` and `search` with the gemma provider
+    # need it, loaded inside the adapter.
+    "torch",
+    "transformers",
+    "sentence_transformers",
 )
 
 

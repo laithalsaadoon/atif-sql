@@ -2,10 +2,11 @@
 
 """CLI tests for the VSS commands: embed (dry-run + fake provider) and search.
 
-NO live Bedrock calls: the real-embed path swaps a FakeEmbedder in for the
-Cohere adapter via monkeypatch (the deferred in-body import resolves the
-attribute at call time), and search's query embedding is patched the same
-way. Lance runs for real over tmp dirs — it's a local library.
+NO live Bedrock calls and no model download: the real-embed path swaps a
+FakeEmbedder in for the Cohere adapter via monkeypatch (the deferred in-body
+import resolves the attribute at call time), search's query embedding is
+patched the same way, and the EmbeddingGemma 2 path loads a fake
+SentenceTransformer in place of the real one. Lance runs for real over tmp dirs — it's a local library.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import pytest
 from atif_cli.app import embed, search
 from atif_cli.errors import EXIT_CODES
 from atif_cli.output import OutputFormat
+from atif_embed.infrastructure.gemma_local import load_sentence_transformer
 
 MODEL = "global.cohere.embed-v4:0"
 DIM = 1024
@@ -267,3 +269,131 @@ class TestSearchCommand:
         search("anything", session_id="nonexistent", corpus_root=corpus, fmt=OutputFormat.JSON)
         hits = json.loads(capsys.readouterr().out)
         assert hits == []
+
+
+GEMMA_MODEL = "google/embeddinggemma-2"
+
+
+class _FakeGemmaModel:
+    """A SentenceTransformer stand-in: one unit vector per text, at the asked width."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def encode(self, texts: list[str], **kwargs: Any) -> list[list[float]]:
+        self.prompts.append(str(kwargs["prompt_name"]))
+        dim = int(kwargs["truncate_dim"])
+        return [[1.0] + [0.0] * (dim - 1) for _ in texts]
+
+
+@pytest.fixture
+def gemma(monkeypatch: pytest.MonkeyPatch) -> _FakeGemmaModel:
+    """Select the local provider and load a fake model in place of EmbeddingGemma 2."""
+    model = _FakeGemmaModel()
+    for var in ("ATIF_SQL_LANCE_URI", "ATIF_SQL_OUTPUT_DIMENSION", "ATIF_SQL_EMBED_MODEL_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ATIF_SQL_EMBED_PROVIDER", "gemma")
+
+    def load(_settings: object) -> _FakeGemmaModel:
+        return model
+
+    monkeypatch.setattr("atif_embed.infrastructure.gemma_local.load_sentence_transformer", load)
+    return model
+
+
+class TestGemmaProvider:
+    """``ATIF_SQL_EMBED_PROVIDER=gemma`` end to end through the CLI, with no model download."""
+
+    def test_dry_run_plans_the_local_store(
+        self, corpus: Path, gemma: _FakeGemmaModel, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        embed(dry_run=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["provider"] == "gemma"
+        assert (payload["model"], payload["dim"]) == (GEMMA_MODEL, 768)
+        assert payload["store"] == str(corpus / "embeddings_lance_gemma")
+        assert gemma.prompts == []
+
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_embed_and_search_use_their_own_store_beside_cohere(
+        self,
+        corpus: Path,
+        gemma: _FakeGemmaModel,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_EMBED_PROVIDER", "cohere")
+        embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        cohere_files = sorted(p.name for p in (corpus / "embeddings_lance").rglob("*"))
+        monkeypatch.setenv("ATIF_SQL_EMBED_PROVIDER", "gemma")
+        capsys.readouterr()
+
+        embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert json.loads(capsys.readouterr().out)["rows_processed"] == 1
+        assert (corpus / "embeddings_lance_gemma").is_dir()
+        assert sorted(p.name for p in (corpus / "embeddings_lance").rglob("*")) == cohere_files
+
+        search("what was the qualifying step?", corpus_root=corpus, fmt=OutputFormat.JSON)
+        (hit,) = json.loads(capsys.readouterr().out)
+        assert hit["uuid"] == "u-1"
+        assert hit["sim"] == pytest.approx(1.0)
+        assert gemma.prompts == ["Document", "SearchQuery"]
+
+    @pytest.mark.usefixtures("gemma")
+    def test_a_width_gemma_cannot_emit_exits_64(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setenv("ATIF_SQL_OUTPUT_DIMENSION", "1024")
+        with pytest.raises(SystemExit) as excinfo:
+            embed(dry_run=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["invalid_input"]
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "invalid_input"
+        assert "[768, 512, 256, 128]" in err["message"]
+
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_search_against_a_cohere_store_exits_65(
+        self,
+        corpus: Path,
+        gemma: _FakeGemmaModel,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Pointing the gemma provider at a Cohere store is refused, never ranked."""
+        monkeypatch.setenv("ATIF_SQL_EMBED_PROVIDER", "cohere")
+        embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        monkeypatch.setenv("ATIF_SQL_EMBED_PROVIDER", "gemma")
+        monkeypatch.setenv("ATIF_SQL_LANCE_URI", str(corpus / "embeddings_lance"))
+        capsys.readouterr()
+
+        with pytest.raises(SystemExit) as excinfo:
+            search("anything", corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["embedding_mismatch"] == 65
+        assert json.loads(capsys.readouterr().err)["error"]["kind"] == "embedding_mismatch"
+        assert gemma.prompts == []
+
+    def test_search_without_the_extra_exits_78_naming_the_install(
+        self,
+        corpus: Path,
+        gemma: _FakeGemmaModel,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import sys
+
+        embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        capsys.readouterr()
+        # The real loader again, now with torch and sentence-transformers unimportable.
+        monkeypatch.setattr(
+            "atif_embed.infrastructure.gemma_local.load_sentence_transformer",
+            load_sentence_transformer,
+        )
+        monkeypatch.setitem(sys.modules, "torch", None)
+        monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+        with pytest.raises(SystemExit) as excinfo:
+            search("anything", corpus_root=corpus, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["terminal_state"] == 78
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "terminal_state"
+        assert "--extra local" in err["message"]

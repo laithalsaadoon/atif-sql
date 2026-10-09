@@ -64,6 +64,18 @@ class EmbeddingProviderUnavailable(DomainError):  # noqa: N818 — names a provi
     """
 
 
+class EmbeddingProviderNotInstalled(DomainError):  # noqa: N818 — names an install state, not an "*Error"
+    """The selected provider's libraries are not installed.
+
+    EmbeddingGemma 2 runs through the optional ``local`` extra (torch,
+    transformers, sentence-transformers). Selecting it without the extra
+    cannot succeed on a retry: an operator installs the extra or selects
+    another provider, so the error is terminal.
+    """
+
+    terminal = True
+
+
 class EmbeddingResponseInvalid(DomainError):  # noqa: N818 — names a response state, not an "*Error"
     """The backend answered, but not in the shape the adapter can read.
 
@@ -75,6 +87,7 @@ class EmbeddingResponseInvalid(DomainError):  # noqa: N818 — names a response 
 __all__ = [
     "DomainError",
     "EmbeddingProviderMismatch",
+    "EmbeddingProviderNotInstalled",
     "EmbeddingProviderUnavailable",
     "EmbeddingResponseInvalid",
     "EmbeddingStoreSchemaStale",
