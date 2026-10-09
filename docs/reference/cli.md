@@ -99,6 +99,8 @@ Flags:
 - `--requires` — forwarded to the `examples` listing. `:503`
 - `--agent` — `claude-code` (default) or `codex`; selects which corpus the statement reads. `:628`
 - `--corpus-root` — override the materialized corpus root. `:504`
+- `--all-corpora`: scope every view to every corpus the lake holds; `sessions.corpus` says which one a row came from. It has no per-session fallback, so it exits `78` without a usable lake and `64` together with `--no-lake`.
+- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files.
 - `--format` — `table` on a TTY, a JSON array of row objects on a pipe. `:505`
 
 The statement runs against a hardened connection: reads reach the registered views and nothing else, and nothing under the corpus root is writable. Before registration the connection is sized to the host: a memory cap derived from available RAM (half of physical RAM or 8 GiB, whichever is larger, never above 80% of what's available) and a thread count of one per 2 GiB of that cap, capped at the CPUs the process may use. `ATIF_SQL_QUERY_MEMORY_LIMIT` (a DuckDB size such as `6GB`) and `ATIF_SQL_QUERY_THREADS` override both; a malformed value exits 64. The spill directory is a private `mkdtemp` (mode 0700) under the system temp dir, the only directory the sandbox grants, and it's removed when the process exits. Extension auto-install and auto-load are off, and the lance extension is loaded only when it's already installed, so registration never reaches the network (`packages/atif-cli/src/atif_cli/app.py`, `_configure_query_resources`).
@@ -178,6 +180,8 @@ Flags:
 - `-k` / `--k` — top-k; default `10`. This is the CLI's only short flag. `:832`
 - `--session-id` — confine the kNN to one session. `:833`
 - `--corpus-root` — override the materialized corpus root. `:834`
+- `--all-corpora`: search every corpus's embedding store and add a `corpus` column; exits `78` without a usable lake and `64` together with `--no-lake`.
+- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files.
 - `--format` — output format. `:835`
 
 Output columns are `uuid`, `session_id`, `snippet`, and `sim` (`:927`), ranked by cosine distance ascending so the highest similarity comes first (`:935`).
@@ -217,6 +221,92 @@ Flags:
 - `--format` — a TTY listing, or a JSON object carrying `views`, `view_requires` (view name to `requires`), `macros` (each with `name`, `params`, and `requires`), and `examples_hint`. `:1729`
 
 The answer comes from the static `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `requires` is `core` for an object that binds on any corpus, `analytics` for one that binds once `analyze` has written its parquet, and `vss` for one that needs the embedding store. `:1744`
+
+## `lake`
+
+```
+atif-sql lake COMMAND
+```
+
+Build, check and maintain the DuckLake every corpus is queried through.
+`packages/atif-cli/src/atif_cli/lake.py:30`
+
+The group is attached to the root router by `app.command(lake_app)` in `packages/atif-cli/src/atif_cli/app.py`, and the lake itself lives in `atif_duck.infrastructure.lake`. The lake root defaults to `ATIF_SQL_LAKE_ROOT`, else `~/.atif-sql/lake`, and holds every corpus. All four commands are offline except the one-time `ducklake` extension install that `rebuild` makes. After a `rebuild`, every `materialize` keeps the lake current, and `query`, `analyze`, `embed` and `search` read it instead of opening each session's files. `--format` takes the same values as everywhere else: a table (or human lines) on a TTY, JSON on a pipe.
+
+### `lake rebuild`
+
+```
+atif-sql lake rebuild [OPTIONS]
+```
+
+Load every corpus's per-session artifacts into a fresh lake, then swap it into place.
+`packages/atif-cli/src/atif_cli/lake.py:79`
+
+Flags:
+
+- `--corpus-root`: a corpus to load; repeat for more. Default: every corpus the current lake holds, plus every directory under `ATIF_SQL_CORPUS_BASE` (default `~/.atif-sql/corpus`) that holds `sessions/`. `:82`
+- `--lake-root`: the lake to rebuild. `:83`
+- `--format`: report format. `:84`
+
+The new lake is built beside the old one under the writer lock and renamed into place when complete, so a reader sees one lake or the other. It installs the `ducklake` DuckDB extension first when it is missing, which is the one network fetch the lake needs; `query` never installs it.
+
+Exit codes: `0` done, `64` no corpus to load, or two corpora with the same directory name.
+
+### `lake verify`
+
+```
+atif-sql lake verify [OPTIONS]
+```
+
+Compare every session's lake rows with its per-session artifacts.
+`packages/atif-cli/src/atif_cli/lake.py:150`
+
+Flags:
+
+- `--corpus-root`: verify only this corpus; repeat for more. Default: every corpus the lake holds. `:153`
+- `--lake-root`: the lake to verify. `:154`
+- `--limit`: how many differences to list; all are counted. Default `20`. `:155`
+- `--format`: report format. `:156`
+
+Per table and session it compares the row count and an order-free content hash of the lake's rows against the same read from the per-session path. The report carries `clean`, `mismatched_sessions` and the first `--limit` mismatches.
+
+Exit codes: `0` clean, `65` `lake_mismatch` (some session differs), `78` `lake_unavailable` (no lake, or its schema is stale).
+
+### `lake status`
+
+```
+atif-sql lake status [OPTIONS]
+```
+
+Report the lake: present, schema current, corpora, snapshots, files, last write.
+`packages/atif-cli/src/atif_cli/lake.py:240`
+
+Flags:
+
+- `--lake-root`: the lake to report on. `:243`
+- `--format`: report format. `:244`
+
+It reads the published reader catalog, so it never waits on a writer. A missing lake is a normal answer (`present: false`), not an error.
+
+### `lake compact`
+
+```
+atif-sql lake compact [OPTIONS]
+```
+
+Merge small files, expire old snapshots, and remove the files nothing references.
+`packages/atif-cli/src/atif_cli/lake.py:283`
+
+Flags:
+
+- `--expire-older-than-days`: expire snapshots older than this; default `ATIF_SQL_LAKE_EXPIRE_DAYS`, else `30`. Files only expired snapshots referenced are removed once they are an hour old, so a reader in flight keeps every file it names. `:286`
+- `--memory-limit`: DuckDB's memory budget for the run, as a size such as `2GiB` or `1500MB`, instead of the one derived from the host and cgroup. The writer's own 2 GiB ceiling still applies. The nightly refresh lane passes one that fits its memory scope. `:287`
+- `--lake-root`: the lake to compact. `:288`
+- `--format`: report format. `:289`
+
+The report carries the data file and snapshot counts before and after. If a merge runs out of memory nothing was published, so readers keep the previous catalog and the next run starts over.
+
+Exit codes: `0` done, `64` a negative `--expire-older-than-days` or a malformed `--memory-limit`, `70` runtime error (an out-of-memory merge), `78` `lake_unavailable`.
 
 ## cron
 
