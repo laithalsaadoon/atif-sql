@@ -117,12 +117,15 @@ export const siteUrl = (relative: string, context: SiteContext): URL =>
  * The raw-Markdown route for a docs entry.
  *
  * `starlight-md-txt` injects `/[...slug].md` and maps the root entry — whose id is the empty string
- * or `index` — to an undefined slug, so the site root's raw route is `<base>/.md`
- * (`node_modules/starlight-md-txt/dist/route.js:124`). Reproducing that mapping here rather than
- * guessing is what keeps this control off a 404.
+ * or `index` — to an undefined slug, so it writes the site root's raw route as the dotfile
+ * `<base>/.md` (`node_modules/starlight-md-txt/dist/route.js:124`). A dotfile never reaches the
+ * deployed site: `actions/upload-pages-artifact` tars the build with `--exclude=.[^/]*`, and
+ * `<base>/.md` answered 404 on 2026-10-09 while every other twin answered 200. So
+ * `src/lib/markdown-links.ts` renames it to `<base>/index.md` after the build, and the root entry's
+ * twin is addressed there.
  */
 export const rawMarkdownUrl = (entryId: string, context: SiteContext): URL =>
-  siteUrl(`${entryId === "index" ? "" : entryId}.md`, context)
+  siteUrl(`${entryId === "index" || entryId === "" ? "index" : entryId}.md`, context)
 
 /** One page, as a machine reader is told about it. */
 export interface PageReference {

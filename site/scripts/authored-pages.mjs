@@ -175,8 +175,12 @@ const slugFor = (path) => {
 /** The page route for a slug, root-relative and base-free: the base is prefixed at build time. */
 const routeOf = (slug) => (slug === "" ? "/" : `/${slug}/`)
 
-/** The raw-Markdown twin for a slug. The root entry's twin is the dotfile `<base>/.md`. */
-const twinOf = (slug) => (slug === "" ? "/.md" : `/${slug}.md`)
+/**
+ * The raw-Markdown twin for a slug. The root entry's twin is `<base>/index.md`: `starlight-md-txt`
+ * writes it as the dotfile `.md`, which the Pages artifact drops with every hidden file, so
+ * `src/lib/markdown-links.ts` renames it after the build.
+ */
+const twinOf = (slug) => (slug === "" ? "/index.md" : `/${slug}.md`)
 
 /** A cell value with the characters that would break out of a Markdown table escaped. */
 const cell = (value) => value.replaceAll("\\", "\\\\").replaceAll("|", "\\|").trim()

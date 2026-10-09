@@ -477,9 +477,10 @@ describe("the JSON-LD graph", () => {
 
 describe("the raw-Markdown route", () => {
   it("maps the site root to the route the raw-twin plugin actually injects", () => {
-    // The root entry's id is the empty string or `index`, and both map to `<base>/.md`.
-    expect(rawMarkdownUrl("", CONTEXT).pathname).toBe(`${CONFIG.probeBase}/.md`)
-    expect(rawMarkdownUrl("index", CONTEXT).pathname).toBe(`${CONFIG.probeBase}/.md`)
+    // The root entry's id is the empty string or `index`, and both map to `<base>/index.md`: the
+    // dotfile `<base>/.md` starlight-md-txt writes never reaches the Pages artifact.
+    expect(rawMarkdownUrl("", CONTEXT).pathname).toBe(`${CONFIG.probeBase}/index.md`)
+    expect(rawMarkdownUrl("index", CONTEXT).pathname).toBe(`${CONFIG.probeBase}/index.md`)
     expect(rawMarkdownUrl("guide/install", CONTEXT).pathname).toBe(
       `${CONFIG.probeBase}/guide/install.md`
     )
@@ -552,7 +553,7 @@ describe("the agent note survives into every surface", () => {
 
   it("passes verbatim into the page's `.md` twin, directive and label both", () => {
     for (const page of authored()) {
-      const twin = readDist(`${page === "index" ? "" : page}.md`)
+      const twin = readDist(`${page}.md`)
       expect(twin, `${page}.md lost the directive`).toContain(":::agent")
       expect(twin, `${page}.md lost the label`).toContain(`**${AGENT_NOTE_LABEL}.**`)
       expect(twin).not.toContain(":::agent\\[")

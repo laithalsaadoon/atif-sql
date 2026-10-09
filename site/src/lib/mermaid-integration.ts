@@ -397,12 +397,14 @@ const emittedTwins = async (dir: string): Promise<ReadonlyArray<string>> => {
 }
 
 /**
- * The built page for a twin: `x/y.md` is the twin of `x/y/index.html`, and the root twin `.md` is the
- * twin of `index.html`.
+ * The built page for a twin: `x/y.md` is the twin of `x/y/index.html`, and the root twin (`.md` as
+ * `starlight-md-txt` writes it, `index.md` once renamed) is the twin of `index.html`.
  */
 const pageForTwin = (dir: string, twin: string): string => {
   const relative = twin.slice(dir.length).replace(/^\/+/, "")
-  const slug = relative.slice(0, -".md".length)
+  /* `markdown-links.ts` renames the root twin to `index.md` in its own `astro:build:done`, which may
+     run before or after this one, so the root page answers to either name. */
+  const slug = relative === "index.md" ? "" : relative.slice(0, -".md".length)
   return join(dir, slug, "index.html")
 }
 

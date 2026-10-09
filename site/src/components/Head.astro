@@ -14,9 +14,11 @@
  *  * Any visually-hidden block addressed to an agent. Content served to machines and hidden from every
  *    human is cloaking wearing an accessibility class name, and `tests/agent-surface.test.ts` asserts
  *    its absence.
- *  * Raster icon links and social-card metas. The site ships no `favicon.ico`, no PNG rasters and no
- *    card generator, and a `<link>` or an `og:image` naming a file the build never wrote is a 404 in
- *    the head — worse than the absent tag, because a consumer follows it.
+ *  * Raster icon links and social-card metas. The site ships `public/favicon.svg`, the one icon
+ *    Starlight's default head names (`<base>/favicon.svg`, a 404 on every page until 2026-10-09),
+ *    and no `favicon.ico`, no PNG rasters and no card generator, and a `<link>` or an `og:image`
+ *    naming a file the build never wrote is a 404 in the head — worse than the absent tag, because
+ *    a consumer follows it.
  *
  * Every URL is built with `new URL()`, never by concatenating strings. `Astro.site` EXCLUDES the base
  * — for this site it is `https://laithalsaadoon.github.io`, without `/atif-sql` — so resolving a path

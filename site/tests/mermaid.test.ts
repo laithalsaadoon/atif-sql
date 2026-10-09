@@ -58,7 +58,8 @@ const diagramPages = (): ReadonlyArray<{ twin: string; page: string; fences: num
       const body = readFileSync(join(dist, twin), "utf8")
       return {
         twin,
-        page: join(twin.slice(0, -".md".length), "index.html"),
+        // The root twin is `index.md` (renamed from the dotfile `.md`), the twin of `index.html`.
+        page: twin === "index.md" ? "index.html" : join(twin.slice(0, -".md".length), "index.html"),
         fences: [...body.matchAll(fencePattern)].length
       }
     })
