@@ -735,9 +735,30 @@ dir = "site"
 # `git rev-parse HEAD` fallback so the value a build used is visible in the task that ran it.
 run = "ATIF_SQL_DOCS_COMMIT=$(git rev-parse HEAD) pnpm run build"
 
-[tasks."docs:gate"]
-description = "Docs site definition of done: build + astro check + the dist probes"
+[tasks."docs:links"]
+description = "Crawl site/dist as GitHub Pages serves it: fail on any internal 404, or on a build short of pages"
 depends = ["docs:build"]
+# Every href and src of every built page (body, chrome and head), every link of every raw `.md`
+# twin and llms bundle, resolved as a browser resolves it against the URL Pages serves the file
+# at, and fetched from disk. A hidden path is a 404, as the Pages artifact leaves it out. Fails
+# on 0 pages, 0 internal links, or a build missing the route or the twin of any page in the
+# content collection. On 2026-10-09 the deployed site had 76 internal 404s over its 20 pages
+# that the links validator and lychee both passed; this reads what a reader is served. Its
+# planted-defect tests (packages/atif-cli/tests/test_docs_links.py) run under `test`, so `check`
+# proves the gate without a site build. `python3`: stdlib only, like the other gate helpers.
+run = "python3 scripts/docs_links.py dist"
+
+[tasks."docs:links:live"]
+description = "Crawl the deployed docs site from its sitemap: fail on any internal link that does not answer 200"
+# The same crawl over HTTP, run by docs.yml after every deploy and weekly. External links are
+# lychee's (links.yml); the ChatGPT, Claude and Cursor deep links are never fetched, since they
+# answer 403 to a crawler. The floor is three quarters of the 20 pages published on 2026-10-09,
+# the rule scripts/vale_gate.py states for its docs/ floor.
+run = "python3 scripts/docs_links.py live --min-pages 15"
+
+[tasks."docs:gate"]
+description = "Docs site definition of done: build + built-site link crawl + astro check + the dist probes"
+depends = ["docs:build", "docs:links"]
 dir = "site"
 # The probes read site/dist rather than the inputs, and derive every count from the build —
 # a hardcoded page or diagram count would pass a build that emitted neither.

@@ -416,6 +416,10 @@ lint:hooks + lint:pnpm-lock + security:vex:check + docs:prose + test). `docs:pro
 the published prose (docs/, site/authored/, README.md, AGENTS.md, CONTRIBUTING.md) at error level,
 with a file floor per glob so a shrunken scope is red, and a per-rule warning ratchet against `.vale-baseline.json`: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. When a count falls, run `mise run docs:prose:baseline` and commit the lower file; never raise it. `mise run security` is the report-only tier beside it: findings do not fail
 it, a scanner that produced no usable SARIF does.
+A change under docs/ or site/ also needs `mise run docs:gate`: the site build, then `docs:links`,
+which crawls site/dist as GitHub Pages serves it and fails on any internal 404. Link page to page by
+relative `.md` path as GitHub renders it; the build turns each link into the page's route, or into
+the GitHub blob for a Markdown file the site does not publish.
 First-time setup: `mise trust && mise install && mise run install`.
 
 ## Experiments
