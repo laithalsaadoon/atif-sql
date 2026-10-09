@@ -150,20 +150,27 @@ classify and conflicts skip non-interactive sessions (`session_outcomes.kind` of
 atif-sql embed [OPTIONS]
 ```
 
-Embed unembedded corpus steps with Cohere Embed v4 and append them to LanceDB.
+Embed unembedded corpus steps and append them to LanceDB, with Cohere Embed v4 on Bedrock by default or with EmbeddingGemma 2 on this machine.
 `packages/atif-cli/src/atif_cli/app.py:766`
+
+`ATIF_SQL_EMBED_PROVIDER` picks the embedder:
+
+- `cohere` (the default) sends step text to Cohere Embed v4 on Bedrock, which bills the AWS account, and writes `<corpus_root>/embeddings_lance` at 1024 dimensions (256, 512, or 1536 with `ATIF_SQL_OUTPUT_DIMENSION`).
+- `gemma` runs `google/embeddinggemma-2` text-only on this machine at a pinned revision, free, and writes `<corpus_root>/embeddings_lance_gemma` at 768 dimensions (512, 256, or 128 with `ATIF_SQL_OUTPUT_DIMENSION`). It needs the `local` extra and downloads about 1.5 GB into the Hugging Face cache on first use; `HF_HUB_OFFLINE=1` keeps later runs off the network. `ATIF_SQL_GEMMA_DEVICE` (`auto`, `cpu`, `cuda`, `mps`) and `ATIF_SQL_GEMMA_BATCH_SIZE` (default 32) tune it. `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:193`
+
+Each store is stamped with the model and width that wrote it, so a store written by one provider refuses the other's vectors rather than mixing two vector spaces. `ATIF_SQL_LANCE_URI` names one store for either provider.
 
 Flags:
 
 - `--limit`: cap the number of steps embedded this run. `:736`
 - `--all`: explicitly embed every unembedded step, a full backfill. `:737`
-- `--dry-run`: preview only; emit the plan JSON with keys `pipeline, candidates, batches, batch_size, concurrency, model, limit, dry_run` and make no embedding calls. `:738`
+- `--dry-run`: preview only; emit the plan JSON with keys `pipeline, discovery, candidates, batches, batch_size, concurrency, provider, model, dim, store, limit, dry_run` and make no embedding calls. `:738`
 - `--corpus-root`: override the materialized corpus root. `:739`
 - `--format`: output format. `:740`
 
 A real run requires an explicit scope: a bare `atif-sql embed` exits `64` with a hint rather than starting an unbounded backfill. `:778`
 
-Exit codes: `0` success, `64` missing `--limit` or `--all`, `70` runtime (Bedrock, DuckDB, or Lance failure: transient, safe to retry), `78` terminal state, where the store or its config needs operator action and unattended lanes suppress retries. `:767`
+Exit codes: `0` success, `64` missing `--limit` or `--all`, or an `ATIF_SQL_OUTPUT_DIMENSION` the provider can't emit, `70` runtime (Bedrock, local model, DuckDB, or Lance failure: transient, safe to retry), `78` terminal state, where the store or its config needs operator action and unattended lanes suppress retries. The `gemma` provider without the `local` extra exits `78` with the install command in the message. `:767`
 
 ## search
 
@@ -176,7 +183,7 @@ Semantic top-k nearest-neighbor search over step embeddings.
 
 Flags:
 
-- `QUERY_TEXT`: required positional-only text, embedded with Cohere Embed v4 in `search_query` mode. `:829`
+- `QUERY_TEXT`: required positional-only text, embedded by the provider `ATIF_SQL_EMBED_PROVIDER` selects: Cohere Embed v4 in `search_query` mode, or EmbeddingGemma 2 on this machine under its `SearchQuery` prompt. The search reads that provider's store. `:829`
 - `-k` / `--k`: top-k; default `10`. This is the CLI's only short flag. `:832`
 - `--session-id`: confine the kNN to one session. `:833`
 - `--corpus-root`: override the materialized corpus root. `:834`
@@ -186,7 +193,7 @@ Flags:
 
 Output columns are `uuid`, `session_id`, `snippet`, and `sim` (`:927`), ranked by cosine distance ascending so the highest similarity comes first (`:935`).
 
-Exit codes: `0` success, `2` no embeddings yet, `65` embedding mismatch when the store was written by another provider, `70` runtime. `:864`
+Exit codes: `0` success, `2` no embeddings yet, `65` embedding mismatch when the store was written by another provider, `70` runtime, including a failed query embedding, `78` the `gemma` provider without the `local` extra. `:864`
 
 ## examples
 

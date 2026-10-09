@@ -21,12 +21,22 @@ and `sessions.agent` says which one a row came from.
 ## Install
 
 One command, one package, every capability. Conversion, materialization, the DuckDB surface,
-the LLM analytics pipelines, and semantic search are all in the box; there are no extras to
-choose and nothing to install afterwards to make a command work.
+the LLM analytics pipelines, and semantic search are all in the box, and nothing has to be
+installed afterwards to make a command work.
 
 ```bash
 uv tool install atif-sql     # the CLI on PATH
 uvx atif-sql schema          # or run it without installing
+```
+
+To keep semantic search on your own machine, add the one optional extra, `local`. It runs
+Google's EmbeddingGemma 2 for `embed` and `search` in place of Cohere on Bedrock (see
+[Search without sending text off the machine](#search-without-sending-text-off-the-machine)).
+On Linux, `--torch-backend cpu` installs PyTorch's CPU build rather than PyPI's CUDA build and
+its gigabytes of NVIDIA libraries:
+
+```bash
+uv tool install 'atif-sql[local]' --torch-backend cpu
 ```
 
 Python 3.13 or newer. The install is substantial and deliberately so, because the analytics and
@@ -38,8 +48,9 @@ are not supported. [RELEASING.md](RELEASING.md) says how to measure the install.
 
 `atif-sql analyze`, `atif-sql embed`, and `atif-sql search` call Amazon Bedrock and cost money.
 `analyze` is a dry run until you pass `--no-dry-run`, `embed` refuses to run without `--limit` or
-`--all` (and `--dry-run` previews it), and `search` embeds one query per call. Nothing else in the
-tool needs a credential.
+`--all` (and `--dry-run` previews it), and `search` embeds one query per call. With
+`ATIF_SQL_EMBED_PROVIDER=gemma`, `embed` and `search` run on this machine instead and cost
+nothing. Nothing else in the tool needs a credential.
 
 ## What you can do
 
@@ -48,7 +59,8 @@ to its flags and exit codes in [the CLI reference](docs/reference/cli.md).
 
 Analysis, embedding, and text search use Amazon Bedrock. `analyze` previews by default;
 `embed` needs `--dry-run` to preview an explicit scope; `search` charges for a query embedding
-on each successful call. Rows marked **costs money** describe paid execution.
+on each successful call. Rows marked **costs money** describe paid execution; embedding and
+search on this machine are free.
 
 | Task | Command | Outcome |
 | --- | --- | --- |
@@ -70,6 +82,7 @@ on each successful call. Rows marked **costs money** describe paid execution.
 | Plan a review of agent interactions before paying | [`atif-sql analyze`](docs/reference/cli.md#analyze) | Previews the work and estimated cost. **Costs money** with `--no-dry-run`, which fills the classifications, conflicts, user friction, and perceived errors views. |
 | Preview how much history to prepare for semantic search | [`atif-sql embed --limit 100 --dry-run`](docs/reference/cli.md#embed) | Previews embedding up to 100 steps. Removing `--dry-run` **costs money** and prepares those steps for search. |
 | Find prior work when you remember the topic, not the words | [`atif-sql search '<text>'`](docs/reference/cli.md#search) | **Costs money** for one query embedding. Finds similar steps with session identifiers and snippets. Needs existing embeddings from `embed`. |
+| Search your sessions without sending text off the machine | [`atif-sql embed --limit 200`](docs/reference/cli.md#embed) | With `ATIF_SQL_EMBED_PROVIDER=gemma` and the `local` extra, embeds 200 steps with EmbeddingGemma 2 on this machine, free, into a store of its own; `search` then reads that store. The first run downloads 1.5 GB. |
 | Find related work across both agent histories | [`atif-sql search --all-corpora '<text>'`](docs/reference/cli.md#search) | **Costs money.** Searches all corpora's embedding stores and identifies each result's corpus. Needs the lake and existing embeddings. |
 | Free space in a corpus from an older version | [`atif-sql corpus slim`](docs/reference/cli.md#corpus-slim) | Previews byte savings. `--no-dry-run` compresses JSON and removes old parquet only after lake verification succeeds. |
 | Keep your history refreshed without remembering each run | [`atif-sql cron install --script <refresh-script>`](docs/reference/cli.md#cron-install) | Prints a schedule to review and install manually. The schedule includes paid embedding and analytics. Obtain `scripts/atif-sql-refresh.sh` from a repo checkout; packaged installs need its explicit path. |
@@ -88,7 +101,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM client; no other package hardcodes a model id |
 | `atif-analytics` | the LLM pipelines `atif-sql analyze` runs: classify, conflicts, friction, and perceived |
-| `atif-embed` | Cohere Embed v4 on Bedrock + LanceDB vector store + embedding backfill |
+| `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine + LanceDB vector store + embedding backfill |
 | `atif-cli` | the composition root, and the source of the `atif-sql` command (see [What you can do](#what-you-can-do)) |
 
 ## Quick start
@@ -139,6 +152,34 @@ separate directories, and one `query` reads one of them. Pass `--corpus-root` to
 pick which, or `--agent codex` to get the Codex default. `--all-corpora` reads
 every corpus the lake holds at once, and `sessions.corpus` says which one a
 row came from.
+
+### Search without sending text off the machine
+
+Set `ATIF_SQL_EMBED_PROVIDER=gemma` and `embed` and `search` use Google's
+[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) on this machine: step text
+and queries stay local, and nothing bills an AWS account. It needs the `local` extra (see
+[Install](#install)); in a checkout, `uv sync --all-packages --extra local`.
+
+```bash
+export ATIF_SQL_EMBED_PROVIDER=gemma
+atif-sql embed --limit 200 --dry-run   # the plan names the provider, model, width and store
+atif-sql embed --limit 200             # downloads the model on first use, then embeds
+atif-sql search 'the flaky watermark test'
+```
+
+- **The first run downloads about 1.5 GB.** The model goes into the Hugging Face cache once,
+  and later runs read it from there; `HF_HUB_OFFLINE=1` keeps every run off the network. Only
+  the 270M-parameter text tower loads, in about 4 GB of memory on a CPU.
+- **A CPU embeds about one step a second on a real corpus.** 200 steps of a Claude Code corpus
+  took 156 s on a shared 16-core machine: short steps run at about 30 a second, and the few
+  long ones (up to the model's 8,192-token window) take most of the time. A CUDA GPU with
+  bfloat16 is faster; the lockfile installs PyTorch's CPU build, so install a CUDA torch build
+  to use one.
+- **Each provider keeps its own store.** Gemma writes `<corpus_root>/embeddings_lance_gemma`
+  beside Cohere's `embeddings_lance`, so switching back and forth never mixes the two vector
+  spaces, and `search` reads the store of the provider selected when it runs.
+- **The width is 768 by default.** `ATIF_SQL_OUTPUT_DIMENSION` takes 512, 256, or 128 for a
+  smaller store at some cost in ranking quality; a store keeps the width it was written at.
 
 Working on `atif-sql` itself is a different setup: a clone, `mise`, and `mise run check` as the
 definition of done. `CONTRIBUTING.md` has it.

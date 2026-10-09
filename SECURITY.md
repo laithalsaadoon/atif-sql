@@ -43,7 +43,10 @@ Bedrock. Both bill your AWS account, and both are guarded so that the network
 call is a deliberate act: `analyze` is dry-run unless you pass `--no-dry-run`,
 and `embed` exits 64 on an unscoped real run (no `--limit`, no `--all`).
 `atif-sql search` also reaches Bedrock, but sends only the query string you
-type — it embeds that one string, then runs the kNN locally.
+type — it embeds that one string, then runs the kNN locally. With
+`ATIF_SQL_EMBED_PROVIDER=gemma`, `embed` and `search` run EmbeddingGemma 2 on
+this machine instead and send no step text or query anywhere; the only network
+call is the one-time model download from Hugging Face, at a pinned revision.
 
 Every other command — `convert`, `materialize`, `status`, `query`, `examples`,
 `schema`, `cron` — is local-only.

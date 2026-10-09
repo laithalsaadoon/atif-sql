@@ -69,8 +69,12 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   cluster/terms/community pipelines were cut on 2026-09-27; outcome is the
   deterministic `session_outcomes` view now. Layered: `application` >
   `infrastructure` > `domain`.
-- `packages/atif-embed`: Cohere Embed v4 on Bedrock + LanceDB store + the
-  backfill and orphan-prune use cases. Discovery reads the lake's `steps`
+- `packages/atif-embed`: Cohere Embed v4 on Bedrock (the default) or
+  EmbeddingGemma 2 on this machine (`ATIF_SQL_EMBED_PROVIDER=gemma`, the
+  optional `local` extra, its own store `embeddings_lance_gemma`) + LanceDB
+  store + the backfill and orphan-prune use cases. torch, transformers and
+  sentence-transformers load only inside the Gemma adapter, by name, and
+  the lean-import test forbids them on `import atif_cli.app`. Discovery reads the lake's `steps`
   through the `LakeStepsPort` port (atif-cli implements it over atif-duck's
   `infrastructure.lake_steps`), and falls back to the per-session reader.
   Layered: `application` > `infrastructure` > `domain`.

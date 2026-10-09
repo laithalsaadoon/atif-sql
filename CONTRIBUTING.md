@@ -232,7 +232,10 @@ materialize, so read the diff as a pricing change.
 
 These paths call Amazon Bedrock and bill the caller: `atif-sql analyze` (the LLM
 pipelines) and `atif-sql embed` (Cohere Embed v4). Each is guarded, and the
-guards are part of the contract:
+guards are part of the contract. The local provider (`ATIF_SQL_EMBED_PROVIDER=gemma`)
+bills nothing but downloads 1.5 GB on first use, so its tests load a fake
+SentenceTransformer and fake torch modules instead, and pass with or without the
+`local` extra installed:
 
 - `analyze` is dry-run by default; `--no-dry-run` is what makes it spend.
 - `embed` refuses a real run with no scope: no `--limit` and no `--all` exits 64.

@@ -57,7 +57,8 @@ Settings env: ATIF_SQL_LLM_FAMILY, ATIF_SQL_LLM_SIZE_<PIPELINE> overrides.
 ## Pipeline size assignments (defaults)
 classify=medium(terra), trajectory=medium, conflicts=large(sol, hardest
 judgment task), friction=small(luna, per-message enum), embed unchanged
-(cohere embed v4 1024-dim int8, one adapter behind EmbeddingProvider).
+(cohere embed v4 1024-dim int8 by default; EmbeddingGemma 2 768-dim is the
+second adapter behind EmbeddingProvider).
 
 ## Ports & state: one shape per seam, declared in domain/ports.py
 CachePort/CheckpointPort/RetryQueuePort/VectorStorePort, sqlite WAL state.db
@@ -75,7 +76,8 @@ Structural pipelines (cluster/terms/community): fixed hyperparameters
 (UMAP 50-dim/HDBSCAN 20,5/Leiden k15 floor .3 min 3 seed 42/c-TF-IDF 2,.95,1-2,top10).
 
 ## VSS
-The stack: cohere embed v4 -> lancedb IvfHnswSq -> duckdb lance
+The stack: cohere embed v4 (the default; EmbeddingGemma 2 on this machine with
+ATIF_SQL_EMBED_PROVIDER=gemma, in its own store) -> lancedb IvfHnswSq -> duckdb lance
 ATTACH -> message_embeddings view + semantic_search(query_vec,k) macro +
 search CLI (cosine-distance ranking, int8-doc caveat). Embeds messages_text
 analogue = steps text >=32 chars (main+sidechain), uuid-keyed via source_uuids
