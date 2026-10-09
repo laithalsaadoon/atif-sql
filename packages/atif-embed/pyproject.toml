@@ -1,7 +1,7 @@
 [project]
 name = "atif-embed"
 version = "0.1.0"
-description = "Embedding provider (Cohere Embed v4 on Bedrock) + LanceDB vector store + embed backfill over the ATIF corpus."
+description = "Embedding providers (Cohere Embed v4 on Bedrock, or EmbeddingGemma 2 on this machine) + LanceDB vector store + embed backfill over the ATIF corpus."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -29,6 +29,21 @@ dependencies = [
     # The per-session reader sizes its batches from a compressed trajectory's
     # frame header.
     "zstandard>=0.25.0",
+]
+
+[project.optional-dependencies]
+# EmbeddingGemma 2 on this machine (ATIF_SQL_EMBED_PROVIDER=gemma). Optional because torch
+# alone is hundreds of megabytes and the default provider, Cohere on Bedrock, needs none
+# of it. transformers 5.19.0 is the first release that carries EmbeddingGemma 2's model
+# class. pillow and torchvision load even for text: sentence-transformers builds the
+# model's AutoProcessor, whose image half imports both. torch and torchvision come from
+# PyTorch's CPU index on Linux (see the root `[tool.uv.sources]`).
+local = [
+    "pillow>=12.3.0",
+    "sentence-transformers>=6.1.0",
+    "torch>=2.14",
+    "torchvision>=0.29",
+    "transformers>=5.19.0",
 ]
 
 [project.urls]

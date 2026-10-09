@@ -104,6 +104,42 @@ def test_root_declares_exactly_the_members_union() -> None:
     assert not differing, f"constraint differs between root and member: {differing}"
 
 
+def _member_extras() -> dict[str, dict[str, str]]:
+    """Every member's optional extras: ``{extra: {package name: requirement}}``."""
+    extras: dict[str, dict[str, str]] = {}
+    for member, manifest in _member_manifests().items():
+        optional = manifest["project"].get("optional-dependencies", {})
+        assert isinstance(optional, dict)
+        for extra, deps in optional.items():
+            assert isinstance(deps, list)
+            bucket = extras.setdefault(str(extra), {})
+            for dep in deps:
+                name = _requirement_name(str(dep))
+                assert not name.startswith("atif-"), f"{member}[{extra}] names a sibling: {dep}"
+                assert bucket.get(name, str(dep)) == str(dep), (
+                    f"members disagree on {name} in extra {extra}: {bucket[name]} vs {dep}"
+                )
+                bucket[name] = str(dep)
+    return extras
+
+
+def test_root_extras_equal_the_members_extras() -> None:
+    """An extra a member declares is installable from the wheel under the same name.
+
+    The single wheel's `[project.optional-dependencies]` is the only place an installer
+    reads an extra from, so `atif-sql[local]` has to carry exactly what `atif-embed[local]`
+    needs: a missing package is an ImportError behind a provider switch, an extra one is
+    weight nobody asked for.
+    """
+    root: Any = _root_project().get("optional-dependencies", {})
+    assert isinstance(root, dict)
+    declared = {
+        str(extra): {_requirement_name(str(d)): str(d) for d in deps}
+        for extra, deps in root.items()
+    }
+    assert declared == _member_extras()
+
+
 def test_root_requires_no_sibling_distribution() -> None:
     """Nothing `atif-*` may reach the wheel's metadata.
 
