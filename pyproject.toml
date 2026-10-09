@@ -55,6 +55,21 @@ dependencies = [
     "zstandard>=0.25.0",
 ]
 
+# The one optional extra, held equal to the members' extras by the same test that holds
+# `dependencies` to their union. `local` runs EmbeddingGemma 2 on this machine for `embed`
+# and `search` (ATIF_SQL_EMBED_PROVIDER=gemma); without it every command still works and
+# embedding goes to Cohere on Bedrock. On Linux, `uv tool install 'atif-sql[local]'
+# --torch-backend cpu` keeps PyPI's CUDA torch wheels, and their gigabytes of nvidia
+# libraries, off a machine that will not use them.
+[project.optional-dependencies]
+local = [
+    "pillow>=12.3.0",
+    "sentence-transformers>=6.1.0",
+    "torch>=2.14",
+    "torchvision>=0.29",
+    "transformers>=5.19.0",
+]
+
 [project.scripts]
 atif-sql = "atif_cli.app:main"
 
@@ -110,11 +125,29 @@ exclude-newer = "7 days"
 # harbor 0.24.0, the parity oracle, was uploaded 2026-10-05T05:04:46Z and is admitted
 # here from that upload on. Delete this exemption in the next `uv lock --upgrade`
 # after 2026-10-12T05:05Z, when the global window reaches it.
-exclude-newer-package = { harbor = "2026-10-05T05:05:00Z" }
+# transformers 5.19.0, the first release with EmbeddingGemma 2's model class, was uploaded
+# 2026-10-06T16:38:56Z and is admitted here from that upload on. Delete this exemption in
+# the next `uv lock --upgrade` after 2026-10-13T16:39Z, when the global window reaches it.
+exclude-newer-package = { harbor = "2026-10-05T05:05:00Z", transformers = "2026-10-06T16:39:00Z" }
 python-preference = "only-managed"
 python-downloads = "automatic"
 compile-bytecode = true
 link-mode = "clone"
+
+# torch and torchvision on Linux come from PyTorch's CPU-only index, so uv.lock carries
+# no CUDA build and none of the nvidia-* and cuda-* wheels PyPI's Linux torch requires
+# (gigabytes, under NVIDIA's own license). `explicit` keeps every other package on PyPI.
+# The index publishes PEP 700 upload times (`data-upload-time` on each file link), so the
+# seven-day cooldown above applies to it as it does to PyPI. macOS and Windows take PyPI's
+# builds, which are CPU-only there. A CUDA machine that wants bf16 installs its own torch.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = [
