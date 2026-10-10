@@ -52,8 +52,8 @@ indent_size = 2
 insert_final_newline = unset
 trim_trailing_whitespace = unset
 
-# Fuzzer seed inputs are bytes the harness reads verbatim, NUL separators included.
-[fuzz/corpus/**]
+# Fuzzer seeds and crash regressions are bytes the harness reads verbatim, NUL separators included.
+[fuzz/{corpus,regressions}/**]
 charset = unset
 insert_final_newline = unset
 trim_trailing_whitespace = unset

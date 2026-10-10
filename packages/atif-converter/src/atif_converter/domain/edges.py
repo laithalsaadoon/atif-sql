@@ -86,8 +86,20 @@ def build_edges(records: list[tuple[dict[str, Any], str]]) -> list[dict[str, Any
     first as empty strings.
     """
     edges = [edge_from_record(record, source_file) for record, source_file in records]
-    edges.sort(key=lambda e: (e["ts"] or "", e["uuid"] or ""))
+    try:
+        edges.sort(key=lambda e: (e["ts"] or "", e["uuid"] or ""))
+    except TypeError:
+        # A `timestamp` or `uuid` that is not a string (an object, a list, a number beside a
+        # string) cannot be compared with the others; the fuzzer found the `TypeError` this
+        # raised. Such values sort as missing ones do. Only an order that raised takes this
+        # branch, so every input that converted before keeps its exact order.
+        edges.sort(key=lambda e: (_sort_text(e["ts"]), _sort_text(e["uuid"])))
     return edges
+
+
+def _sort_text(value: object) -> str:
+    """A sort key part: the string itself, or ``""`` for a missing or non-string value."""
+    return value if isinstance(value, str) else ""
 
 
 def edge_to_jsonl_line(edge: dict[str, Any]) -> str:

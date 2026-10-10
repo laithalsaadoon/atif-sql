@@ -110,3 +110,37 @@ def test_claude_code_layout_splits_on_nul(tmp_path: Path) -> None:
     assert main.read_bytes() == b"a"
     assert (side / "agent-fuzz.jsonl").read_bytes() == b"b"
     assert (side / "agent-fuzz.meta.json").read_bytes() == b"c"
+
+
+#: Inputs the fuzzer crashed the converters with, kept so each fix stays fixed. They sit
+#: outside ``corpus/`` because the converter rejects them, and a seed must convert.
+REGRESSIONS = Path(__file__).resolve().parent / "regressions"
+
+
+def _regressions() -> list[tuple[str, Path]]:
+    return [
+        (target.name, crash)
+        for target in sorted(REGRESSIONS.iterdir())
+        if target.is_dir()
+        for crash in sorted(target.iterdir())
+        if crash.is_file()
+    ]
+
+
+def test_every_regression_names_a_target() -> None:
+    """Anti-vacuity: the regressions exist, and each sits under a registered target."""
+    found = _regressions()
+    assert len(found) >= 2, found
+    assert {name for name, _ in found} <= set(TARGETS)
+
+
+@pytest.mark.parametrize(
+    ("name", "crash"), _regressions(), ids=lambda value: getattr(value, "name", value)
+)
+def test_fuzzer_crash_stays_fixed(name: str, crash: Path, tmp_path: Path) -> None:
+    """A crash the fuzzer found is now rejected or converted.
+
+    A non-string ``uuid`` or ``timestamp`` broke the Claude Code edges sort, and an unhashable
+    payload ``type`` broke the Codex tool-use ids; both raised ``TypeError`` past the converter.
+    """
+    TARGETS[name](crash.read_bytes(), tmp_path)
