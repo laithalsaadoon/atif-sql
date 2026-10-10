@@ -4,6 +4,7 @@
 [![security](https://github.com/laithalsaadoon/atif-sql/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/security.yml)
 [![CodeQL](https://github.com/laithalsaadoon/atif-sql/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/codeql.yml)
 [![Scorecard](https://github.com/laithalsaadoon/atif-sql/actions/workflows/scorecard.yml/badge.svg?branch=main)](https://github.com/laithalsaadoon/atif-sql/actions/workflows/scorecard.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/laithalsaadoon/atif-sql/badge)](https://scorecard.dev/viewer/?uri=github.com/laithalsaadoon/atif-sql)
 ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)
 [![License Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 

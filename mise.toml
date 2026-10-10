@@ -667,6 +667,40 @@ depends = [
 ]
 
 # ---------------------------------------------------------------------------
+# Release assets: what a GitHub release carries beside the PyPI upload.
+#
+# publish.yml runs this on the tag after `uv build`, attests what it staged, and uploads it to
+# the release. It runs the same on a laptop, so what a release will carry is never something
+# only CI can show. RELEASING.md has the verify commands a consumer runs.
+# ---------------------------------------------------------------------------
+
+[tasks."release:assets"]
+description = "Stage release/: the built wheel and sdist, CycloneDX and SPDX SBOMs of the locked runtime closure, SHA256SUMS"
+# Needs RELEASE_VERSION (`0.2.0`, no `v`) and a `uv build --out-dir dist` of that version.
+#
+# The SBOM describes the LOCKED runtime closure, `uv export --no-dev` over uv.lock: the set
+# `mise run check` tested on the tag. A user's `uv tool install` resolves the wheel's ranges
+# afresh and can land newer patch versions, which an SBOM of a runner's install would record
+# as if they had shipped. `--preview-features sbom-export` names the export's preview state
+# instead of silencing it; uv is pinned in mise.lock, so the format moves only with a reviewed
+# bump. syft converts that one document to SPDX, so the two formats cannot disagree.
+#
+# `security:sbom` is a different document: the whole repository, dev tools and the docs site
+# included, kept 90 days as a CI artifact for "did we ever ship that?".
+run = """
+set -eu
+version="${RELEASE_VERSION:?set RELEASE_VERSION to the version being released, such as 0.2.0}"
+rm -rf release
+mkdir release
+cp "dist/atif_sql-$version-py3-none-any.whl" "dist/atif_sql-$version.tar.gz" release/
+uv export --frozen --no-dev --preview-features sbom-export --format cyclonedx1.5 \
+  --output-file "release/atif_sql-$version.cdx.json" > /dev/null
+syft convert "release/atif_sql-$version.cdx.json" -o "spdx-json=release/atif_sql-$version.spdx.json"
+(cd release && sha256sum -- * > SHA256SUMS)
+uv run python scripts/verify_release_assets.py release "$version"
+"""
+
+# ---------------------------------------------------------------------------
 # CLI passthrough
 # ---------------------------------------------------------------------------
 

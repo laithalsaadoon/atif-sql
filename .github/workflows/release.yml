@@ -45,6 +45,10 @@ jobs:
   release:
     name: cut the release
     runs-on: ubuntu-latest
+    # The `release` environment holds RELEASE_DEPLOY_KEY and lets only `main` deploy to it, so
+    # no other branch's workflow and no pull request can read the one credential that may push
+    # to `main` past its ruleset.
+    environment: release
     permissions:
       # Pushes the bump commit and the tag, and creates the draft release. `id-token: write`
       # is deliberately absent: nothing here talks to PyPI, so this job cannot mint a
@@ -66,17 +70,33 @@ jobs:
       # the last tag, and a shallow clone would find no tag and treat every commit in the
       # repository as unreleased.
       #
-      # `persist-credentials: true` — the exception to this repository's default, because this
-      # is the one job that pushes. The token it leaves in .git/config is the same
-      # `GITHUB_TOKEN` scoped to `contents: write` above, this job uploads no artifact for it to
-      # leak into, and every step after the checkout is either a first-party mise task or `git`
-      # itself. Writing the token into a remote URL instead would put the same secret in the
-      # same file with none of that reasoning attached, which is why the audit is silenced here
-      # rather than worked around.
+      # `persist-credentials: true`, the exception to this repository's default, because this
+      # is the one job that pushes. With `ssh-key` set, checkout writes the deploy key to a
+      # runner temp file and points `core.sshCommand` at it; the key can push to this one
+      # repository and nothing else, this job uploads no artifact for it to leak into, and every
+      # step after the checkout is either a first-party mise task or `git` itself. That is why
+      # the audit is silenced here rather than worked around.
+      #
+      # The push below goes through a deploy key, the one actor the `main` ruleset lets past its
+      # pull-request rule: `GITHUB_TOKEN` pushes as `github-actions[bot]`, which no bypass list
+      # can name. Checked before the checkout, because an empty `ssh-key` makes the checkout fall
+      # back to the token silently and the run would fail ten minutes later at the push, with
+      # `GH006`. A dry run pushes nothing and needs no key.
+      - name: Require the release deploy key
+        if: ${{ !inputs.dry_run }}
+        env:
+          KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::The release environment has no RELEASE_DEPLOY_KEY secret. RELEASING.md, 'The release push and branch protection', has the setup."
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: # zizmor: ignore[artipacked] the one job that pushes needs the credential it checks out with
           fetch-depth: 0
           persist-credentials: true
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
       - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
@@ -215,10 +235,8 @@ jobs:
       # `--follow-tags` pushes the annotated tag with the commit, in one ref update, so a tag
       # can never exist without the commit it names.
       #
-      # This push is refused with `GH006: Protected branch update failed` when a ruleset on
-      # `main` requires a pull request, because `GITHUB_TOKEN` pushes as `github-actions[bot]`
-      # and a ruleset bypass list cannot name it (bypass actors are roles, teams, GitHub Apps,
-      # and Dependabot). RELEASING.md carries the setting and the local fallback.
+      # The checkout's deploy key makes this push, and the `main` ruleset names deploy keys as
+      # its one automated bypass actor. RELEASING.md carries the setting and the local fallback.
       - name: Push the bump commit and the tag
         if: ${{ !inputs.dry_run }}
         run: git push --follow-tags
