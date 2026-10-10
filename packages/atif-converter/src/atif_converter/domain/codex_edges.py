@@ -104,7 +104,10 @@ def _edge_type(record: dict[str, Any]) -> str | None:
 def _tool_use_ids(record: dict[str, Any]) -> list[str]:
     """The record's ``call_id``, when it is a tool call or a tool output."""
     payload = _payload(record)
-    if payload.get("type") not in _CALL_ID_ITEM_TYPES:
+    item_type = payload.get("type")
+    # A `type` that is an object or a list is unhashable, and the membership test raised
+    # `TypeError` on it (found by the fuzzer). Only a string can name a call item.
+    if not isinstance(item_type, str) or item_type not in _CALL_ID_ITEM_TYPES:
         return []
     call_id = payload.get("call_id")
     return [call_id] if isinstance(call_id, str) and call_id else []
