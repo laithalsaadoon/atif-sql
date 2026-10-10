@@ -194,7 +194,7 @@ def _index_rollout(records: list[tuple[dict[str, Any], str]]) -> _RolloutIndex:
             pending_reasoning = record_id
             continue
 
-        if item_type in _REASONING_CONSUMERS and pending_reasoning is not None:
+        if _str(item_type) in _REASONING_CONSUMERS and pending_reasoning is not None:
             key = payload.get("call_id") if "call" in str(item_type) else record_id
             index.reasoning_for[str(key) if isinstance(key, str) and key else record_id] = (
                 pending_reasoning
@@ -219,7 +219,7 @@ def _index_rollout(records: list[tuple[dict[str, Any], str]]) -> _RolloutIndex:
         call_id = payload.get("call_id")
         if isinstance(call_id, str) and call_id:
             index.by_call_id.setdefault(call_id, []).append(record_id)
-            if item_type in {"function_call", "custom_tool_call"}:
+            if _str(item_type) in {"function_call", "custom_tool_call"}:
                 pending_call_api[call_id] = current_api_call
                 saw_model_output = True
 
@@ -376,7 +376,7 @@ def _attribute_non_agent_messages(
         if not isinstance(step, dict):
             continue
         source = step.get("source")
-        if source not in {"user", "system"}:
+        if _str(source) not in {"user", "system"}:
             continue
         if cursor >= len(messages):
             return _step_id(step), 0
@@ -407,3 +407,13 @@ def _record_cache_total(trajectory: dict[str, Any], extra: dict[str, Any]) -> No
     total = metrics_extra.get("total_cache_write_input_tokens")
     if isinstance(total, int):
         extra["cache_creation_total"] = total
+
+
+def _str(value: object) -> str | None:
+    """``value`` when it is a string, else ``None``: a set-membership key that cannot raise.
+
+    A transcript field can hold any JSON value, and an object or a list is unhashable, so
+    testing one against a set raised ``TypeError`` past the converter (found by the fuzzer).
+    A non-string value never matched one of these string sets, so no result changes.
+    """
+    return value if isinstance(value, str) else None
