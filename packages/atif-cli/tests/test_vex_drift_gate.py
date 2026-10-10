@@ -177,3 +177,49 @@ def test_render_rewrites_the_allow_line_from_the_ledger(tmp_path: Path) -> None:
     assert (tmp_path / "osv.toml").read_text(encoding="utf-8") == (ROOT / OSV_CONFIG).read_text(
         encoding="utf-8"
     )
+
+
+#: osv-scanner reads the config in a lockfile's own directory only, so the docs site's lockfile
+#: needs its own copy of the render: without it Scorecard's recursive scan reports every npm
+#: advisory the ledger argued.
+SITE_OSV_CONFIG = Path("site/osv-scanner.toml")
+
+
+def _run_both(site_copy: Path = SITE_OSV_CONFIG) -> subprocess.CompletedProcess[str]:
+    argv = [
+        sys.executable,
+        str(SCRIPT),
+        str(LEDGER),
+        str(OSV_CONFIG),
+        str(site_copy),
+        "--lock",
+        str(UV_LOCK),
+        "--pnpm-lock",
+        str(PNPM_LOCK),
+        "--check",
+    ]
+    return subprocess.run(  # noqa: S603 - fixed interpreter and repository script
+        argv, capture_output=True, text=True, check=False, cwd=ROOT
+    )
+
+
+def test_site_copy_beside_the_pnpm_lock_is_green() -> None:
+    result = _run_both()
+    assert result.returncode == 0, result.stderr
+    assert f"{SITE_OSV_CONFIG} matches {LEDGER}" in result.stdout
+    assert f"{OSV_CONFIG} matches {LEDGER}" in result.stdout
+
+
+def test_site_copy_that_drifted_is_red(tmp_path: Path) -> None:
+    drifted = tmp_path / "osv-scanner.toml"
+    text = (ROOT / SITE_OSV_CONFIG).read_text(encoding="utf-8")
+    drifted.write_text(text.replace("[[IgnoredVulns]]", "", 1), encoding="utf-8")
+    result = _run_both(drifted)
+    assert result.returncode == 1
+    assert f"{drifted} has DRIFTED from {LEDGER}" in result.stderr
+
+
+def test_site_copy_that_is_missing_is_red(tmp_path: Path) -> None:
+    result = _run_both(tmp_path / "osv-scanner.toml")
+    assert result.returncode == 1
+    assert "does not exist but" in result.stderr

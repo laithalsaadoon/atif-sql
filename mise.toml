@@ -336,14 +336,15 @@ depends = [
 # ---------------------------------------------------------------------------
 
 [tasks."security:vex"]
-description = "Regenerate osv-scanner.toml and dependency-review's allow-ghsas from the OpenVEX ledger"
+description = "Regenerate both osv-scanner.toml copies (root and site/) and dependency-review's allow-ghsas from the OpenVEX ledger"
 # NOT in `security`'s depends, deliberately. `osv-scanner.toml` is COMMITTED and drift-gated, so
 # regenerating it as part of the scan would let a scan run against a suppression surface no gate
 # has ever seen — the scan would define its own exemptions and then pass. Editing
 # `security/atif-sql.openvex.json` means running this task and committing what it rewrote:
 # osv-scanner.toml and the `allow-ghsas:` line of .github/workflows/dependency-review.yml.
 run = """
-uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml \
+uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json \
+  osv-scanner.toml site/osv-scanner.toml \
   --pnpm-lock site/pnpm-lock.yaml --workflow .github/workflows/dependency-review.yml
 """
 
@@ -366,6 +367,7 @@ description = "Drift gate: osv-scanner.toml and allow-ghsas must match the ledge
 sources = [
     "security/**/*.json",
     "osv-scanner.toml",
+    "site/osv-scanner.toml",
     "scripts/vex_to_osv_config.py",
     "uv.lock",
     "site/pnpm-lock.yaml",
@@ -382,7 +384,8 @@ sources = [
 # report.
 run = """
 set -eu
-uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json osv-scanner.toml \
+uv run python scripts/vex_to_osv_config.py security/atif-sql.openvex.json \
+  osv-scanner.toml site/osv-scanner.toml \
   --pnpm-lock site/pnpm-lock.yaml --workflow .github/workflows/dependency-review.yml --check
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT

@@ -4,7 +4,7 @@
 
 Fail when either disagrees with the ledger, or the ledger with the lockfiles.
 
-    scripts/vex_to_osv_config.py <ledger.json> <output.toml> [--lock uv.lock]
+    scripts/vex_to_osv_config.py <ledger.json> <output.toml> [<output.toml> ...] [--lock uv.lock]
         [--pnpm-lock site/pnpm-lock.yaml] [--workflow .github/workflows/dependency-review.yml]
     scripts/vex_to_osv_config.py <ledger.json> <output.toml> [...the same...] --check
 
@@ -172,6 +172,13 @@ _HEADER = """\
 # emitted, and the version scoping is enforced by the generator instead: it asserts every PURL
 # version in the ledger against uv.lock and FAILS when a bump moves the package, which turns a
 # silent stale suppression into a red gate.
+#
+# WHY THERE ARE TWO COPIES
+# osv-scanner applies the osv-scanner.toml in a lockfile's own directory and no other one.
+# Probed 2026-10-10 with osv-scanner 2.6.0 over `scan source -r .` (what OpenSSF Scorecard's
+# Vulnerabilities check runs): the root copy suppressed nothing for site/pnpm-lock.yaml and
+# both npm advisories were reported. So the same render is written to the root, beside uv.lock,
+# and to site/, beside pnpm-lock.yaml, and each copy reports the other lockfile's ids unused.
 {body}"""
 
 #: One decoded JSON value. `json.loads` is typed `Any`, so without a declared shape every
@@ -568,7 +575,11 @@ def main(argv: Sequence[str]) -> int:
         description="Render osv-scanner.toml from an OpenVEX ledger.",
     )
     parser.add_argument("ledger", help="path to the OpenVEX ledger JSON")
-    parser.add_argument("output", help="path to the osv-scanner.toml to write or check")
+    parser.add_argument(
+        "output",
+        nargs="+",
+        help="path of each osv-scanner.toml to write or check: one per lockfile directory",
+    )
     parser.add_argument(
         "--lock", default="uv.lock", help="lockfile the PURL versions are checked against"
     )
@@ -588,7 +599,7 @@ def main(argv: Sequence[str]) -> int:
     args = parser.parse_args(argv)
 
     ledger_path = Path(args.ledger)
-    output_path = Path(args.output)
+    output_paths = [Path(output) for output in args.output]
     pnpm_lock = Path(args.pnpm_lock) if args.pnpm_lock else None
     statements = load(ledger_path, Path(args.lock), pnpm_lock)
     rendered = render(statements, ledger_path.as_posix())
@@ -602,8 +613,9 @@ def main(argv: Sequence[str]) -> int:
             _fail(f"cannot read {workflow}: {error.strerror or type(error).__name__}")
 
     if not args.check:
-        output_path.write_text(rendered, encoding="utf-8")
-        sys.stdout.write(f"vex-to-osv-config: wrote {output_path} from {ledger_path}\n")
+        for output_path in output_paths:
+            output_path.write_text(rendered, encoding="utf-8")
+            sys.stdout.write(f"vex-to-osv-config: wrote {output_path} from {ledger_path}\n")
         if workflow is not None:
             workflow.write_text(
                 render_workflow(workflow_text, ghsas, workflow.as_posix()), encoding="utf-8"
@@ -618,30 +630,31 @@ def main(argv: Sequence[str]) -> int:
             f"({len(ghsas)} GHSA ids)\n"
         )
 
-    try:
-        committed = output_path.read_text(encoding="utf-8")
-    except OSError:
-        _fail(
-            f"{output_path} does not exist but {ledger_path} does — run "
-            f"`mise run security:vex` and commit the result"
+    for output_path in output_paths:
+        try:
+            committed = output_path.read_text(encoding="utf-8")
+        except OSError:
+            _fail(
+                f"{output_path} does not exist but {ledger_path} does — run "
+                f"`mise run security:vex` and commit the result"
+            )
+        if committed != rendered:
+            diff = difflib.unified_diff(
+                committed.splitlines(keepends=True),
+                rendered.splitlines(keepends=True),
+                fromfile=f"{output_path} (committed)",
+                tofile=f"{output_path} (rendered from {ledger_path})",
+            )
+            sys.stderr.writelines(diff)
+            _fail(
+                f"{output_path} has DRIFTED from {ledger_path}. A generated suppression surface "
+                f"nothing verifies is a suppression surface that outlives its reason: run "
+                f"`mise run security:vex` and commit both files"
+            )
+        sys.stdout.write(
+            f"vex-to-osv-config: {output_path} matches {ledger_path} "
+            f"({len(rendered.splitlines())} lines)\n"
         )
-    if committed != rendered:
-        diff = difflib.unified_diff(
-            committed.splitlines(keepends=True),
-            rendered.splitlines(keepends=True),
-            fromfile=f"{output_path} (committed)",
-            tofile=f"{output_path} (rendered from {ledger_path})",
-        )
-        sys.stderr.writelines(diff)
-        _fail(
-            f"{output_path} has DRIFTED from {ledger_path}. A generated suppression surface "
-            f"nothing verifies is a suppression surface that outlives its reason: run "
-            f"`mise run security:vex` and commit both files"
-        )
-    sys.stdout.write(
-        f"vex-to-osv-config: {output_path} matches {ledger_path} "
-        f"({len(rendered.splitlines())} lines)\n"
-    )
     return 0
 
 
