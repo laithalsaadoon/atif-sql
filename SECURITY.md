@@ -17,6 +17,16 @@ response time is promised. Expect an acknowledgement and a fix or an explicit
 "won't fix" when someone gets to it — and please keep the report private until
 a fix ships or you hear that one is not coming.
 
+## Verifying a release
+
+Each GitHub release carries the wheel and sdist uploaded to PyPI, CycloneDX and SPDX SBOMs,
+`SHA256SUMS`, and `atif_sql-<version>.intoto.jsonl`: SLSA build provenance and an SBOM
+attestation, signed through Sigstore by the `publish.yml` workflow itself. `gh attestation
+verify <file> -R laithalsaadoon/atif-sql --signer-workflow
+laithalsaadoon/atif-sql/.github/workflows/publish.yml` checks any of them;
+[RELEASING.md](RELEASING.md#what-a-github-release-carries-and-how-to-verify-it) has the
+full procedure.
+
 ## What the security-relevant surface actually is
 
 atif-sql is a local analytics tool. It reads the operator's own Claude Code

@@ -251,8 +251,47 @@ litellm`) prints nothing, and `test_dev_only_imports_guard.py` fails if `src/` i
 4. **Review the draft and press "Publish release".** That press is what starts `publish.yml` —
    see below for why it has to be a human and not the workflow.
 5. **Approve the `pypi` environment.** `publish.yml` builds the sdist and the wheel, verifies
-   them, installs them, and then waits. A reviewer approves once and all the upload legs
-   proceed.
+   them, installs them, stages the release assets, attests them, and then waits. A reviewer
+   approves once and all the upload legs proceed. The signed assets reach the GitHub release
+   without waiting for that approval, so they are on the release whether or not PyPI is.
+
+## What a GitHub release carries, and how to verify it
+
+Every release carries the same six assets, staged by `mise run release:assets` on the tag and
+uploaded by `publish.yml`:
+
+| Asset | What it is |
+| --- | --- |
+| `atif_sql-<v>-py3-none-any.whl`, `atif_sql-<v>.tar.gz` | The distributions, byte for byte the ones uploaded to PyPI |
+| `atif_sql-<v>.cdx.json`, `atif_sql-<v>.spdx.json` | CycloneDX and SPDX SBOMs of the locked runtime closure the release gate tested (`uv export --no-dev` over `uv.lock`) |
+| `SHA256SUMS` | The digest of each of the four files above |
+| `atif_sql-<v>.intoto.jsonl` | Two Sigstore bundles, one per line: SLSA v1 build provenance over all five files above, and an SBOM attestation over the two distributions |
+
+The attestations are signed through Sigstore with `publish.yml`'s own OIDC identity, so the
+signer is the workflow file at the tag, not a key someone holds. GitHub's attestation API
+stores the same bundles, so verification needs only the file:
+
+```bash
+v=0.2.0
+gh release download "v$v" -R laithalsaadoon/atif-sql -D "atif-sql-$v"
+cd "atif-sql-$v"
+sha256sum --check SHA256SUMS
+for f in atif_sql-$v-py3-none-any.whl atif_sql-$v.tar.gz atif_sql-$v.cdx.json atif_sql-$v.spdx.json SHA256SUMS; do
+  gh attestation verify "$f" --bundle "atif_sql-$v.intoto.jsonl" -R laithalsaadoon/atif-sql \
+    --signer-workflow laithalsaadoon/atif-sql/.github/workflows/publish.yml
+done
+```
+
+Drop `--bundle` to verify against the attestation API instead. A wheel installed from PyPI
+verifies the same way, and PyPI shows its own PEP 740 attestation for each file on the
+project page.
+
+`publish.yml` runs the same `gh attestation verify` on every asset, then
+`scripts/verify_release_assets.py --attestations`, before `gh release upload`. A stray file, a
+name that disagrees with the tag, a digest `SHA256SUMS` does not hold, an SBOM for another
+version, or an asset the provenance does not cover fails the upload; its tests plant each
+defect. `--clobber` is never passed, so a re-dispatch never replaces an asset someone may have
+verified: it fails on the first name that exists.
 
 ### Why the release is a draft
 
@@ -334,38 +373,61 @@ the fat-wheel restructure above. Neither is on the table.
 | **Private vulnerability reporting** enabled | Settings → Advanced Security | `SECURITY.md` and `.github/ISSUE_TEMPLATE/config.yml` both route reports to `/security/advisories/new`, which 404s while this is off. |
 | **Require review from Code Owners** on `main` | Branch protection or ruleset | `.github/CODEOWNERS` only *requests* review until this is on; with it off the file is a notification list. |
 | `default_workflow_permissions` = `read` | Settings → Actions | Every workflow here declares its own per-job permissions, so the default needs no write. |
-| A push path to `main` for the release workflow | Branch protection or ruleset | See below. |
+| Ruleset `main` on the default branch | Settings → Rules → Rulesets | See below: no deletion, no force push, pull requests with two approvals and Code Owner review, stale approvals dismissed, the check jobs required on an up-to-date branch. |
+| Environment `release` with secret `RELEASE_DEPLOY_KEY`, deployments from `main` only | Settings → Environments | The private half of the write deploy key `release.yml` pushes the bump commit and tag with. See below. |
+| **Immutable releases** off | Settings → General → Releases | `publish.yml` adds the signed assets after the release is published, which an immutable release refuses. |
 | Pages **Source = GitHub Actions** | Settings → Pages | `docs.yml` deploys through `actions/deploy-pages`, which needs the Actions source rather than a branch. `base: "/atif-sql/"` in `site/astro.config.ts` matches the resulting project-site path. |
 | The AI-crawler policy, at the ORIGIN root | The `laithalsaadoon.github.io` user-pages repository | `robots.txt` is per-origin (RFC 9309 §2.3), so a project site served from a path segment cannot own one: Astro emits this site's copy to `/atif-sql/robots.txt`, which no crawler fetches. `site/public/robots.txt` is the decided policy and the exact text to install at `https://laithalsaadoon.github.io/robots.txt`. Until it is installed there, these pages inherit whatever that origin already serves — and absent a file, that is fully permissive. Outside this repository's reach, so no gate here can assert it. |
 
 ### The release push and branch protection
 
-`release.yml` pushes the bump commit and the tag with `GITHUB_TOKEN`, which acts as
-`github-actions[bot]`. A ruleset on `main` that requires a pull request refuses that push with
-`GH006: Protected branch update failed`, and **a ruleset bypass list cannot name it** — the
-eligible bypass actors are repository/organisation/enterprise admins, the maintain and write
-roles or custom roles based on write, teams, GitHub Apps, and Dependabot. `github-actions[bot]`
-is none of those.
+`main` carries one ruleset, `main`, which OpenSSF Scorecard's Branch-Protection check reads:
 
-The supported resolutions:
+- deletion and non-fast-forward pushes are refused, for everyone;
+- a change arrives through a pull request with two approvals, Code Owner review, the most
+  recent push approved, review threads resolved, and stale approvals dismissed on a new push;
+- the `check.yml` jobs must pass on a branch that is up to date with `main`.
 
-1. **Grant the push.** Keep the pull-request requirement off `main`, or add a bypass actor the
-   token can act as. The repository is single-maintainer and every change still goes through a
-   pull request by convention; the gate that matters is `check.yml`.
-2. **Cut the version locally.** The tool is the same one CI runs, from the same lockfile, so
-   the outcome is identical:
+The repository has one maintainer, who cannot approve their own pull request, so the
+maintainer's account is a bypass actor and merges without the approvals. The checks still run
+on the pull request and the history rules still hold, because a bypass is recorded in the
+ruleset's insights and nothing here force-pushes.
 
-   ```bash
-   git switch main && git pull --ff-only
-   mise run check
-   uv run cz bump --changelog --check-consistency --annotated-tag
-   git push --follow-tags
-   gh release create "v$(uv run cz version --project)" --draft --verify-tag \
-     --title "v$(uv run cz version --project)" \
-     --notes-file <(uv run cz changelog --dry-run "$(uv run cz version --project)")
-   ```
+`release.yml` pushes the bump commit and the tag to `main` directly. `GITHUB_TOKEN` pushes as
+`github-actions[bot]`, which no ruleset bypass list can name, so the push goes through a
+**deploy key** instead, and deploy keys are the ruleset's second bypass actor. Setup, once:
 
-   From there the flow is identical: review the draft, press Publish, approve `pypi`.
+```bash
+ssh-keygen -t ed25519 -N '' -C 'atif-sql release.yml' -f release_deploy_key
+gh repo deploy-key add release_deploy_key.pub -R laithalsaadoon/atif-sql \
+  --allow-write --title 'release.yml push'
+gh api -X PUT repos/laithalsaadoon/atif-sql/environments/release \
+  -F 'deployment_branch_policy[protected_branches]=false' \
+  -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST repos/laithalsaadoon/atif-sql/environments/release/deployment-branch-policies \
+  -f name=main -f type=branch
+gh secret set RELEASE_DEPLOY_KEY --env release -R laithalsaadoon/atif-sql < release_deploy_key
+shred -u release_deploy_key release_deploy_key.pub
+```
+
+Only a run of the `release` job on `main` can read the key, and `release.yml` refuses a
+non-dry run without it before it checks anything out. To rotate it, repeat the setup and delete
+the old key under Settings → Deploy keys.
+
+Without the key, cut the version locally; the maintainer's bypass lets the push through, and
+the tool is the same one CI runs, from the same lockfile:
+
+```bash
+git switch main && git pull --ff-only
+mise run check
+uv run cz bump --changelog --check-consistency --annotated-tag
+git push --follow-tags
+gh release create "v$(uv run cz version --project)" --draft --verify-tag \
+  --title "v$(uv run cz version --project)" \
+  --notes-file <(uv run cz changelog --dry-run "$(uv run cz version --project)")
+```
+
+From there the flow is identical: review the draft, press Publish, approve `pypi`.
 
 ## Cutting a specific version
 
@@ -404,6 +466,8 @@ an existing filename either way, so this cannot replace bytes.
 | `mise run lock:check` fails on the release commit | `pre_bump_hooks` is missing from `[tool.commitizen]`, so `uv.lock` still records the previous versions. |
 | `commitizen found no version-bumping commit since the last tag` | Nothing to release. Land a `feat:`/`fix:`, or dispatch with an explicit `increment`. |
 | `CurrentVersionNotFoundError: Current version ... is not found in <path>` | A `version_files` entry points at a file whose version was hand-edited. `--check-consistency` is doing its job. |
-| `GH006: Protected branch update failed` | See "The release push and branch protection". |
+| `GH006: Protected branch update failed` | The push did not use the deploy key, or the key is not a bypass actor of the `main` ruleset. See "The release push and branch protection". |
+| `The release environment has no RELEASE_DEPLOY_KEY secret` | The deploy key setup has not happened yet. Same section. |
+| `gh release upload` fails with `already exists` | A re-dispatch of `publish.yml` for a release that already carries its assets. Nothing to do: the assets on the release are the ones first verified. |
 | 403 from PyPI naming a publisher it cannot find | On a first release, the pending publisher does not exist yet. Afterwards, the publisher does not match the claims. |
 | `expected one sdist and one wheel for <project>, staged 0` | `uv build --all-packages` did not produce that project — usually a member removed from `[tool.uv.workspace] members`. |

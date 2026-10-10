@@ -50,6 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       # The TAG, not the branch. `main` has moved on by the time a maintainer publishes the
       # draft, and the bytes that reach PyPI have to be the bytes that were released.
@@ -84,6 +86,12 @@ jobs:
       # member manifests, and those are dev manifests — building them produces distributions
       # nothing installs and gives the preflight below seven extra files to reject.
       - run: uv build --out-dir dist
+
+      - id: version
+        name: Read the version from the tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       # The preflight, on the property a single-wheel distribution can get wrong.
       #
@@ -229,6 +237,138 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+      # What the GitHub release carries beside PyPI: these same two files, a CycloneDX and an
+      # SPDX SBOM of the locked runtime closure this job just tested, and SHA256SUMS. Staged
+      # here, in the job that has no `id-token`, so the attest job below signs bytes it did not
+      # make; `release:assets` ends in scripts/verify_release_assets.py, so a stray file, a
+      # name that disagrees with the tag or an SBOM for another version fails before signing.
+      - name: Stage the release assets
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: RELEASE_VERSION="${RELEASE_TAG#v}" mise run release:assets
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: release/
+          retention-days: 7
+          if-no-files-found: error
+
+  # SLSA build provenance over every release asset, and an SBOM attestation over the two
+  # distributions, both signed through Sigstore with this workflow's OIDC identity and stored in
+  # GitHub's attestation API, where `gh attestation verify` finds them by digest. The bundles
+  # are also written into the release as `atif_sql-<version>.intoto.jsonl`, one per line, so a
+  # consumer can verify offline and OpenSSF Scorecard's Signed-Releases check sees provenance.
+  #
+  # Its own job because it is the only one that holds `attestations: write`: the build job
+  # cannot sign, and the upload job below cannot mint an identity.
+  attest:
+    name: attest the release assets
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # request the Sigstore signing certificate for this workflow's identity
+      attestations: write # store the attestations in the repository's attestation API
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release
+
+      - id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release/*
+
+      - id: sbom
+        name: Attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            release/*.whl
+            release/*.tar.gz
+          sbom-path: release/atif_sql-${{ needs.build.outputs.version }}.cdx.json
+
+      # One compact Sigstore bundle per line: the shape `gh attestation verify --bundle` reads.
+      - name: Write the attestation bundles
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM: ${{ steps.sbom.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          mkdir attestations
+          jq -c . "$PROVENANCE" "$SBOM" > "attestations/atif_sql-$VERSION.intoto.jsonl"
+          wc -l "attestations/atif_sql-$VERSION.intoto.jsonl"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: attestations
+          path: attestations/
+          retention-days: 7
+          if-no-files-found: error
+
+  # Uploads the attested assets to the GitHub release, after proving each one verifies against
+  # THIS workflow's identity and that the attestations cover every asset. An asset nobody can
+  # verify fails the release here rather than shipping beside the ones that can be verified.
+  #
+  # No checkout and no `id-token`: the job holds `contents: write` for one `gh release upload`,
+  # and its inputs are the two artifacts the jobs above produced. The verifier script is read at
+  # the TAG through the API, so a change on main cannot loosen the gate an old tag passes.
+  #
+  # Assets are added to the release after it is published, so this needs immutable releases
+  # left off in the repository settings. `gh release upload` without `--clobber` refuses to
+  # replace an asset: a re-dispatch after a partial upload fails loudly rather than swapping
+  # bytes a consumer may already have verified.
+  release-assets:
+    name: upload the signed release assets
+    needs: [build, attest]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload assets to the existing release
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: release
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: attestations
+          path: release
+
+      - name: Verify every asset against the signing workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bundle="release/atif_sql-$VERSION.intoto.jsonl"
+          for asset in release/*; do
+            [ "$asset" = "$bundle" ] && continue
+            gh attestation verify "$asset" --bundle "$bundle" --repo "$REPO" \
+              --signer-workflow "$REPO/.github/workflows/publish.yml"
+          done
+
+      - name: Check the attestations cover the whole release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/$REPO/contents/scripts/verify_release_assets.py?ref=$TAG" > verify_release_assets.py
+          python3 verify_release_assets.py release "$VERSION" --attestations
+
+      - name: Upload the assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" release/* --repo "$REPO"
+
   # WHAT A MAINTAINER CONFIGURES ON PYPI, BEFORE THE FIRST RUN
   # ---------------------------------------------------------
   # At <https://pypi.org/manage/account/publishing/> (the ACCOUNT-level "Publishing" page, not a
@@ -275,7 +415,9 @@ jobs:
   # single-distribution shape rather than of this file.
   publish:
     name: publish atif-sql
-    needs: build
+    # `attest` as well as `build`: no version reaches PyPI without its provenance in GitHub's
+    # attestation API.
+    needs: [build, attest]
     runs-on: ubuntu-latest
     # The human decision, and the reason it sits HERE rather than earlier: publishing the draft
     # release says "these are the release notes", which is reversible. This says "these bytes

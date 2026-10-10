@@ -8,6 +8,7 @@ coverage.xml
 htmlcov/
 .mise/
 dist/
+release/
 build/
 *.egg-info/
 .DS_Store
