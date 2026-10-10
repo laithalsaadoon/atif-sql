@@ -235,7 +235,7 @@ def _index_claude_records(
 
 
 def _claude_exit_code(tool_name: str | None, facts: _ClaudeResult) -> int | None:
-    if tool_name not in _EXIT_CODE_TOOLS or not facts.is_error:
+    if _str(tool_name) not in _EXIT_CODE_TOOLS or not facts.is_error:
         return None
     for text in (facts.first_text, facts.tool_use_result):
         if isinstance(text, str):
@@ -319,7 +319,11 @@ def _subagent_entries(
         if not isinstance(tool_use_result, dict):
             continue
         agent_id = tool_use_result.get("agentId")
-        if isinstance(agent_id, str) and agent_id and tool_names.get(call_id) in {"Task", "Agent"}:
+        if (
+            isinstance(agent_id, str)
+            and agent_id
+            and _str(tool_names.get(call_id)) in {"Task", "Agent"}
+        ):
             from_results.setdefault(agent_id, (call_id, tool_use_result))
 
     entries: list[dict[str, Any]] = []
@@ -429,7 +433,7 @@ def _item_outcome(item: dict[str, Any]) -> _CodexOutcome | None:
         return _command_outcome(item)
     if item_type == "McpToolCall":
         return _mcp_outcome(item)
-    if item_type in _STATUS_ITEM_TYPES:
+    if _str(item_type) in _STATUS_ITEM_TYPES:
         return _status_outcome(item)
     return None
 
@@ -604,9 +608,9 @@ def _index_codex_records(records: Iterable[Any]) -> _CodexIndex:
         record_type = record.get("type")
         if record_type == "event_msg" and payload_type == "item_completed":
             index.item(payload)
-        elif record_type == "response_item" and payload_type in _CODEX_CALL_TYPES:
+        elif record_type == "response_item" and _str(payload_type) in _CODEX_CALL_TYPES:
             index.call(payload)
-        elif record_type == "response_item" and payload_type in _CODEX_OUTPUT_TYPES:
+        elif record_type == "response_item" and _str(payload_type) in _CODEX_OUTPUT_TYPES:
             index.output(payload)
     return index
 
@@ -752,6 +756,16 @@ def annotate_codex_trajectory(
     _emit_nested_calls(step_list, index, outcomes, blob_index)
     _annotate_steps(step_list, {}, blob_index)
     return trajectory
+
+
+def _str(value: object) -> str | None:
+    """``value`` when it is a string, else ``None``: a set-membership key that cannot raise.
+
+    A transcript field can hold any JSON value, and an object or a list is unhashable, so
+    testing one against a set raised ``TypeError`` past the converter (found by the fuzzer).
+    A non-string value never matched one of these string sets, so no result changes.
+    """
+    return value if isinstance(value, str) else None
 
 
 __all__ = [

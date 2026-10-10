@@ -253,7 +253,7 @@ def _extend_unique(target: list[BlobRef], refs: Iterable[BlobRef]) -> None:
 
 def _anthropic_block_ref(block: Any, collector: BlobCollector) -> BlobRef | None:
     """The ref for an ``image``/``document`` block with a base64 source, else ``None``."""
-    if not isinstance(block, dict) or block.get("type") not in {"image", "document"}:
+    if not isinstance(block, dict) or _str(block.get("type")) not in {"image", "document"}:
         return None
     source = block.get("source")
     if not isinstance(source, dict) or source.get("type") != "base64":
@@ -477,7 +477,7 @@ def extract_codex_blobs(
             refs = _rewrite_codex_items(payload["content"], collector)
             if record_keys is not None and refs:
                 index.add_record(record_keys[position], refs)
-        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+        elif _str(payload_type) in {"function_call_output", "custom_tool_call_output"}:
             output = payload.get("output")
             if isinstance(output, list):
                 index.add_tool_result(
@@ -485,6 +485,16 @@ def extract_codex_blobs(
                     _rewrite_codex_items(output, collector, tool_output=True),
                 )
     return index
+
+
+def _str(value: object) -> str | None:
+    """``value`` when it is a string, else ``None``: a set-membership key that cannot raise.
+
+    A transcript field can hold any JSON value, and an object or a list is unhashable, so
+    testing one against a set raised ``TypeError`` past the converter (found by the fuzzer).
+    A non-string value never matched one of these string sets, so no result changes.
+    """
+    return value if isinstance(value, str) else None
 
 
 __all__ = [
