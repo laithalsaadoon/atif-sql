@@ -49,3 +49,6 @@ docs/.packets/
 
 # lychee request cache; links.yml carries it between runs via actions/cache
 .lycheecache
+
+# Atheris fuzz runs: the inputs libFuzzer kept, crash artifacts and logs (mise run fuzz).
+fuzz/out/

@@ -126,12 +126,12 @@ run = "uv run lefthook uninstall"
 
 [tasks.lint]
 description = "Lint with ruff"
-sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "fuzz/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
 run = "uv run ruff check ."
 
 [tasks.fmt]
 description = "Check formatting"
-sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "fuzz/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
 run = "uv run ruff format --check ."
 
 [tasks."fmt:write"]
@@ -140,7 +140,7 @@ run = "uv run ruff format ."
 
 [tasks.typecheck]
 description = "Type-check with ty (strict, over every member's src/ + tests/ + scripts/)"
-sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "scripts/**/*.py", "fuzz/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
 run = "uv run ty check"
 
 [tasks."typecheck:pyright"]
@@ -207,7 +207,7 @@ run = "python3 scripts/verify_single_yaml_document.py site/pnpm-lock.yaml lint:p
 
 [tasks.test]
 description = "Run the full pytest suite across all members"
-sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "pyproject.toml", "packages/*/pyproject.toml"]
+sources = ["packages/*/src/**/*.py", "packages/*/tests/**/*.py", "fuzz/**/*.py", "fuzz/corpus/**", "fuzz/*.dict", "pyproject.toml", "packages/*/pyproject.toml"]
 run = "uv run pytest --no-header -q"
 
 [tasks."test:cov"]
@@ -216,6 +216,29 @@ description = "The suite under branch coverage; writes coverage.xml and enforces
 # work", this answers "is it still measured". coverage.py's config (including `fail_under`)
 # lives in pyproject.toml, so this task and Codecov read one definition.
 run = "uv run pytest --no-header -q --cov --cov-report=term-missing --cov-report=xml"
+
+# ---------------------------------------------------------------------------
+# Fuzzing (Atheris). Outside `check`: it needs atheris, which the `fuzz` dependency group
+# installs on linux x86_64 only, and it spends a minute per target by design. `check` still
+# replays the committed seeds through the same targets (fuzz/test_fuzz_seed_corpus.py), and
+# .github/workflows/fuzz.yml runs these tasks weekly and on pull requests that touch the
+# converter. ATIF_SQL_FUZZ_SECONDS bounds each target (default 60). A crash, a timeout, an
+# out-of-memory input, or a run that executed no input fails the task, and the input lands
+# in fuzz/out/<target>/artifacts/ (gitignored). Reproduce one with
+# `uv run --group fuzz python fuzz/fuzz_<target>.py <artifact>`.
+# ---------------------------------------------------------------------------
+
+[tasks.fuzz]
+description = "Fuzz every transcript converter with Atheris, ATIF_SQL_FUZZ_SECONDS each (default 60)"
+run = "uv run --group fuzz python fuzz/run_fuzzers.py"
+
+[tasks."fuzz:claude-code"]
+description = "Fuzz the Claude Code transcript converter with Atheris"
+run = "uv run --group fuzz python fuzz/run_fuzzers.py claude_code"
+
+[tasks."fuzz:codex"]
+description = "Fuzz the Codex rollout converter with Atheris"
+run = "uv run --group fuzz python fuzz/run_fuzzers.py codex"
 
 [tasks.check]
 description = "All gates: lint + fmt + typecheck (ty + pyright) + imports + workflows + hooks + pnpm lock + vex drift + prose + test"

@@ -76,6 +76,32 @@ and the pre-push hook runs its link crawl when a push touches either tree.
 `live-links` job in `docs.yml` runs it after every deploy and every Monday, and fails on any
 internal link that does not answer 200.
 
+## Fuzzing: `mise run fuzz`
+
+The two transcript converters read files nobody here wrote, so both are fuzzed with
+[Atheris](https://github.com/google/atheris). `fuzz/transcript_targets.py` holds the targets: each
+writes one input to disk as a Claude Code session or a Codex rollout and runs the use case
+materialize runs (`convert_and_audit`, `convert_codex_and_audit`). A `DomainError` is the
+converter's documented rejection of bad input; any other exception is a finding, and so is a
+successful conversion whose artifacts the corpus writer could not store.
+
+| Task | Command | What fails you |
+| --- | --- | --- |
+| `fuzz` | `uv run --group fuzz python fuzz/run_fuzzers.py` | a crash, a timeout or an out-of-memory input in either target; a target missing its harness, seeds or dictionary; atheris absent; or a run that executed no input |
+| `fuzz:claude-code`, `fuzz:codex` | the same, for one target | the same, for that target |
+
+`ATIF_SQL_FUZZ_SECONDS` sets each target's time bound (default 60). atheris sits in the optional
+`fuzz` dependency group, which only installs on Linux x86_64 (it publishes no other wheel), so
+`fuzz` stays out of `check`. `check` still replays the committed seeds in `fuzz/corpus/` through
+the same targets (`fuzz/test_fuzz_seed_corpus.py`), and `.github/workflows/fuzz.yml` runs `fuzz`
+weekly and on pull requests that change the converter or `fuzz/`.
+
+A finding lands in `fuzz/out/<target>/artifacts/` (CI uploads it as `fuzz-findings`). Replay it
+with `uv run --group fuzz python fuzz/fuzz_<target>.py <artifact>`, fix the converter, and add
+the input to `fuzz/corpus/<target>/` so `check` keeps it fixed. A new target is a function in
+`TARGETS`, a `fuzz_<name>.py` harness, a `fuzz/corpus/<name>/` seed directory and a
+`fuzz/<name>.dict` dictionary; `fuzz` fails until all four exist.
+
 Never reach green by relaxing a gate. Widening an `ignore` list, adding a
 blanket per-file ignore, or deleting a contract is a change to the project's
 standards, not a fix to your branch. Raise it in the pull request instead.

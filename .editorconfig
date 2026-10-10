@@ -51,3 +51,9 @@ indent_size = 2
 [uv.lock]
 insert_final_newline = unset
 trim_trailing_whitespace = unset
+
+# Fuzzer seed inputs are bytes the harness reads verbatim, NUL separators included.
+[fuzz/corpus/**]
+charset = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
