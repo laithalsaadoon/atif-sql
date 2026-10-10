@@ -426,6 +426,12 @@ relative `.md` path as GitHub renders it; the build turns each link into the pag
 the GitHub blob for a Markdown file the site does not publish.
 First-time setup: `mise trust && mise install && mise run install`.
 
+Fuzzing sits beside the gate, not in it: `mise run fuzz` runs the Atheris harnesses in `fuzz/` over
+both transcript converters for `ATIF_SQL_FUZZ_SECONDS` each (default 60), on Linux x86_64 only,
+and fails on any exception other than the converter's `DomainError`. `check` replays the seeds
+in `fuzz/corpus/` through the same targets. CONTRIBUTING.md has the contract and the steps
+for a finding.
+
 ## Experiments
 
 `experiments/` holds numbered experiment protocols (README per experiment).

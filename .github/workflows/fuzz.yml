@@ -1,0 +1,74 @@
+# Coverage-guided fuzzing of the two transcript converters with Atheris (libFuzzer for
+# Python).
+#
+# The converters read files nobody here wrote: every Claude Code session and Codex rollout on
+# the machine. `mise run check` replays the committed seeds through the same targets on every
+# push; this job mutates them for a bounded time and fails on any exception that is not the
+# converter's own rejection (`DomainError`), on a successful conversion the corpus could not
+# write, on a timeout or an out-of-memory input, and on a run that executed no input.
+# fuzz/run_fuzzers.py says which is which, and CONTRIBUTING.md how to reproduce a finding.
+#
+# Weekly as well as on pull requests that touch the converter or the harnesses, because a
+# fuzzer finds different inputs on every run: the scheduled run is the one that keeps looking
+# when the code does not move. Thursday, offset from the Tuesday and Wednesday scheduled jobs
+# so they do not contend for the same runner minute.
+#
+# No secret and no cloud credential: the harnesses convert bytes in a temporary directory and
+# call nothing outside the process.
+name: fuzz
+on:
+  pull_request:
+    paths:
+      - "packages/atif-converter/**"
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    - cron: "41 6 * * 4"
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  fuzz:
+    name: fuzz the transcript converters
+    runs-on: ubuntu-latest
+    # Two targets at 60 s each plus a cold toolchain install; a hang is caught per input by
+    # libFuzzer's own `-timeout`, so this bound only stops a runner that wedged outright.
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the tree the harnesses fuzz
+    steps:
+      # `persist-credentials: false`: nothing in this job pushes, and a token left in
+      # .git/config is readable by every subsequent step, the fuzzed code included.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # `cache: false`, for the reason security.yml gives: a cached tool directory is a tool
+      # nobody verified, and a cached pipx shebang can point at an interpreter the cache lacks.
+      - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
+        with:
+          # `minimum_release_age` because a mise release exists on GitHub before its assets finish
+          # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
+          # tarball 404'd five times, and every scanner was skipped. A day-old release has its
+          # assets. `version` stays unpinned so the runner keeps following mise, gated by that day.
+          minimum_release_age: 24h
+          cache: false
+      - run: mise run lock:check
+      - run: mise run install:ci
+      # `UV_LOCKED` makes the `uv run --group fuzz` inside the task install atheris from uv.lock
+      # as locked, and fail rather than re-resolve when the lock is stale.
+      - run: mise run fuzz
+        env:
+          UV_LOCKED: "1"
+      # Only on failure: the inputs that crashed, timed out or ran out of memory, and each
+      # target's whole libFuzzer log, so a finding reproduces from the run that found it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz/out/*/artifacts/
+            fuzz/out/*/fuzz.log
+          retention-days: 30

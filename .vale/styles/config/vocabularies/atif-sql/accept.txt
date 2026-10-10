@@ -35,6 +35,7 @@ Bedrock
 Cohere(?:'s)?
 commitizen(?:'s)?
 lefthook
+[Aa]theris
 anyio
 fastapi
 starlette

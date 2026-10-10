@@ -166,6 +166,13 @@ dev = [
     "ruff>=0.15.11",
     "ty>=0.0.31",
 ]
+# The Atheris fuzz harnesses under fuzz/ (`mise run fuzz`), outside the default groups so
+# `uv sync` never installs it. atheris 3.1.0 publishes only manylinux x86_64 wheels (cp312 to
+# cp314) and no sdist, so the marker keeps the group installable, and uv.lock universal, on
+# every other platform: there it resolves to nothing and `mise run fuzz` refuses to run.
+fuzz = [
+    "atheris>=3.1.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 
 # ---------------------------------------------------------------------------
 # ruff — shared across every workspace member. The py313 target follows the
@@ -286,6 +293,10 @@ ignore = [
 # never imported, so neither is a package.
 "scripts/**" = ["INP001"]
 "experiments/**" = ["INP001"]
+# fuzz/ is executed by path too (`python fuzz/fuzz_codex.py`), and pytest collects its two
+# test modules by rootdir like any tests tree, which is why `assert` is allowed there.
+"fuzz/**" = ["INP001"]
+"fuzz/test_*.py" = ["S101", "PLR2004", "SLF001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["atif_converter", "atif_corpus", "atif_duck", "atif_models", "atif_analytics", "atif_embed", "atif_cli", "conftest"]
@@ -401,6 +412,8 @@ root = [
     "./packages/atif-embed/tests",
     "./packages/atif-cli/src",
     "./packages/atif-cli/tests",
+    # The fuzz harnesses import their target module by its bare name, as libFuzzer runs them.
+    "./fuzz",
 ]
 
 [tool.ty.src]
@@ -418,6 +431,7 @@ include = [
     "packages/atif-embed/tests",
     "packages/atif-cli/src",
     "packages/atif-cli/tests",
+    "fuzz",
 ]
 # Vendored harbor source, kept byte for byte (see `[tool.ruff] extend-exclude`).
 # Its own `ty: ignore` comments target an older ty, so checking it would mean
@@ -444,11 +458,22 @@ possibly-unresolved-reference = "warn"
 possibly-missing-attribute = "warn"
 unused-ignore-comment = "warn"
 
+# atheris installs only from the optional `fuzz` group, and only on linux x86_64, so the
+# default environment cannot resolve `import atheris`. The two entrypoints are a few lines
+# around that import; the target logic they drive is in fuzz/transcript_targets.py, which
+# this override does not cover. A per-line ignore would turn into an unused-ignore error
+# in an environment that has the group installed.
+[[tool.ty.overrides]]
+include = ["fuzz/fuzz_*.py"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+
 # ---------------------------------------------------------------------------
 # pytest — one run over every member's tests/ tree.
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
-testpaths = ["packages/*/tests"]
+testpaths = ["packages/*/tests", "fuzz"]
 markers = [
     "integration: end-to-end tests through the real converter into a tmp corpus",
 ]
@@ -672,6 +697,7 @@ include = [
     "packages/atif-cli/src",
     "packages/atif-cli/tests",
     "scripts",
+    "fuzz",
 ]
 # The seven member src/ trees, so a first-party import resolves to the
 # workspace source rather than to the editable install's redirect.
