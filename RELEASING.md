@@ -371,9 +371,11 @@ the fat-wheel restructure above. Neither is on the table.
 | --- | --- | --- |
 | Environment `pypi` with **required reviewers** | Settings → Environments | The gate on the irreversible step. Without reviewers the environment exists, the OIDC claim matches, and the gate is decorative. Its name must match the `Environment name` on the trusted publisher. |
 | **Private vulnerability reporting** enabled | Settings → Advanced Security | `SECURITY.md` and `.github/ISSUE_TEMPLATE/config.yml` both route reports to `/security/advisories/new`, which 404s while this is off. |
-| **Require review from Code Owners** on `main` | Branch protection or ruleset | `.github/CODEOWNERS` only *requests* review until this is on; with it off the file is a notification list. |
+| **Require review from Code Owners** in the `main review` ruleset | Settings → Rules → Rulesets | `.github/CODEOWNERS` only *requests* review until this is on; with it off the file is a notification list. |
 | `default_workflow_permissions` = `read` | Settings → Actions | Every workflow here declares its own per-job permissions, so the default needs no write. |
-| Ruleset `main` on the default branch | Settings → Rules → Rulesets | See below: no deletion, no force push, pull requests with two approvals and Code Owner review, stale approvals dismissed, the check jobs required on an up-to-date branch. |
+| Ruleset `main history` on the default branch | Settings → Rules → Rulesets | Refuses deletion and non-fast-forward pushes. No bypass actor. See below. |
+| Ruleset `main checks` on the default branch | Settings → Rules → Rulesets | The check jobs required on an up-to-date branch. The deploy key is the only bypass actor. See below. |
+| Ruleset `main review` on the default branch | Settings → Rules → Rulesets | Pull requests with two approvals, Code Owner review, the latest push approved, review threads resolved, stale approvals dismissed. Bypass actors: the deploy key, and the repository admin role for pull requests only. See below. |
 | Environment `release` with secret `RELEASE_DEPLOY_KEY`, deployments from `main` only | Settings → Environments | The private half of the write deploy key `release.yml` pushes the bump commit and tag with. See below. |
 | **Immutable releases** off | Settings → General → Releases | `publish.yml` adds the signed assets after the release is published, which an immutable release refuses. |
 | Pages **Source = GitHub Actions** | Settings → Pages | `docs.yml` deploys through `actions/deploy-pages`, which needs the Actions source rather than a branch. `base: "/atif-sql/"` in `site/astro.config.ts` matches the resulting project-site path. |
@@ -381,21 +383,40 @@ the fat-wheel restructure above. Neither is on the table.
 
 ### The release push and branch protection
 
-`main` carries one ruleset, `main`, which OpenSSF Scorecard's Branch-Protection check reads:
+The goal: every change to `main` is reviewed and checked, the history cannot be rewritten, and
+a release still lands without a person pressing a button for the bump commit. `main` carries
+three rulesets, which OpenSSF Scorecard's Branch-Protection check reads:
 
-- deletion and non-fast-forward pushes are refused, for everyone;
-- a change arrives through a pull request with two approvals, Code Owner review, the most
-  recent push approved, review threads resolved, and stale approvals dismissed on a new push;
-- the `check.yml` jobs must pass on a branch that is up to date with `main`.
+| Ruleset | Rules | Bypass |
+| --- | --- | --- |
+| `main history` | Deletion and non-fast-forward pushes are refused. | None. |
+| `main checks` | `quality gates`, `coverage`, `codeql analysis`, `dependency diff review`, `build and gate the docs site` and `scanners` must pass on a branch that is up to date with `main`. | The deploy key, always. |
+| `main review` | A pull request with two approvals, Code Owner review, the most recent push approved, review threads resolved, and stale approvals dismissed on a new push. | The deploy key, always. The repository admin role, for pull requests only. |
 
-The repository has one maintainer, who cannot approve their own pull request, so the
-maintainer's account is a bypass actor and merges without the approvals. The checks still run
-on the pull request and the history rules still hold, because a bypass is recorded in the
-ruleset's insights and nothing here force-pushes.
+The rulesets are split because a bypass skips every rule in its ruleset. The repository has
+one maintainer, who cannot approve their own pull request, so the maintainer's bypass sits on
+`main review` alone and works only while merging a pull request. `main checks` has no
+maintainer bypass: CI stays required for everyone except the release push. Merge a pull
+request as the maintainer with `gh pr merge --admin`, or the bypass checkbox in the web UI,
+once the required checks are green.
+
+`fuzz` and the external link crawl are not required checks. `fuzz` runs only for pull
+requests that touch the converter, the harnesses or its own workflow, so a required `fuzz`
+would block every other pull request waiting on a check that never starts. The link crawl
+depends on third-party hosts being reachable.
+
+To read what is enforced on `main`, without changing anything:
+
+```bash
+gh api repos/laithalsaadoon/atif-sql/rules/branches/main --jq '[.[].type]'
+# required_status_checks, deletion, non_fast_forward, pull_request
+```
 
 `release.yml` pushes the bump commit and the tag to `main` directly. `GITHUB_TOKEN` pushes as
 `github-actions[bot]`, which no ruleset bypass list can name, so the push goes through a
-**deploy key** instead, and deploy keys are the ruleset's second bypass actor. Setup, once:
+**deploy key** instead. Deploy keys can be a bypass actor, so the key is one on `main checks` and
+`main review`, and never on `main history`: even the release push cannot delete `main` or rewrite
+its history. Setup, once:
 
 ```bash
 ssh-keygen -t ed25519 -N '' -C 'atif-sql release.yml' -f release_deploy_key
@@ -414,18 +435,40 @@ Only a run of the `release` job on `main` can read the key, and `release.yml` re
 non-dry run without it before it checks anything out. To rotate it, repeat the setup and delete
 the old key under Settings → Deploy keys.
 
-Without the key, cut the version locally; the maintainer's bypass lets the push through, and
-the tool is the same one CI runs, from the same lockfile:
+Without the key, `release.yml` cannot push, and a direct push from the maintainer meets
+`main checks` and `main review` with no bypass. Either restore the key with the preceding
+setup block, or cut the bump commit through a pull request and push only the tag. Tags are not
+covered by these branch rulesets. The tool is the same one CI runs, from the same lockfile;
+`--version-files-only` rewrites the version files and the changelog and runs the
+`pre_bump_hooks`, which re-lock `uv.lock`, without making a commit or a tag:
 
 ```bash
 git switch main && git pull --ff-only
-mise run check
-uv run cz bump --changelog --check-consistency --annotated-tag
-git push --follow-tags
-gh release create "v$(uv run cz version --project)" --draft --verify-tag \
-  --title "v$(uv run cz version --project)" \
-  --notes-file <(uv run cz changelog --dry-run "$(uv run cz version --project)")
+git switch -c release-prep
+uv run cz bump --version-files-only --changelog --check-consistency --yes
+VERSION="$(uv run cz version --project)"
+git add -u && git add CHANGELOG.md
+git commit -m "chore(release): $VERSION"
+git push -u origin release-prep
+gh pr create --fill
 ```
+
+When the checks are green, merge with `gh pr merge --admin`, then tag the merged commit and
+open the draft release:
+
+```bash
+git switch main && git pull --ff-only
+VERSION="$(uv run cz version --project)"
+git log -1 --format=%s    # the release commit, "chore(release): <version>"
+git tag -a "v$VERSION" -m "chore(release): $VERSION"
+git push origin "v$VERSION"
+gh release create "v$VERSION" --draft --verify-tag \
+  --title "v$VERSION" \
+  --notes-file <(uv run cz changelog --dry-run "$VERSION")
+```
+
+Create the tag after the merge, not before: a squash or rebase merge gives the change a new
+hash, and the tag must name the commit that is on `main`.
 
 From there the flow is identical: review the draft, press Publish, approve `pypi`.
 
@@ -466,7 +509,7 @@ an existing filename either way, so this cannot replace bytes.
 | `mise run lock:check` fails on the release commit | `pre_bump_hooks` is missing from `[tool.commitizen]`, so `uv.lock` still records the previous versions. |
 | `commitizen found no version-bumping commit since the last tag` | Nothing to release. Land a `feat:`/`fix:`, or dispatch with an explicit `increment`. |
 | `CurrentVersionNotFoundError: Current version ... is not found in <path>` | A `version_files` entry points at a file whose version was hand-edited. `--check-consistency` is doing its job. |
-| `GH006: Protected branch update failed` | The push did not use the deploy key, or the key is not a bypass actor of the `main` ruleset. See "The release push and branch protection". |
+| `GH006: Protected branch update failed` | The push did not use the deploy key, or the key is not a bypass actor of the `main checks` and `main review` rulesets. A maintainer's direct push gets this too: their bypass covers merging a pull request only. See "The release push and branch protection". |
 | `The release environment has no RELEASE_DEPLOY_KEY secret` | The deploy key setup has not happened yet. Same section. |
 | `gh release upload` fails with `already exists` | A re-dispatch of `publish.yml` for a release that already carries its assets. Nothing to do: the assets on the release are the ones first verified. |
 | 403 from PyPI naming a publisher it cannot find | On a first release, the pending publisher does not exist yet. Afterwards, the publisher does not match the claims. |
