@@ -51,8 +51,9 @@ jobs:
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [ "$REF" = "refs/tags/$TAG" ]
-          gh api "repos/$REPO/releases/tags/$TAG" \
-            --jq '.draft == true and (.assets | length) == 0' | grep -qx true
+          # The tag endpoint exposes published releases only. gh release view also finds drafts.
+          gh release view "$TAG" --repo "$REPO" --json isDraft,assets \
+            --jq '.isDraft == true and (.assets | length) == 0' | grep -qx true
 
   build:
     if: inputs.prepare
@@ -401,10 +402,10 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/releases/tags/$TAG" --jq '.draft' | grep -qx true
+          gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft' | grep -qx true
           [ "$(gh api "repos/$REPO/commits/$TAG" --jq '.sha')" = "$SOURCE_SHA" ]
           mkdir existing
-          count="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets | length')"
+          count="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets | length')"
           if [ "$count" -gt 0 ]; then
             gh release download "$TAG" --repo "$REPO" --dir existing
           fi
