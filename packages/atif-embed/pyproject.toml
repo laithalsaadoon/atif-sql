@@ -1,6 +1,6 @@
 [project]
 name = "atif-embed"
-version = "0.1.0"
+version = "0.2.0"
 description = "Embedding providers (Cohere Embed v4 on Bedrock, or EmbeddingGemma 2 on this machine) + LanceDB vector store + embed backfill over the ATIF corpus."
 readme = "README.md"
 license = "Apache-2.0"

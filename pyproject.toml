@@ -15,7 +15,7 @@
 
 [project]
 name = "atif-sql"
-version = "0.1.0"
+version = "0.2.0"
 description = "ATIF-native analytics over Claude Code agent trajectories: convert, materialize, and query agent sessions with DuckDB."
 readme = "README.md"
 license = "Apache-2.0"
@@ -490,7 +490,7 @@ allowed_prefixes = ["Merge", "Revert", "Pull request", "fixup!", "squash!"]
 # The single source of truth for that one version. The workspace root is virtual and
 # carries no [project] table, so commitizen's default `version_provider = "commitizen"`
 # reads this key rather than a PEP 621 field.
-version = "0.1.0"
+version = "0.2.0"
 version_scheme = "pep440"
 # `v0.2.0`. publish.yml derives the release version by stripping the leading `v`, and
 # `gh release create --verify-tag` fails loudly if this format and that expectation

@@ -1,6 +1,6 @@
 [project]
 name = "atif-models"
-version = "0.1.0"
+version = "0.2.0"
 description = "Model alias registry + structured-output LLM client for atif-sql (CONTRACT-V2: no other package hardcodes a model id)."
 readme = "README.md"
 license = "Apache-2.0"

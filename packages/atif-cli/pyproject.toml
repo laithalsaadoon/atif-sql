@@ -5,7 +5,7 @@
 # import-linter can read what it is allowed to import, and so its tests have a
 # home — none of which needs an index.
 name = "atif-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "ATIF-native analytics over Claude Code agent trajectories: convert, materialize, and query agent sessions with DuckDB."
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,11 +29,11 @@ dependencies = [
     # namespace to whatever the newest release of that name is, by whoever owns it.
     # One version moves the whole workspace, so `==` is the honest constraint, and
     # `[tool.commitizen] version_files` rewrites every one of these on each bump.
-    "atif-analytics==0.1.0",
-    "atif-converter==0.1.0",
-    "atif-corpus==0.1.0",
-    "atif-duck==0.1.0",
-    "atif-embed==0.1.0",
+    "atif-analytics==0.2.0",
+    "atif-converter==0.2.0",
+    "atif-corpus==0.2.0",
+    "atif-duck==0.2.0",
+    "atif-embed==0.2.0",
     "cyclopts>=5.1.1",
     # Imported directly by duck_errors.py to classify a DuckDB failure into the
     # parse/catalog/runtime exit-code taxonomy. Reaching it transitively through

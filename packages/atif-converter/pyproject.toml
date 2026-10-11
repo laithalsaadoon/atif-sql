@@ -1,6 +1,6 @@
 [project]
 name = "atif-converter"
-version = "0.1.0"
+version = "0.2.0"
 description = "Claude Code and Codex transcripts -> ATIF conversion, with the fidelity policy per agent."
 readme = "README.md"
 license = "Apache-2.0"

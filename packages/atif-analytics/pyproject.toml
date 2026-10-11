@@ -1,6 +1,6 @@
 [project]
 name = "atif-analytics"
-version = "0.1.0"
+version = "0.2.0"
 description = "LLM analytics pipelines over the materialized ATIF corpus: session classification, stance conflicts, user friction, and perceived errors."
 readme = "README.md"
 license = "Apache-2.0"
@@ -20,7 +20,7 @@ dependencies = [
     # a LOCAL source an external installer never sees, so a bare name would ship as
     # `Requires-Dist: atif-models` and resolve to whatever the newest release of
     # that name is. `[tool.commitizen] version_files` rewrites this line on a bump.
-    "atif-models==0.1.0",
+    "atif-models==0.2.0",
     "loguru>=0.7.3",
     "polars>=1.40.0",
     "pyarrow>=23.0.1",
