@@ -1,23 +1,7 @@
-# Publishes the tagged distributions to PyPI over Trusted Publishing. No API token exists
-# anywhere in this repository — the only credential is a 15-minute macaroon PyPI mints in
-# exchange for this workflow's OIDC identity (probed 2026-08-28 in warehouse's
-# `warehouse/oidc/views.py`: `Expiration(expires_at=not_before + 900)`).
-#
-# Triggered by `release: [published]`, never by a push. The chain is deliberate and each link
-# is a decision by a different mechanism:
-#
-#   release.yml (dispatched by a human)  ->  tag + DRAFT release
-#   a human presses "Publish release"    ->  this workflow starts
-#   the `pypi` environment's reviewers   ->  bytes reach PyPI
-#
-# The draft step is not ceremony. GitHub starts no workflow run from an event raised by the
-# default `GITHUB_TOKEN`, so a release that release.yml published itself would never reach
-# this workflow. Requiring a human to press Publish turns that constraint into the gate.
-#
-# `workflow_dispatch` is the retry path. A publish fails for reasons that have nothing to do
-# with the bytes — an unconfigured trusted publisher, a PyPI outage, a runner without a tool —
-# and without a retry the only way forward would be to spend another version number.
-name: publish
+# Preparation builds, checks, attests, and attaches every asset to a draft.
+# Publication downloads those exact immutable assets, then waits for the pypi environment.
+# Dispatch preparation at the tag so the signing identity names the tagged source commit.
+name: prepare or publish
 
 on:
   release:
@@ -25,9 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to publish, e.g. v0.2.0"
+        description: "Existing release tag to prepare or publish, e.g. v0.2.0"
         required: true
         type: string
+      prepare:
+        description: "Build and attach signed assets to the draft without publishing to PyPI"
+        type: boolean
+        default: false
 
 # Least privilege at the top, granted per job below. `id-token: write` in particular reaches
 # only the publish job: the build job must not be able to mint a publishing credential.
@@ -45,7 +33,30 @@ jobs:
   # separate GitHub Actions CI/CD job running before the one where they call this action and
   # having restricted privileges". The restricted privilege here is the absence of
   # `id-token: write`.
+  # Draft visibility requires push access. Keep it in a job that executes no product code.
+  draft:
+    if: inputs.prepare
+    name: validate the empty draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # read the draft, which is hidden from read-only tokens
+    steps:
+      - name: Require the draft and its tag signing context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [ "$REF" = "refs/tags/$TAG" ]
+          gh api "repos/$REPO/releases/tags/$TAG" \
+            --jq '.draft == true and (.assets | length) == 0' | grep -qx true
+
   build:
+    if: inputs.prepare
+    needs: draft
     name: build and verify the distributions
     runs-on: ubuntu-latest
     permissions:
@@ -57,8 +68,19 @@ jobs:
       # draft, and the bytes that reach PyPI have to be the bytes that were released.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Require the tag to still name the signing source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$SOURCE_SHA" ]
+          [ "$(gh api "repos/$REPO/commits/$TAG" --jq '.sha')" = "$SOURCE_SHA" ]
 
       # No cache in this job, and that is the point. `mise run check` and coverage read a uv
       # wheel cache in check.yml because a poisoned entry there costs a wrong test result; here
@@ -316,10 +338,8 @@ jobs:
   # and its inputs are the two artifacts the jobs above produced. The verifier script is read at
   # the TAG through the API, so a change on main cannot loosen the gate an old tag passes.
   #
-  # Assets are added to the release after it is published, so this needs immutable releases
-  # left off in the repository settings. `gh release upload` without `--clobber` refuses to
-  # replace an asset: a re-dispatch after a partial upload fails loudly rather than swapping
-  # bytes a consumer may already have verified.
+  # Assets are attached while the release is a draft. Publication locks every file and its
+  # tag. Existing assets are never replaced; rerun a failed upload using its saved artifacts.
   release-assets:
     name: upload the signed release assets
     needs: [build, attest]
@@ -341,25 +361,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
           REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           bundle="release/atif_sql-$VERSION.intoto.jsonl"
           for asset in release/*; do
             [ "$asset" = "$bundle" ] && continue
             gh attestation verify "$asset" --bundle "$bundle" --repo "$REPO" \
-              --signer-workflow "$REPO/.github/workflows/publish.yml"
+              --signer-workflow "$REPO/.github/workflows/publish.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_SHA" \
+              --deny-self-hosted-runners
+          done
+          for asset in release/*.whl release/*.tar.gz; do
+            gh attestation verify "$asset" --bundle "$bundle" --repo "$REPO" \
+              --signer-workflow "$REPO/.github/workflows/publish.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_SHA" \
+              --predicate-type https://cyclonedx.org/bom --deny-self-hosted-runners
           done
 
       - name: Check the attestations cover the whole release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.build.outputs.version }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          SOURCE_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           gh api -H "Accept: application/vnd.github.raw+json" \
-            "repos/$REPO/contents/scripts/verify_release_assets.py?ref=$TAG" > verify_release_assets.py
+            "repos/$REPO/contents/scripts/verify_release_assets.py?ref=$SOURCE_SHA" > verify_release_assets.py
           python3 verify_release_assets.py release "$VERSION" --attestations
 
       - name: Upload the assets to the release
@@ -367,7 +397,81 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
           REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" release/* --repo "$REPO"
+          SOURCE_SHA: ${{ github.sha }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/releases/tags/$TAG" --jq '.draft' | grep -qx true
+          [ "$(gh api "repos/$REPO/commits/$TAG" --jq '.sha')" = "$SOURCE_SHA" ]
+          mkdir existing
+          count="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets | length')"
+          if [ "$count" -gt 0 ]; then
+            gh release download "$TAG" --repo "$REPO" --dir existing
+          fi
+          for asset in release/*; do
+            name="$(basename "$asset")"
+            if [ -f "existing/$name" ]; then
+              cmp "$asset" "existing/$name"
+            else
+              gh release upload "$TAG" "$asset" --repo "$REPO"
+            fi
+          done
+          gh release download "$TAG" --repo "$REPO" --dir final-release
+          python3 verify_release_assets.py final-release "$VERSION" --attestations
+          for asset in release/*; do
+            cmp "$asset" "final-release/$(basename "$asset")"
+          done
+          echo "All six verified assets are attached to draft $TAG. Review and publish the draft, then approve the pypi deployment." >> "$GITHUB_STEP_SUMMARY"
+
+  # No build in publication mode: PyPI receives the files already signed and locked on GitHub.
+  verify:
+    if: ${{ !inputs.prepare }}
+    name: verify the immutable release distributions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download and verify the immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh api "repos/$REPO/releases/tags/$TAG" \
+            --jq '.draft == false and .immutable == true' | grep -qx true
+          gh release verify "$TAG" --repo "$REPO"
+          gh release download "$TAG" --repo "$REPO" --dir release
+          version="${TAG#v}"
+          bundle="release/atif_sql-$version.intoto.jsonl"
+          # Resolve the peeled commit, because an annotated tag's object SHA is not its source.
+          source_sha="$(gh api "repos/$REPO/commits/$TAG" --jq '.sha')"
+          for asset in release/*; do
+            [ "$asset" = "$bundle" ] && continue
+            gh attestation verify "$asset" --bundle "$bundle" --repo "$REPO" \
+              --signer-workflow "$REPO/.github/workflows/publish.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$source_sha" \
+              --deny-self-hosted-runners
+          done
+          for asset in release/*.whl release/*.tar.gz; do
+            gh attestation verify "$asset" --bundle "$bundle" --repo "$REPO" \
+              --signer-workflow "$REPO/.github/workflows/publish.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$source_sha" \
+              --predicate-type https://cyclonedx.org/bom --deny-self-hosted-runners
+          done
+          gh api -H "Accept: application/vnd.github.raw+json" \
+            "repos/$REPO/contents/scripts/verify_release_assets.py?ref=$source_sha" > verify_release_assets.py
+          python3 verify_release_assets.py release "$version" --attestations
+          mkdir dist
+          cp "release/atif_sql-$version-py3-none-any.whl" "release/atif_sql-$version.tar.gz" dist/
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error
 
   # WHAT A MAINTAINER CONFIGURES ON PYPI, BEFORE THE FIRST RUN
   # ---------------------------------------------------------
@@ -415,13 +519,11 @@ jobs:
   # single-distribution shape rather than of this file.
   publish:
     name: publish atif-sql
-    # `attest` as well as `build`: no version reaches PyPI without its provenance in GitHub's
-    # attestation API.
-    needs: [build, attest]
+    # Verification supplies only the immutable files whose signatures and manifests passed.
+    needs: verify
     runs-on: ubuntu-latest
-    # The human decision, and the reason it sits HERE rather than earlier: publishing the draft
-    # release says "these are the release notes", which is reversible. This says "these bytes
-    # are on PyPI", which is not — a version can be yanked but never replaced or reused. The
+    # Publishing the draft locks its assets and tag. This approval permits uploading the same
+    # bytes to PyPI, where a version can be yanked but never replaced or reused. The
     # environment must be created with REQUIRED REVIEWERS (Settings -> Environments -> pypi ->
     # Required reviewers) or the gate is decorative, and its name must match the `Environment
     # name` on the trusted publisher.
