@@ -235,7 +235,8 @@ def test_preparation_requires_draft_and_tag_context_before_build() -> None:
     build = text.split("  build:\n", 1)[1].split("  attest:\n", 1)[0]
     assert "if: inputs.prepare" in draft
     assert '[ "$REF" = "refs/tags/$TAG" ]' in draft
-    assert ".draft == true" in draft
+    assert ".isDraft == true" in draft
+    assert "gh release view" in draft and "/releases/tags/" not in draft
     assert "contents: write" in draft and "actions/checkout@" not in draft
     assert "if: inputs.prepare" in build
     assert "needs: draft" in build and "contents: read" in build
@@ -245,10 +246,10 @@ def test_preparation_requires_draft_and_tag_context_before_build() -> None:
     assert '--ref "v$VERSION"' in release and "-f prepare=true" in release
 
 
-def _upload_run_block() -> str:
-    """Execute the workflow's shell rather than a second implementation of its retry policy."""
+def _workflow_run_block(step_name: str) -> str:
+    """Execute the workflow's shell rather than a second implementation of its policy."""
     text = PUBLISH.read_text(encoding="utf-8")
-    step = text.split("      - name: Upload the assets to the release\n", 1)[1]
+    step = text.split(f"      - name: {step_name}\n", 1)[1]
     body = step.split("        run: |\n", 1)[1]
     lines: list[str] = []
     for line in body.splitlines():
@@ -256,7 +257,7 @@ def _upload_run_block() -> str:
             break
         lines.append(line)
     script = textwrap.dedent("\n".join(lines))
-    assert "gh release upload" in script and "final-release" in script
+    assert script.strip()
     return script
 
 
@@ -276,15 +277,23 @@ state = json.loads((root / 'state.json').read_text())
 with (root / 'gh-calls.jsonl').open('a') as log:
     log.write(json.dumps(args) + '\\n')
 if args[0] == 'api':
+    if '/releases/tags/' in args[1] and state['draft']:
+        raise SystemExit('HTTP 404: tag endpoint does not return drafts')
     query = args[args.index('--jq') + 1]
-    if query == '.draft':
-        print('true' if state['draft'] else 'false')
-    elif query == '.sha':
+    if query == '.sha':
         print(state['source_sha'])
-    elif query == '.assets | length':
-        print(len(list(remote.iterdir())))
     else:
         raise SystemExit('unexpected API query: ' + query)
+elif args[:2] == ['release', 'view']:
+    query = args[args.index('--jq') + 1]
+    if query == '.isDraft':
+        print('true' if state['draft'] else 'false')
+    elif query == '.assets | length':
+        print(len(list(remote.iterdir())))
+    elif query == '.isDraft == true and (.assets | length) == 0':
+        print('true' if state['draft'] and not any(remote.iterdir()) else 'false')
+    else:
+        raise SystemExit('unexpected release view query: ' + query)
 elif args[:2] == ['release', 'download']:
     destination = root / args[args.index('--dir') + 1]
     destination.mkdir(exist_ok=True)
@@ -303,13 +312,14 @@ else:
 """
 
 
-def _run_upload(
+def _run_workflow(
     tmp_path: Path,
     *,
     existing: tuple[str, ...] = (),
     mismatch: bool = False,
     draft: bool = True,
     stray: bool = False,
+    run_block: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     directory = _stage(tmp_path)
     remote = tmp_path / "remote"
@@ -333,13 +343,18 @@ def _run_upload(
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "GH_TOKEN": "test",
         "TAG": f"v{VERSION}",
+        "REF": f"refs/tags/v{VERSION}",
         "VERSION": VERSION,
         "REPO": "example/atif-sql",
         "SOURCE_SHA": source_sha,
         "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
     }
     return subprocess.run(  # noqa: S603 - fixed bash executes the local workflow with a fake gh
-        ["bash", "-c", _upload_run_block()],  # noqa: S607 - bash is the repository's shell
+        [  # noqa: S607 - bash is the repository's shell
+            "bash",
+            "-c",
+            run_block or _workflow_run_block("Upload the assets to the release"),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -355,7 +370,7 @@ def _uploaded_names(tmp_path: Path) -> list[str]:
 
 def test_draft_upload_retry_reuses_identical_existing_assets(tmp_path: Path) -> None:
     names = (WHEEL, SDIST, CDX, SPDX, INTOTO, "SHA256SUMS")
-    result = _run_upload(tmp_path, existing=names)
+    result = _run_workflow(tmp_path, existing=names)
     assert result.returncode == 0, result.stderr
     assert _uploaded_names(tmp_path) == []
     assert "6 assets, attestations covered, 0 findings" in result.stdout
@@ -363,7 +378,7 @@ def test_draft_upload_retry_reuses_identical_existing_assets(tmp_path: Path) -> 
 
 
 def test_draft_upload_retry_uploads_only_missing_assets(tmp_path: Path) -> None:
-    result = _run_upload(tmp_path, existing=(WHEEL,))
+    result = _run_workflow(tmp_path, existing=(WHEEL,))
     assert result.returncode == 0, result.stderr
     assert set(_uploaded_names(tmp_path)) == {SDIST, CDX, SPDX, INTOTO, "SHA256SUMS"}
     for asset in (tmp_path / "release").iterdir():
@@ -372,7 +387,7 @@ def test_draft_upload_retry_uploads_only_missing_assets(tmp_path: Path) -> None:
 
 def test_draft_upload_retry_refuses_mismatched_asset_without_replacement(tmp_path: Path) -> None:
     names = (WHEEL, SDIST, CDX, SPDX, INTOTO, "SHA256SUMS")
-    result = _run_upload(tmp_path, existing=names, mismatch=True)
+    result = _run_workflow(tmp_path, existing=names, mismatch=True)
     assert result.returncode != 0
     assert "differ" in result.stdout
     assert _uploaded_names(tmp_path) == []
@@ -381,15 +396,35 @@ def test_draft_upload_retry_refuses_mismatched_asset_without_replacement(tmp_pat
 
 
 def test_draft_upload_rejects_stray_asset_in_final_download(tmp_path: Path) -> None:
-    result = _run_upload(tmp_path, stray=True)
+    result = _run_workflow(tmp_path, stray=True)
     assert result.returncode != 0
     assert "UNLISTED helper" in result.stderr
     assert not (tmp_path / "summary.md").exists()
 
 
 def test_draft_upload_refuses_release_published_during_build(tmp_path: Path) -> None:
-    result = _run_upload(tmp_path, draft=False)
+    result = _run_workflow(tmp_path, draft=False)
     assert result.returncode != 0
     assert _uploaded_names(tmp_path) == []
     assert list((tmp_path / "remote").iterdir()) == []
     assert not (tmp_path / "summary.md").exists()
+
+
+def test_draft_validation_uses_release_view_instead_of_published_tag_api(tmp_path: Path) -> None:
+    workspace = tmp_path / "view"
+    workspace.mkdir()
+    run_block = _workflow_run_block("Require the draft and its tag signing context")
+    result = _run_workflow(workspace, run_block=run_block)
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in (workspace / "gh-calls.jsonl").read_text().splitlines()]
+    assert len(calls) == 1
+    assert calls[0][:2] == ["release", "view"]
+
+    api_workspace = tmp_path / "tag-api"
+    api_workspace.mkdir()
+    result = _run_workflow(
+        api_workspace,
+        run_block='gh api "repos/$REPO/releases/tags/$TAG" --jq .draft',
+    )
+    assert result.returncode != 0
+    assert "HTTP 404: tag endpoint does not return drafts" in result.stderr
