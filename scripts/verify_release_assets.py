@@ -7,7 +7,7 @@
 
 `mise run release:assets` stages the release in one directory: the wheel and the sdist that go
 to PyPI, a CycloneDX and an SPDX SBOM of the locked runtime closure, and a `SHA256SUMS`
-manifest. `publish.yml` then signs Sigstore attestations over those files and adds them as
+manifest. `publish.yml` preparation signs Sigstore attestations over those files and adds them as
 `atif_sql-<version>.intoto.jsonl`, one bundle per line. This is the release gate both steps
 run before anything is uploaded, and its rule is that an asset nobody can verify fails the
 release rather than shipping beside the ones that can be:

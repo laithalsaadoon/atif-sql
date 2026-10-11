@@ -89,9 +89,9 @@ contracts, and every doc citation valid. Verified 2026-08-28: the wheel carries 
 files, every top-level module, the `atif-sql` console script, and `Requires-Dist`
 entries with no `atif-*` among them.
 
-## What the publish preflight asserts
+## What the preparation preflight asserts
 
-`publish.yml` checks these properties before it uploads anything, and fails with a pointer to
+`publish.yml` preparation checks these properties before it attaches draft assets, and fails with a pointer to
 this file when one is missing. Each is a defect `twine check` passes over — the metadata stays
 structurally valid and the damage is semantic — and each becomes permanent the moment a first
 release goes out under the wrong name or an unpinned requirement.
@@ -248,17 +248,18 @@ litellm`) prints nothing, and `test_dev_only_imports_guard.py` fails if `src/` i
    ```bash
    gh workflow run release.yml -f dry_run=false
    ```
-4. **Review the draft and press "Publish release".** That press is what starts `publish.yml` —
-   see below for why it has to be a human and not the workflow.
-5. **Approve the `pypi` environment.** `publish.yml` builds the sdist and the wheel, verifies
-   them, installs them, stages the release assets, attests them, and then waits. A reviewer
-   approves once and all the upload legs proceed. The signed assets reach the GitHub release
-   without waiting for that approval, so they are on the release whether or not PyPI is.
+4. **Wait for preparation, then publish the draft.** `release.yml` dispatches `publish.yml`
+   at the tag to build, test, sign, and attach all six assets. Wait for that run to pass and
+   review the notes and assets before pressing "Publish release". Publication locks the tag
+   and assets and starts the PyPI workflow.
+5. **Approve the `pypi` environment.** Publication mode downloads and verifies the immutable
+   wheel and sdist, then waits for review before sending those exact files to PyPI. It does
+   not rebuild them.
 
 ## What a GitHub release carries, and how to verify it
 
 Every release carries the same six assets, staged by `mise run release:assets` on the tag and
-uploaded by `publish.yml`:
+attached to the draft by `publish.yml` preparation:
 
 | Asset | What it is |
 | --- | --- |
@@ -286,12 +287,17 @@ Drop `--bundle` to verify against the attestation API instead. A wheel installed
 verifies the same way, and PyPI shows its own PEP 740 attestation for each file on the
 project page.
 
-`publish.yml` runs the same `gh attestation verify` on every asset, then
-`scripts/verify_release_assets.py --attestations`, before `gh release upload`. A stray file, a
-name that disagrees with the tag, a digest `SHA256SUMS` does not hold, an SBOM for another
-version, or an asset the provenance does not cover fails the upload; its tests plant each
-defect. `--clobber` is never passed, so a re-dispatch never replaces an asset someone may have
-verified: it fails on the first name that exists.
+`publish.yml` preparation runs `gh attestation verify` on every asset, then
+`scripts/verify_release_assets.py --attestations`, before attaching files to the draft. It
+runs at the tag, and verification binds the signatures to that tag's commit and ref. A stray
+file, a mismatched version or digest, an SBOM for another version, or incomplete provenance
+fails preparation. An upload retry compares existing files against the saved artifacts and
+uploads only missing files. It never replaces an asset.
+
+Publishing the draft locks its tag and all six assets. Publication mode downloads those
+immutable assets, checks GitHub's release attestation, verifies provenance and the SBOM
+signatures, and checks the asset manifest again. Only the verified wheel and sdist reach the
+reviewer-gated PyPI job. It builds no replacement files and uploads no GitHub assets.
 
 ### Why the release is a draft
 
@@ -377,7 +383,7 @@ the fat-wheel restructure above. Neither is on the table.
 | Ruleset `main checks` on the default branch | Settings → Rules → Rulesets | The check jobs required on an up-to-date branch. The deploy key is the only bypass actor. See below. |
 | Ruleset `main review` on the default branch | Settings → Rules → Rulesets | Pull requests with two approvals, Code Owner review, the latest push approved, review threads resolved, stale approvals dismissed. Bypass actors: the deploy key, and the repository admin role for pull requests only. See below. |
 | Environment `release` with secret `RELEASE_DEPLOY_KEY`, deployments from `main` only | Settings → Environments | The private half of the write deploy key `release.yml` pushes the bump commit and tag with. See below. |
-| **Immutable releases** off | Settings → General → Releases | `publish.yml` adds the signed assets after the release is published, which an immutable release refuses. |
+| **Immutable releases** on | Settings → General → Releases | Preparation attaches all signed assets to the draft. Publishing locks those assets and the tag before the PyPI job downloads them. |
 | Pages **Source = GitHub Actions** | Settings → Pages | `docs.yml` deploys through `actions/deploy-pages`, which needs the Actions source rather than a branch. `base: "/atif-sql/"` in `site/astro.config.ts` matches the resulting project-site path. |
 | The AI-crawler policy, at the ORIGIN root | The `laithalsaadoon.github.io` user-pages repository | `robots.txt` is per-origin (RFC 9309 §2.3), so a project site served from a path segment cannot own one: Astro emits this site's copy to `/atif-sql/robots.txt`, which no crawler fetches. `site/public/robots.txt` is the decided policy and the exact text to install at `https://laithalsaadoon.github.io/robots.txt`. Until it is installed there, these pages inherit whatever that origin already serves — and absent a file, that is fully permissive. Outside this repository's reach, so no gate here can assert it. |
 
@@ -470,7 +476,14 @@ gh release create "v$VERSION" --draft --verify-tag \
 Create the tag after the merge, not before: a squash or rebase merge gives the change a new
 hash, and the tag must name the commit that is on `main`.
 
-From there the flow is identical: review the draft, press Publish, approve `pypi`.
+Prepare the assets at the existing tag:
+
+```bash
+gh workflow run publish.yml --ref "v$VERSION" -f "tag=v$VERSION" -f prepare=true
+```
+
+Wait for preparation to succeed and all six assets to appear. Review the draft, publish it,
+then approve the `pypi` deployment.
 
 ## Cutting a specific version
 
@@ -511,6 +524,7 @@ an existing filename either way, so this cannot replace bytes.
 | `CurrentVersionNotFoundError: Current version ... is not found in <path>` | A `version_files` entry points at a file whose version was hand-edited. `--check-consistency` is doing its job. |
 | `GH006: Protected branch update failed` | The push did not use the deploy key, or the key is not a bypass actor of the `main checks` and `main review` rulesets. A maintainer's direct push gets this too: their bypass covers merging a pull request only. See "The release push and branch protection". |
 | `The release environment has no RELEASE_DEPLOY_KEY secret` | The deploy key setup has not happened yet. Same section. |
-| `gh release upload` fails with `already exists` | A re-dispatch of `publish.yml` for a release that already carries its assets. Nothing to do: the assets on the release are the ones first verified. |
+| Preparation refuses a draft with existing assets | Rerun the failed upload job to reuse its saved artifacts. A fresh build cannot replace existing assets. |
+| Immutable release verification fails | The release is still a draft, immutability is disabled, or its attestation does not verify. Publication stops before PyPI. |
 | 403 from PyPI naming a publisher it cannot find | On a first release, the pending publisher does not exist yet. Afterwards, the publisher does not match the claims. |
 | `expected one sdist and one wheel for <project>, staged 0` | `uv build --all-packages` did not produce that project — usually a member removed from `[tool.uv.workspace] members`. |

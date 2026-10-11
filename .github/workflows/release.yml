@@ -1,6 +1,6 @@
 # Cuts a release: bump the version, write the changelog, tag, and open a DRAFT GitHub
-# release. It publishes nothing. `publish.yml` does that, and it starts when a human presses
-# "Publish release" on the draft this workflow leaves behind.
+# release, then dispatches publish.yml at the tag to prepare its signed assets.
+# PyPI publication starts when a maintainer publishes the complete draft.
 #
 # Why the two are separate, and why the draft is load-bearing:
 #
@@ -54,6 +54,7 @@ jobs:
       # is deliberately absent: nothing here talks to PyPI, so this job cannot mint a
       # publishing credential even if a step tried.
       contents: write # push the bump commit, the tag, and the draft release
+      actions: write # workflow_dispatch preparation at the newly created tag
     steps:
       # A release is cut from `main` or not at all. Dispatching this workflow from a feature
       # branch would tag a tree that never passed review, and the tag is what `publish.yml`
@@ -261,4 +262,14 @@ jobs:
             --verify-tag \
             --title "v$VERSION" \
             --notes-file release-notes.md
-          echo "Draft release v$VERSION is open. Review the notes, then press Publish release: that event starts publish.yml, which waits on the 'pypi' environment's reviewers before anything reaches PyPI." >> "$GITHUB_STEP_SUMMARY"
+          echo "Draft release v$VERSION is open. Asset preparation runs next; wait for its six verified assets before publishing the draft." >> "$GITHUB_STEP_SUMMARY"
+
+      # workflow_dispatch is an explicit exception to GITHUB_TOKEN's event suppression.
+      # Run at the tag so OIDC provenance identifies the same source that the builder checks out.
+      - name: Prepare the draft assets
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.next.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run publish.yml --repo "$REPO" --ref "v$VERSION" -f "tag=v$VERSION" -f prepare=true

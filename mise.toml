@@ -692,7 +692,7 @@ depends = [
 # ---------------------------------------------------------------------------
 # Release assets: what a GitHub release carries beside the PyPI upload.
 #
-# publish.yml runs this on the tag after `uv build`, attests what it staged, and uploads it to
+# publish.yml preparation runs this on the tag after `uv build`, attests it, and attaches it to
 # the release. It runs the same on a laptop, so what a release will carry is never something
 # only CI can show. RELEASING.md has the verify commands a consumer runs.
 # ---------------------------------------------------------------------------
