@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       # `cache: false`, for the reason security.yml gives: a cached tool directory is a tool
       # nobody verified, and a cached pipx shebang can point at an interpreter the cache lacks.
-      - uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
