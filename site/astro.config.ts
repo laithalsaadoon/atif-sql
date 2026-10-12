@@ -19,7 +19,13 @@ import { citationLinks } from "./src/lib/citation-links.js"
 import { COLLECTION_ROOT, sidebar, syncedTreePaths } from "./src/lib/content-tree.js"
 import { type MarkdownLinksOptions, markdownLinks, rawTwinLinks } from "./src/lib/markdown-links.js"
 import mermaid, { beautifulMermaid } from "./src/lib/mermaid-integration.js"
-import { PERMALINK_COMMIT, REPO_URL, SITE_BASE, SITE_ORIGIN } from "./src/lib/repo.js"
+import {
+  PERMALINK_COMMIT,
+  REPO_URL,
+  SITE_BASE,
+  SITE_DESCRIPTION,
+  SITE_ORIGIN
+} from "./src/lib/repo.js"
 
 const projectRoot = fileURLToPath(new URL(".", import.meta.url))
 /** The git repository the docs tree documents. `site/` is one directory inside it. */
@@ -44,10 +50,6 @@ const markdownLinkOptions: MarkdownLinksOptions = {
   commit: PERMALINK_COMMIT,
   siteBase: routePrefix
 }
-
-const SITE_DESCRIPTION =
-  "ATIF-native analytics over Claude Code agent trajectories: sessions converted to ATIF, " +
-  "materialized as a corpus, queried through DuckDB views."
 
 export default defineConfig({
   site: SITE_ORIGIN,

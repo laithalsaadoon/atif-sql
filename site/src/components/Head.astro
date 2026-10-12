@@ -29,6 +29,7 @@ import Default from "@astrojs/starlight/components/Head.astro"
 
 import { discoveryLinks } from "../lib/agent-surface.js"
 import { jsonLdGraph, jsonLdText, type SiteDescription } from "../lib/jsonld.js"
+import { SITE_DESCRIPTION } from "../lib/repo.js"
 
 const { site } = Astro
 if (site === undefined) {
@@ -53,9 +54,7 @@ const links = discoveryLinks(entry.id, context)
  */
 const siteDescription: SiteDescription = {
   name: siteTitle,
-  description:
-    "ATIF-native analytics over Claude Code agent trajectories: sessions converted to ATIF, " +
-    "materialized as a corpus, queried through DuckDB views.",
+  description: SITE_DESCRIPTION,
   inLanguage: "en"
 }
 
