@@ -16,7 +16,8 @@ mise trust && mise install && mise run install
 ```
 
 `mise install` provisions the toolchain pinned in `mise.toml` (`[tools]`:
-Python 3.13 and the latest `uv`; `min_version = "2025.1.0"`). `mise run install`
+Python 3.13, the latest `uv`, the security scanners, `node` and `pnpm` for the docs site, and Vale,
+each resolved through `mise.lock`; `min_version = "2026.8.1"`). `mise run install`
 is `uv sync --all-packages` and depends on `hooks:install`, so it also installs
 the lefthook git hooks in the same step.
 
@@ -33,21 +34,24 @@ that.
 
 ## Definition of done: `mise run check`
 
-`[tasks.check]` in `mise.toml` depends on the gates below, and all of them must pass:
+`[tasks.check]` in `mise.toml` depends on the eleven gates below, and all of them must pass:
 
 | Task | Command | What fails you |
 | --- | --- | --- |
 | `lint` | `uv run ruff check .` | the broad `select` list in `[tool.ruff.lint]` |
 | `fmt` | `uv run ruff format --check .` | formatting; `mise run fmt:write` applies it |
 | `typecheck` | `uv run ty check` | `[tool.ty.rules] all = "error"`, and `[tool.ty.terminal] error-on-warning = true` means a warning is also a failure |
+| `typecheck:pyright` | `pyright` | an error under `[tool.pyright]`, which sets `typeCheckingMode = "strict"` over the same trees |
 | `lint:imports` | `uv run lint-imports` | the import contracts below |
+| `lint:workflows` | `actionlint` | a workflow under `.github/workflows` that `actionlint` rejects (syntax, expressions, runner labels, `shellcheck` over each `run:` block) |
+| `lint:hooks` | `uv run lefthook validate` | a key in `lefthook.yml` that lefthook's own schema rejects |
 | `lint:pnpm-lock` | `python3 scripts/verify_single_yaml_document.py site/pnpm-lock.yaml` | `site/pnpm-lock.yaml` holding more than one YAML document, which GitHub's dependency graph cannot read |
 | `security:vex:check` | `uv run python scripts/vex_to_osv_config.py ... --check` | either `osv-scanner.toml` (root, beside `uv.lock`, and `site/`, beside `pnpm-lock.yaml`, since osv-scanner reads only the config in a lockfile's own directory) or the `allow-ghsas:` line of `.github/workflows/dependency-review.yml` drifting from `security/atif-sql.openvex.json`, or a ledger PURL version that `uv.lock` or `site/pnpm-lock.yaml` no longer locks; `mise run security:vex` re-renders both |
 | `docs:prose` | `python3 scripts/vale_gate.py` | an error-level Vale alert in `docs/**/*.md`, `site/authored/**/*.md`, `README.md`, `AGENTS.md` or `CONTRIBUTING.md`, a run that checked fewer files than that scope holds, or a glob that matched fewer files than its floor in `scripts/vale_gate.py` (`docs/**/*.md` at least 15, `site/authored/**/*.md` at least 2, each root file at least 1), or a rule whose warnings rose past its count in `.vale-baseline.json` (or that warns and is not in it); a baseline that is missing, empty, or does not parse fails as well. `.vale.ini` names the rules and why each one below error sits there, and a new term goes in `.vale/styles/config/vocabularies/atif-sql/accept.txt` |
-| `test` | `uv run pytest --no-header -q` | `[tool.pytest.ini_options] testpaths = ["packages/*/tests"]` |
+| `test` | `uv run pytest --no-header -q` | `[tool.pytest.ini_options] testpaths = ["packages/*/tests", "fuzz"]` |
 
 Most gates declare `sources`, so mise skips one whose inputs have not moved by
-mtime (`lint:pnpm-lock` and `docs:prose` run every time). Run `mise run --force check` when you want them all to execute anyway.
+mtime (`typecheck:pyright`, `lint:pnpm-lock`, and `docs:prose` run every time). Run `mise run --force check` when you want them all to execute anyway.
 
 The Vale warnings are a ratchet, not a free pass. `.vale-baseline.json` holds each rule's warning
 count over the scope in the table, and `docs:prose` names any rule that rose. Reword the sentence that
@@ -98,7 +102,8 @@ weekly and on pull requests that change the converter or `fuzz/`.
 
 A finding lands in `fuzz/out/<target>/artifacts/` (CI uploads it as `fuzz-findings`). Replay it
 with `uv run --group fuzz python fuzz/fuzz_<target>.py <artifact>`, fix the converter, and add
-the input to `fuzz/corpus/<target>/` so `check` keeps it fixed. A new target is a function in
+the input to `fuzz/regressions/<target>/` so `check` keeps it fixed (a seed in `fuzz/corpus/`
+must convert, and a fixed crash is usually a rejection). A new target is a function in
 `TARGETS`, a `fuzz_<name>.py` harness, a `fuzz/corpus/<name>/` seed directory and a
 `fuzz/<name>.dict` dictionary; `fuzz` fails until all four exist.
 
@@ -110,25 +115,28 @@ standards, not a fix to your branch. Raise it in the pull request instead.
 
 Commit messages must be [Conventional Commits](https://www.conventionalcommits.org):
 `type(scope): subject` with `type` one of `feat|fix|chore|docs|refactor|test|perf|ci`.
-This is enforced, not advisory: `lefthook.yml`'s `commit-msg` hook runs
-`uv run cz check --allow-abort --commit-msg-file {1}`, configured by
+The format is enforced, not advisory: `lefthook.yml`'s `commit-msg` hook runs
+`mise exec -- uv run cz check --allow-abort --commit-msg-file {1}`, configured by
 `[tool.commitizen]` in
 `pyproject.toml` (`name = "cz_conventional_commits"`, with
 `allowed_prefixes = ["Merge", "Revert", "Pull request", "fixup!", "squash!"]`
-as the only exemptions).
+as the only exemptions). `cz check` also accepts `build`, `bump`, `revert`, and `style`;
+the shorter list is this repository's convention.
 
 The other hooks in `lefthook.yml` run a subset of the gate early, so a clean
 `mise run check` before you commit means the hooks have nothing to say:
 
-- **pre-commit**, on staged `**/*.py`: `ruff check --fix` and `ruff format`
-  (both `stage_fixed: true`, so fixes are re-staged for you), `ty check`, and
-  `lint-imports`. Plus `uv lock --check` whenever a `pyproject.toml` or
-  `uv.lock` is staged.
-- **pre-push**: `pytest --no-header -q`, plus `mise run docs:links` (a site build and the
-  crawl of `site/dist`) when the push touches `docs/` or `site/`.
+- **pre-commit**: on staged `**/*.py`, `ruff format` and `ruff check --fix`
+  (both `stage_fixed: true`, so fixes are re-staged for you); `betterleaks git --staged`
+  over the staged diff, which blocks a staged secret and is the one hook `check` doesn't
+  cover; and `uv lock --check` whenever a `pyproject.toml` or `uv.lock` is staged.
+- **pre-push**: `mise run` of `lint`, `typecheck` (ty only), `lint:imports`, `lint:workflows`,
+  `lint:hooks`, `lint:pnpm-lock`, `docs:prose`, and `test`, plus
+  `mise run docs:install && mise run docs:links` (a site build and the crawl of `site/dist`)
+  when the push touches `docs/` or `site/`.
 
-`ty`, `lint-imports`, and the pre-push pytest are skipped during a merge or
-rebase (`skip: [merge, rebase]`); `mise run check` is what covers those.
+The pre-push `typecheck`, `lint:imports`, docs link crawl, and `test` jobs are skipped during a
+merge or rebase (`skip: [merge, rebase]`); `mise run check` is what covers those.
 
 Work on a branch, and open a pull request against `main`.
 
@@ -144,7 +152,7 @@ root packages. These shape the whole workspace:
 2. **`atif_analytics` composes `atif_models` and nothing else of ours.** A
    `forbidden` contract pins its remaining edges shut: it may not import
    `atif_converter`, `atif_corpus`, `atif_duck`, `atif_embed`, or `atif_cli`.
-   That is why `atif_embed` reads the corpus through its own DuckDB adapter
+   The independence contract is why `atif_embed` reads the corpus through its own DuckDB adapter
    over the documented corpus layout rather than through `atif_duck`.
 
 The rest are `layers` contracts:
@@ -174,9 +182,11 @@ failure.
 
 **A new package.** `packages/*` is globbed as a workspace member, but these
 places in the root `pyproject.toml` list packages explicitly and will not pick
-it up on their own: `[tool.ruff] src`, `[tool.ruff.lint.isort]
-known-first-party`, `[tool.ty.environment] root` plus `[tool.ty.src] include`,
-and `[tool.importlinter] root_packages` (with its layers contract).
+it up on their own: `[tool.hatch.build.targets.wheel] packages`, `[tool.ruff] src`,
+`[tool.ruff.lint.isort] known-first-party`, `[tool.ty.environment] root` plus
+`[tool.ty.src] include`, `[tool.pyright] include` plus `extraPaths`,
+`[tool.coverage.run] source`, `[tool.bandit] exclude_dirs`, and
+`[tool.importlinter] root_packages` (with its layers contract).
 
 The new member also needs the license wiring every existing member has:
 `license = "Apache-2.0"` with `license-files = ["LICENSE"]` in `[project]`, and
@@ -188,9 +198,10 @@ it, and `uv build` fails outright if the file is missing.
 
 **A DuckDB view or macro.** The catalog is static and drift-tested. Per
 `AGENTS.md`, adding an object means adding a `DESCRIPTIONS` entry in
-`atif_duck/domain/catalog.py`, an `ARG_EXEMPLARS` entry for any new parameter
-name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and a derived
-example that actually executes (or a documented `EXCLUSIONS` entry). The tests
+`atif_duck/domain/catalog.py`, an `ARG_EXEMPLARS` entry in `atif_duck/domain/examples.py`
+for any new parameter name, `TABLE_MACRO_NAMES` membership if the DDL is `AS TABLE`, and a
+derived example that actually executes (or a documented `EXCLUSIONS` entry, in the same
+`examples.py`). The tests
 in `packages/atif-duck/tests/` fail until that is true.
 
 ## harbor and litellm are test oracles, not dependencies
@@ -257,11 +268,11 @@ materialize, so read the diff as a pricing change.
 ## Never spend money in a test
 
 These paths call Amazon Bedrock and bill the caller: `atif-sql analyze` (the LLM
-pipelines) and `atif-sql embed` (Cohere Embed v4). Each is guarded, and the
-guards are part of the contract. The local provider (`ATIF_SQL_EMBED_PROVIDER=gemma`)
-bills nothing but downloads 1.5 GB on first use, so its tests load a fake
-SentenceTransformer and fake torch modules instead, and pass with or without the
-`local` extra installed:
+pipelines), `atif-sql embed` (Cohere Embed v4), and `atif-sql search`, which embeds its
+query the same way. The two bulk paths are guarded, and the guards are part of the
+contract. The local provider (`ATIF_SQL_EMBED_PROVIDER=gemma`) bills nothing but downloads
+1.5 GB on first use, so its tests load a fake SentenceTransformer and fake torch modules
+instead, and pass with or without the `local` extra installed:
 
 - `analyze` is dry-run by default; `--no-dry-run` is what makes it spend.
 - `embed` refuses a real run with no scope: no `--limit` and no `--all` exits 64.
@@ -272,8 +283,8 @@ change.
 
 ## Experiments
 
-`experiments/` holds numbered protocols with a README (and, once run, a REPORT)
-per experiment. Nothing there is wired into a gate: pytest's `testpaths` only
-collects `packages/*/tests`, and outputs are written to `experiments/**/out/`,
+An experiment goes under `experiments/` as a numbered protocol with a README (and, once run, a
+REPORT); the tree holds none. Nothing there is wired into a gate: pytest's `testpaths` only
+collects `packages/*/tests` and `fuzz`, and outputs are written to `experiments/**/out/`,
 which `.gitignore` excludes. An experiment's recorded numbers are measurements;
 if you re-run one, add your measurement rather than editing the one already recorded.

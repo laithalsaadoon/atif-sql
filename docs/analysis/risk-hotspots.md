@@ -3,7 +3,7 @@
 Risk here is a score over signals a command can produce, each countable and each tied to a
 line of source: `2 × T + 2 × E + 0.5 × W + 1 × C + 1 × H + U/10`. `T` counts defects a type
 checker located in the file; `E` and `W` count `error`- and `warn`-severity scanner findings from
-the scanner report tier (`mise.toml:596-611`); `C` counts complexity ratchets the ruff config
+the scanner report tier (`mise.toml:675`); `C` counts complexity ratchets the ruff config
 sets at a function living in this file (`pyproject.toml:327-350`); `H` counts distinct unguarded
 concurrency or IO windows, where a window whose own docstring names its recovery does not count;
 and `U` is uncovered units (missed lines plus missed branches) under the branch-coverage config
@@ -11,45 +11,47 @@ at `pyproject.toml:623`. Combined line-and-branch coverage is measured against t
 `pyproject.toml:648`, so `U/10` puts a
 file's share of the remaining uncovered units on the same scale as one located defect.
 
-Churn is rejected as a signal. The log sits under a single bot
-identity with no human authors, so commit frequency measures authoring order rather
+Churn is rejected as a signal. One author wrote 88 of the 93 commits (the other five are three
+`dependabot[bot]` and two `github-actions[bot]` commits, none touching `packages/*/src`), and the history opens
+with one commit on 2026-08-28 that added 276 files, 89 of the 154 Python files under
+`packages/*/src` among them, so commit frequency measures authoring order rather
 than defect density and ranking by it would produce confident noise. The `Trend` column below still
-runs the mechanical 30-day slope rule (`↑ rising` is anything more than one standard deviation
-above the median commit count), but it contributes zero weight to the score, and
-`↓ falling` is unreachable because every file in the repo has more than one commit. `Top owner` is
-likewise the bot identity on every row and carries no bus-factor information. Further limits: the
-scanner tier yields no `error`-severity findings workspace-wide, so `E` never discriminates, and
+runs the mechanical 30-day slope rule over those 154 files (`↑ rising` is a count of commits in
+the 30 days ending 2026-10-12 more than one standard deviation above the median: the median is 1 and the
+population standard deviation 2.27, so four commits or more), but it contributes zero weight to the
+score, and `↓ falling` is unreachable because one standard deviation below the median is less than
+zero. `Top owner` is likewise the sole author on every row and carries no bus-factor information.
+Further limits: both type checkers pass at zero (`ty check` reports no diagnostic and pyright
+strict reports 0 errors and 0 warnings), so `T` is 0 on every file; bandit's one open finding
+workspace-wide is `LOW` severity, so `E` and `W` never discriminate either, and the order rests on
+`C`, `H`, and `U`. `U` comes from a branch-coverage run of the suite rather than from the tree, so
+it's the one input here that a reading of the code, git, and the linters can't re-derive.
 `packages/atif-embed/src/atif_embed/domain/ports.py` is excluded from the ranking despite reading
 as uncovered, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
 (`pyproject.toml:649-656`); that is a measurement artifact, not a gap.
 
-Note (2026-09-27): the scores, LOC figures, and coverage below were measured before the trajectory
-and structural pipelines were cut. `atif_analytics.application.use_cases.trajectory`, `.community`,
-and `.cluster` no longer exist, and `parquet_cache` lost `replace_sessions` (the trajectory
-pipeline was its one caller) and with it `_shard_may_hold`, so part of that file's breakdown
-describes code that's gone. The ranking hasn't been re-measured.
-
 | File | Trend | Open findings | Top owner | Citation |
 | --- | --- | --- | --- | --- |
-| `atif_duck.infrastructure.registry` | ↑ rising | warn only | bot | `packages/atif-duck/src/atif_duck/infrastructure/registry.py` |
-| `atif_analytics.infrastructure.parquet_cache` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py` |
-| `atif_cli.app` | ↑ rising | warn only | bot | `packages/atif-cli/src/atif_cli/app.py` |
-| `atif_converter.domain.enrichment` | ↑ rising | none | bot | `packages/atif-converter/src/atif_converter/domain/enrichment.py` |
-| `atif_analytics.application.use_cases.friction` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py` |
-| `atif_analytics.application.use_cases.trajectory` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/trajectory.py` |
-| `atif_analytics.application.use_cases.community` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/community.py` |
-| `atif_analytics.application.use_cases.cluster` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/application/use_cases/cluster.py` |
-| `atif_analytics.infrastructure.corpus_reader` | → flat | none | bot | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py` |
-| `atif_duck.domain.examples` | → flat | warn only | bot | `packages/atif-duck/src/atif_duck/domain/examples.py` |
-| `atif_analytics.application.analyze` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/analyze.py` |
-| `atif_cli.output` | → flat | none | bot | `packages/atif-cli/src/atif_cli/output.py` |
+| `atif_duck.infrastructure.registry` | ↑ rising | none | sole author | `packages/atif-duck/src/atif_duck/infrastructure/registry.py` |
+| `atif_analytics.infrastructure.parquet_cache` | → flat | none | sole author | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py` |
+| `atif_cli.app` | ↑ rising | none | sole author | `packages/atif-cli/src/atif_cli/app.py` |
+| `atif_converter.domain.enrichment` | → flat | none | sole author | `packages/atif-converter/src/atif_converter/domain/enrichment.py` |
+| `atif_analytics.application.use_cases.friction` | → flat | none | sole author | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py` |
+| `atif_analytics.infrastructure.corpus_reader` | ↑ rising | none | sole author | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py` |
+| `atif_duck.domain.examples` | → flat | none | sole author | `packages/atif-duck/src/atif_duck/domain/examples.py` |
+| `atif_analytics.application.analyze` | → flat | none | sole author | `packages/atif-analytics/src/atif_analytics/application/analyze.py` |
+| `atif_cli.output` | → flat | none | sole author | `packages/atif-cli/src/atif_cli/output.py` |
 
-The open findings are `B608` hardcoded-SQL sites, and all of them map to `warn`: `B608` carries
-`MEDIUM` severity at `LOW` or `MEDIUM` confidence with rule precision `low`. The build-configuration
+Every `B608` hardcoded-SQL site carries a `# nosec B608` that names its reason, so bandit
+skips all 69 of them (each `MEDIUM` severity at `LOW` or `MEDIUM` confidence when the markers are
+ignored). Its one open finding is a `LOW`-severity `B105` on a record-type constant at
+`packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:37`, a file outside the table,
+which is why `Open findings` reads `none` on every row. The build-configuration
 rule that asks `[tool.uv]` for a dependency cooldown (`uv-missing-dependency-cooldown`) is met:
 `pyproject.toml:125` sets a seven-day `exclude-newer` window, and the comment at `:116-124` names
-the rule. The SQL sites are exactly the ones that ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
-`--ignore-noqa` over `packages/*/src` reports those same sites), and each `# noqa: S608` names what it
+the rule. The SQL sites are the ones that ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
+`--ignore-noqa` over `packages/*/src` reports 70 sites against bandit's 69, the two sets differing
+by three statements the tools parse differently), and each `# noqa: S608` names what it
 interpolates (`pyproject.toml:212-215`). The scanner tier therefore carries no unaudited exposure,
 which is why coverage, complexity, and concurrency carry the ranking instead.
 
@@ -60,85 +62,87 @@ which is why coverage, complexity, and concurrency carry the ranking instead.
 **What's there.** The DuckDB view and macro registry that binds a connection to the materialized
 `<corpus_root>/sessions/<id>/` tree and exposes it as the stable SQL surface, with raw readers built
 as `CREATE TEMP TABLE` over `read_json` under an explicit strict-projection `columns` filter
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:3-31`). Every registration function
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:3-20`). Every registration function
 follows a register-or-fail-loud contract: log through `logger.exception` and re-raise on any DDL
-failure (`:31-32`, `:816-819`, `:1217-1220`).
+failure (`:62-63`, `:955-958`, `:1527-1530`, `:2072-2075`).
 
-**Recent activity.** Commits in the 30-day window sit well above the median, so `↑ rising` under the
-mechanical rule, which here means the file was written and rewritten during the short authoring
-run, not that it is destabilizing.
+**Recent activity.** 12 commits in the 30-day window against a median of 1, so `↑ rising` under the
+mechanical rule, which here measures how often the file was edited, not whether it is
+destabilizing.
 
-**Owners.** The bot identity at 100% (every commit touching the path, merges included),
-a bot identity.
+**Owners.** The sole author at 100% (all 14 commits touching the path; the history has no merge
+commits).
 
-**Findings.** Most of the workspace's `B608` sites live here, each carrying a per-line
-`# noqa: S608` that names its interpolation: a module-constant table name (`:185`, `:237`), a glob
-escaped through `sql_literal` (`:254`, `:277`, `:300`, `:319`), local regex literals (`:743`), an
-`int()`-coerced width (`:962`), and the pricing rates (`:1099`). The file also holds one of the
-type-checker defects: `_pricing_values_clause` escapes the model name through `sql_literal` and coerces
-both rates with `float()` (`:975-1002`, specifically `:999`), because the `pricing` parameter is
-reachable by an in-process embedding caller even though the CLI never passes one (`:992-998`). Its
-uncovered units cluster in exactly the paths no test drives: `register_views` (`:333-819`),
-`register_macros` (`:1005-1220`), `register_vss` (`:846-967`),
-`_warn_incomplete_session_dirs` (`:175-193`), and `_pricing_values_clause` itself. The
-`register_vss` gap is the load-bearing one: the ATTACH-failure arm that degrades a Lance directory
-to an empty-store fallback and logs rather than raising (`:906-910`) is untested silent degradation.
+**Findings.** More of the workspace's `B608` sites live here than in any other file (28 of 69), each
+carrying a per-line `# nosec B608` that names its interpolation: a module-constant reader or table
+with catalog columns (`:308`, `:361`), a glob or file list the statement binds as a parameter
+(`:728`, `:830`), the corpus name through `sql_literal` (`:975`), local regex literals (`:1345`),
+an `int()`-coerced width (`:1737`), an int-derived alias (`:1792`), and the pricing rates
+(`:1955`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
+through `sql_literal` and coerces both rates with `float()` (`:1826-1853`, specifically `:1850`),
+because the `pricing` parameter is reachable by an in-process embedding caller even though the CLI
+never passes one, and a `str` rate there would get past the type checkers (`:1843-1848`). Its
+uncovered units sit in `register_views` (`:984-1530`), `register_macros` (`:1856-2075`),
+`register_vss` (`:1601-1742`), `_gate_session_dirs` (`:482-533`), and `_pricing_values_clause`
+itself, although tests drive each of those paths: 14 test files call `register`, which runs
+`register_views` and `register_macros`, seven call `register_vss`, and
+`packages/atif-duck/tests/test_duck_views.py:663` passes a hostile model name through the pricing
+clause. The `register_vss` gap is the one that matters most: the ATTACH-failure arm that degrades
+a Lance directory to an empty-store fallback and logs rather than raising
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1681-1685`) is untested silent
+degradation: no test calls `register_vss` on a directory that fails to ATTACH.
 
 ### `atif_analytics.infrastructure.parquet_cache`
 
 **What's there.** The sharded parquet cache behind the analytics pipelines: `write_part` appends a
-new shard, `read_all` unions every shard, and `replace_sessions` drops a session's prior rows so a
-re-flush cannot duplicate them
-(`packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90-111`, `:85-100`,
-`:159-221`). `_shard_may_hold` prunes shards by parquet footer statistics and fails open on missing
-or unreadable stats (`:116-156`), which is the safe direction.
+new shard and `read_all` unions every whole shard
+(`packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90-111`,
+`:114-129`). `iter_part_files` is the one choke point both readers share, and it drops any shard
+too small to carry parquet framing (`:71-87`).
 
-**Recent activity.** Commits sit at the median, so `→ flat`. This file ranks second on defect
-signals alone with no help from churn, which is the clearest demonstration that the two are
-independent here.
+**Recent activity.** One commit in the window, at the median, so `→ flat`. Churn adds nothing to
+its score.
 
-**Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
+**Owners.** The sole author at 100% (both commits touching the path).
 
-**Findings.** No scanner findings, and several of the workspace's unguarded IO windows, all in the
-same file. `write_part`'s sharded branch drops `part-<time_ns>.parquet` straight into the live
-directory (`:73-74`) that `iter_part_files` globs (`:57`), with no tmp-then-rename; the code
+**Findings.** No scanner findings, no complexity ratchet, and one unguarded IO window.
+`write_part`'s sharded branch drops `part-<time_ns>.parquet` straight into the live
+directory (`:102-103`) that `iter_part_files` globs (`:86`), with no tmp-then-rename; the code
 anticipates concurrency explicitly, since the nanosecond suffix exists to avoid collisions "when two
-part-writes land in the same millisecond under concurrency" (`:70-72`). `read_all` then hands every
-globbed part to `pl.read_parquet` with no size or completeness check (`:100`), while
-`MIN_PARQUET_BYTES`' own docstring states the size check "is what keeps a torn artifact from failing
-a pipeline that could skip it" (`:26-31`) and the legacy single-file branch does apply it (`:78`).
-A reader can therefore pick up a shard polars is still writing, and the guard the module documents
-protects only the path it is not on. `replace_sessions` compounds it by rewriting shards in place
-(`:213`) and unlinking emptied ones (`:209`). The coverage gap lands on the same functions:
-a large share of its uncovered units are in `replace_sessions` and `write_part`. It also owns the
-`max-returns = 5` ratchet through `_shard_may_hold` (`pyproject.toml:342`, `:337`; the function at
-`packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:145`).
+part-writes land in the same millisecond under concurrency" (`:99-101`). The read path does apply
+the size guard: `MIN_PARQUET_BYTES`' own docstring states the size check "is what keeps a torn
+artifact from failing a pipeline that could skip it" (`:27-32`), `iter_part_files` filters every
+globbed part through it (`:87`), and the legacy single-file branch applies it too (`:107`). The
+guard catches a stub of 16 bytes or fewer, not a half-written file, so a reader that globs while
+polars is still writing a larger shard hands it to `pl.read_parquet` (`:129`) and fails there.
 
 ### `atif_cli.app`
 
 **What's there.** The cyclopts composition root and the only module importing atif-converter,
 atif-corpus, and atif-duck together, wiring every cross-package seam: the `ConverterPort` adapter,
-the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:3-15`). Heavy
+the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:3-9`). Heavy
 imports are deferred into the command bodies so the `schema` / `--help` fast path stays lean, a
-property pinned by a fresh-interpreter test rather than by a lint (`:22-26`).
+property pinned by a fresh-interpreter test rather than by a lint (`:50-53`).
 
-**Recent activity.** The most commits of any file in the repo, so `↑ rising`, which is expected of a
-composition root that gains a wiring line whenever any member changes.
+**Recent activity.** The most commits of any source file (19, 16 of them in the window), so
+`↑ rising`, which is expected of a composition root that gains a wiring line whenever any member
+changes.
 
-**Owners.** The bot identity at 100% (every commit touching the path, merges included),
-a bot identity.
+**Owners.** The sole author at 100% (all 19 commits touching the path).
 
-**Findings.** A `B608` at the `search` kNN query, whose `# noqa` records that `dim` is
-`len(vector)` while the session id, `k`, and the vector itself are `?`-bound (`:925-937`). It
-carries the `max-args = 19` ratchet through `search`, whose parameters are the CLI flags
-cyclopts binds (`pyproject.toml:340`, `:333-335`; the function at
-`packages/atif-cli/src/atif_cli/app.py:860`). Its uncovered units (the largest single-file gap
-in the workspace) concentrate in the commands that reach outward: `analyze`
-(`:627-725`), `convert` (`:225-291`), and `status` (`:412-488`), with a few in `search`
-(`:828-948`) and `main` (`:1093-1103`). `analyze`, `embed`, and `search` are the
-billable commands that call Bedrock, so the least-covered command body in the tree is also the one
-that spends money; the uncovered region inside `analyze` is the settings-override chain that
-applies the budget ceilings a crontab line depends on (`:691-707`).
+**Findings.** No `B608` site: the `search` kNN statement in `search_rows` binds the vector, the
+session id, and `k` as parameters and formats only the width `len(query_vector)` and constant
+fragments into `_SEARCH_SQL` (`:2201`, `:2218-2225`). It sets no complexity ratchet: `search` takes
+seven parameters and the widest command, `analyze`, takes 13, while `max-args = 19` sits at
+`atif_corpus.application.materialize.materialize`
+(`packages/atif-corpus/src/atif_corpus/application/materialize.py:1497`). Its uncovered units
+concentrate in the commands that reach outward: `analyze`
+(`packages/atif-cli/src/atif_cli/app.py:1634-1735`), `convert` (`:675-757`), and `status`
+(`:1147-1296`), with a few in `search` (`:2018-2176`) and `main` (`:2409-2442`). `analyze` always
+calls Bedrock, and `embed` and `search` do with the default Cohere provider, so the least-covered
+command body in the tree is also the one that spends money; the uncovered region inside `analyze`
+is the settings-override chain that applies the budget ceilings a crontab line depends on
+(`:1700-1714`).
 
 ### `atif_converter.domain.enrichment`
 
@@ -149,12 +153,13 @@ exists because harbor 0.22.0 puts no record identity in `step.extra`: it reads `
 message dict and `id` off the event dict, while real transcripts carry both on the event, so nothing
 lands in extra and there is nothing to join on (`:15-20`).
 
-**Recent activity.** Commits well above the median, so `↑ rising`.
+**Recent activity.** One commit in its history and none in the window, below the median, so
+`→ flat`.
 
-**Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
+**Owners.** The sole author at 100% (the one commit touching the path).
 
-**Findings.** No scanner findings, no IO windows (this is a pure function), and both
-complexity ratchets in the workspace that a single function sets: `max-branches = 39` and
+**Findings.** No scanner findings, no IO windows (this is a pure function), and two of the
+workspace's complexity ratchets set by one function: `max-branches = 39` and
 `max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:341`, `:336`,
 `:345-350`; the function at
 `packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). Each branch is one named
@@ -173,9 +178,9 @@ fast path at confidence 0.9, deterministic stamp rules, and an LLM tier for ever
 column is the row's provenance tier rather than the engine that computed it, and downstream atif-duck
 views bind to those literal values, so the vocabulary is a fixed contract (`:34-38`).
 
-**Recent activity.** Commits well above the median, so `↑ rising`.
+**Recent activity.** Two commits in the window, under the four the rule needs, so `→ flat`.
 
-**Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
+**Owners.** The sole author at 100% (all three commits touching the path).
 
 **Findings.** No scanner findings, and the `max-statements = 119` ratchet, set at `_friction_async`
 (`pyproject.toml:343`, `:338`; the function at
@@ -183,11 +188,11 @@ views bind to those literal values, so the vocabulary is a fixed contract (`:34-
 gap and the complexity outlier are the same region: most of the file's uncovered units sit inside
 `_friction_async` (`:210-498`), with the rest in `detect_user_friction` (`:501-606`) and
 `deterministic_stamps` (`:146-202`). This is the file where the two signals coincide most tightly:
-the longest function in the workspace is also the least-exercised, and it is the function that
-decides which candidate messages cross into the billable LLM tier. The budget-guard posture that
-governs that decision assumes every candidate reaches the LLM even though roughly half survive the
-fast tiers (`:554-556`), and the third-party disclosure is explicit: short user message bodies leave
-the machine on tier 4 (`:40-41`).
+the function with the most statements in the workspace is also the least-exercised, and it is the
+function that decides which candidate messages cross into the billable LLM tier. The budget-guard
+posture that governs that decision assumes every candidate reaches the LLM even though roughly half
+survive the fast tiers (`:554-556`), and the third-party disclosure is explicit: short user message
+bodies leave the machine on tier 4 (`:40-41`).
 
 ## See also
 

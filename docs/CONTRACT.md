@@ -60,7 +60,8 @@ proofs are out of scope for the workspace.
 ```
 
 - corpus-slug: a slug of the source root path; it IS the on-disk dir name.
-  One key is reserved and not hashed: `codex` names the Codex CLI corpus.
+  Two keys are reserved and not hashed: `default` names the `~/.claude` root
+  and `codex` names the Codex CLI corpus.
 - session_id boundary: the id comes from the transcript filename and is the
   one piece of outside text that becomes a corpus path. It must match
   `^[A-Za-z0-9][A-Za-z0-9._-]*$` and be at most 255 characters (every id
@@ -95,8 +96,8 @@ proofs are out of scope for the workspace.
   deletes, moves or writes anything under a shared corpus directory such as
   blobs/ except to add a new blob, and the raw source archive lives only in
   sessions/<id>/source/.
-- Quiescence: a session is (re)materialized when newest source mtime is older
-  than quiesce_seconds (default 300) AND either its sources moved since the
+- Quiescence: a session is (re)materialized when newest source mtime is at
+  least quiesce_seconds old (default 300) AND either its sources moved since the
   watermark or its generation is stale (below). --force overrides the second
   half. "Now" is read after the scan, and a source mtime up to 1 s in the future
   is jitter, not a clock warning.
@@ -147,7 +148,7 @@ proofs are out of scope for the workspace.
 - Columnar artifacts (old layout): an earlier materialize also wrote five
   parquet files per session, a cache of what the views compute from
   trajectory.json and session_events.jsonl, claimed by meta.columnar_schema.
-  materialize no longer writes them. A reader takes the columnar path for a
+  materialize doesn't write them. A reader takes the columnar path for a
   session only when meta.columnar_schema equals its own version AND all of
   those files are present and non-empty; otherwise it reads the session's
   trajectory. Whatever the path, every view and macro returns the same rows.
@@ -166,7 +167,7 @@ proofs are out of scope for the workspace.
   that references it, so a published placeholder always resolves. The store
   is shared rather than per-session because a hash-named write is idempotent:
   a blob two sessions share is stored once, and re-converting a session
-  rewrites nothing. Ghost removal does not collect blobs; an unreferenced blob
+  rewrites nothing. Nothing collects blobs; an unreferenced blob
   costs space only. The hash and extension are validated before either
   becomes a path.
 
@@ -249,7 +250,8 @@ proofs are out of scope for the workspace.
   edges, loss_report.json, meta.json + derived views above. Sessions carrying
   current columnar artifacts are read with read_parquet instead of read_json,
   per session, and the two sets are unioned; the returned RawSources says
-  which sessions took which path. The lake loader passes stage_columnar:
+  which sessions took which path. The lake loader calls register_raw with
+  stage_columnar:
   every session without current parquet of its own is decoded in Python and
   typed into parquet staged outside the corpus, and read from there
   (RawSources.staged_session_ids), which bounds the loader's memory.
@@ -258,12 +260,14 @@ proofs are out of scope for the workspace.
   built through the connection's own API and registered as views (CREATE
   VIEW can't be prepared). Every remaining f-string placeholder in a SQL
   statement is a module constant, a catalog constant, a projection
-  expression, or `sql_literal(...)`, and an AST test over the SQL
-  modules fails on anything else. The statements DuckDB won't prepare
-  (ATTACH for the Lance store and the lake, the producer's one-row session
-  projection, the lake reader's corpus filter)
+  expression, or a `sql_literal(...)`, `int(...)`, or `float(...)`
+  coercion, and an AST test over the SQL modules fails on anything else.
+  The statements DuckDB won't prepare (ATTACH for the Lance store and the
+  lake, SET temp_directory on the lake connections, the producer's one-row
+  session projection, the corpus column the JSON path adds, the lake
+  reader's corpus filter, cost_estimate's pricing rows)
   are the only places `sql_literal` still escapes a value.
-- ColumnarArtifactProducer(session_dir, session_id, trajectory, events_path?)
+- ColumnarArtifactProducer.produce(session_dir, session_id, trajectory, events_path?)
   is a pure function of the trajectory (and of the session's events file,
   plain or compressed) that writes the parquet files with the views' own
   projection expressions, so the JSON columns are normalized exactly as
@@ -275,7 +279,8 @@ proofs are out of scope for the workspace.
   cache_creation_input_tokens with the Codex spelling cache_write_input_tokens.
 - messages-parity view name: `steps` (one row per ATIF step) PLUS a `messages`
   compatibility view reconstructed from edges (uuid-keyed: uuid, parent_uuid,
-  session_id, ts, type, is_sidechain, is_compact_summary, role via join).
+  session_id, ts, type, is_sidechain, is_compact_summary, message_id,
+  source_file; `type` carries the record's role).
 - Static VIEW_SCHEMA dict + drift test, so a view rename fails a gate.
 - Macro signatures are pinned against the DDL by a drift test.
 - sessions view carries `corpus`, the corpus directory's name, on both read
@@ -292,20 +297,20 @@ proofs are out of scope for the workspace.
   The lake is attached READ_ONLY from catalog.reader.duckdb before the sandbox
   locks the connection, and the grants name each live lake file.
 
-## CLI (atif-cli composes; the only package importing the others)
+## CLI (atif-cli composes the other packages)
 ```text
-atif-sql convert <session.jsonl|dir> [--agent claude-code|codex]
+atif-sql convert <session.jsonl> [--agent claude-code|codex]
                                        # --agent defaults from ATIF_SQL_AGENT
 atif-sql materialize [--force] [--quiesce-seconds N] [--agent ...] [--workers N] [--no-lake]  # sync corpus
                                        # report adds rejected / rejected_session_ids,
                                        # lake_synced / lake_pending / lake_error
 atif-sql status [--agent ...]          # corpus freshness, counts, watermark age
-atif-sql query 'SQL' [--format auto|json|csv]
+atif-sql query 'SQL' [--format auto|table|json|csv]
                                        # sized to the host before registration
                                        # (ATIF_SQL_QUERY_MEMORY_LIMIT / _THREADS
                                        # override); private mkdtemp spill dir;
                                        # refuses uid 0 unless ATIF_SQL_ALLOW_ROOT=1;
-                                       # COPY/EXPORT/ATTACH/INSTALL/LOAD/PREPARE/EXECUTE
+                                       # COPY/EXPORT/ATTACH/DETACH/INSTALL/LOAD/PREPARE/EXECUTE
                                        # exit 70 sandbox_refused before execution;
                                        # never installs an extension;
                                        # --all-corpora (lake only, exit 78 without one),
@@ -359,6 +364,7 @@ lake_load_batch_size=512 (sessions per lake transaction), lake_stage_workers
 (processes that stage a batch from its trajectories; default min(4, cpu_count)),
 lake_lock_timeout_seconds, lake_expire_days=30.
 _default_*() factories read env at call time. With agent=codex the two roots re-derive to $CODEX_HOME (default
-~/.codex)/sessions and ~/.atif-sql/corpus/codex; an explicitly set
+~/.codex)/sessions and the corpus root slugged from it
+(~/.atif-sql/corpus/codex for the default); an explicitly set
 ATIF_SQL_SOURCE_ROOT or ATIF_SQL_CORPUS_ROOT always wins over that
 re-derivation.

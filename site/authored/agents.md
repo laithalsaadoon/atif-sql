@@ -37,14 +37,16 @@ adds what a schema cannot state: what a silence means, and which surface you are
 
 - **A session still being written is skipped on purpose.** Materialization is gated on quiescence: a
   session is converted when its newest source file has been silent for longer than the quiesce
-  threshold and is newer than the recorded watermark. So the most interesting session (the one open
+  threshold and either is newer than the recorded watermark or was converted under a different converter
+  generation. So the most interesting session (the one open
   in another terminal) is the one deliberately not in the corpus yet. `--force` overrides the
   watermark; nothing overrides physics, so wait for the write to settle.
 
 - **`requires` on an example is a precondition, not a hint.** An example tagged `analytics` needs
-  `atif-sql analyze` to have run; one tagged `vss` needs an embedding run. Query one before its
-  pipeline has run and you get a catalog miss with exit 65, which is a different problem from a query
-  that legitimately matched nothing.
+  `atif-sql analyze` to have run; one tagged `vss` needs an embedding run. Query an `analytics` one
+  before its pipeline has run and you get a catalog miss with exit 65, which is a different problem
+  from a query that legitimately matched nothing. A `vss` one before any embedding run returns zero
+  rows instead: `message_embeddings` binds as an empty table so `semantic_search` still binds.
 
 - **A bare `atif-sql embed` exits 64 rather than doing the obvious thing.** A real embedding run calls
   Bedrock once per unembedded step, so it requires an explicit scope: `--limit N` or `--all`. The
@@ -57,8 +59,9 @@ adds what a schema cannot state: what a silence means, and which surface you are
   evidence that it was absent from the transcript. Read the loss report before concluding that.
 
 - **Branch on the exit code, never on the message text.** The codes are a stable wire contract: `64`
-  for malformed input or malformed SQL, `65` for a catalog miss or a store written by another embedding
-  provider, `70` for anything the database or an adapter raises, `78` for a state only an operator can
+  for malformed input or malformed SQL, `65` for a catalog miss, a trajectory that fails validation, lake
+  rows that differ from their corpus, or a store written by another embedding provider, `70` for anything the
+  database or an adapter raises, `77` for a refusal to run as root, `78` for a state only an operator can
   clear, `127` retired (kept so the table never renumbers), and `2` for a parsed-but-empty result an automated caller
   should treat as "nothing to do". The message beside the code is prose a maintainer rewrites freely.
 
@@ -76,7 +79,7 @@ never a call that has to fail first.
 The CLI and the library are the same implementation: `atif-cli` is a composition root and holds no
 query logic of its own, so a fact learned on one surface transfers to the other. The layering is
 enforced rather than documented: import-linter fails the build when a leaf package imports another
-leaf package.
+leaf package (the one allowed edge is `atif-analytics` to `atif-models`).
 
 :::agent
 
@@ -102,8 +105,9 @@ is a subquery over `sessions`, so a pasted example runs against any corpus rathe
 you do not have yet.
 
 Errors arrive on stderr as a JSON envelope when the channel is a pipe, carrying a kind, a message and
-a hint. Exit 0 is success. An exit in the sixties is fixed by changing the call; an exit of 70 or 78 is
-fixed by changing the environment.
+a hint. Exit 0 is success. An exit of 64 is fixed by changing the call, a 65 needs its kind read (a
+catalog miss wants a different query or a pipeline run, a mismatch wants a rebuilt lake or store), and
+an exit of 70, 77, or 78 is fixed by changing the environment.
 
 ## 5. What to avoid
 
@@ -115,10 +119,11 @@ fixed by changing the environment.
   is that a view over raw transcript JSON re-implements the adapter, badly, once per view. If a fact
   about a trajectory is missing, it belongs in the converter or in the catalog, not in your query.
 
-- **Reading an analytics or vector view before its pipeline has run.** Point back at section 2: that is
-  a catalog miss, and the fix is a command rather than a different query.
+- **Reading an analytics or vector view before its pipeline has run.** Point back at section 2: an
+  analytics view is a catalog miss and a vector one is empty, and either way the fix is a command
+  rather than a different query.
 
-- **Naming a Bedrock model id anywhere outside `atif-models`.** The alias registry exists so a model
+- **Naming a Bedrock LLM id anywhere outside `atif-models`.** The alias registry exists so a model
   swap is one edit. A hardcoded id elsewhere is a second source of truth that nothing reconciles.
 
 - **Adding a view or macro without its catalog entries.** The drift tests require a description entry,

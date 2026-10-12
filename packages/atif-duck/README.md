@@ -69,12 +69,12 @@ it writes.
 - **Views**: `sessions`, `steps` (one row per ATIF step — the
   messages-parity view), `messages` (uuid-keyed COMPAT view from
   `edges.jsonl`), `tool_calls`, `tool_results`, `todo_events`,
-  `todo_state_current`, `subagent_spawns`, `subagent_steps`,
+  `todo_state_current`, `subagent_spawns`, `subagent_steps`, `subagents`,
   `task_creations`, `task_updates`, `tasks_state_current`,
-  `skill_invocations`, `skill_usage`, `loss_reports`,
-  `message_embeddings` (the VSS view; empty until `atif-sql embed --all
-  --no-dry-run` runs), and the three authorship views `user_steps`,
-  `human_turns`, `session_outcomes` (below).
+  `skill_invocations`, `skill_usage`, `images`, `loss_reports`,
+  `session_events`, `message_embeddings` (the VSS view; empty until
+  `atif-sql embed --all --no-dry-run` runs), and the three authorship views
+  `user_steps`, `human_turns`, `session_outcomes` (below).
 - **Macros**: `ago`, `model_used`, `cost_estimate`, `tool_rank`,
   `todo_velocity`, `subagent_fanout`, `skill_rank`, `skill_source_mix`,
   `semantic_search(query_vec, k)` (kNN over `message_embeddings`; skipped

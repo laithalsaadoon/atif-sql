@@ -16,7 +16,7 @@ atif-sql materialize [--force] [--quiesce-seconds N]
                      [--sessions id,id]   # contract-compatible extension:
                                           #   plan only the named sessions
 atif-sql status                        # corpus freshness, read-only
-atif-sql query 'SQL' [--format auto|json|csv]
+atif-sql query 'SQL' [--format auto|table|json|csv]
 atif-sql schema                        # static catalog, no duckdb bind, <50ms
 atif-sql examples                      # tested example queries per view/macro
                                        #   (alias: atif-sql query --examples)
@@ -27,6 +27,11 @@ atif-sql embed --all --no-dry-run      # embed corpus steps into LanceDB
 atif-sql search '<text>'               # embed the text, then semantic kNN
 atif-sql cron install | status         # print the refresh crontab block, or
                                        #   report lane locks + last runs
+atif-sql lake rebuild | verify | status | compact
+                                       # build, check, report on, and compact
+                                       #   the DuckLake every query reads
+atif-sql corpus slim [--no-dry-run]    # convert a corpus to the compressed
+                                       #   layout; a dry run by default
 ```
 
 Conventions: `--format auto` resolves to a table on a TTY and JSON on a pipe;

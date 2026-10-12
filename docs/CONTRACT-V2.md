@@ -12,13 +12,13 @@ pipelines (cluster, terms, community) were removed, along with their views,
 macros, and the structural cron lane. atif-analytics now runs the LLM
 pipelines classify, conflicts, friction, and perceived. classify labels only
 work category and goal (autonomy tier and success were dropped as
-unreliable) and runs on small (luna). The cron lanes are materialize and
-llm. The trajectory, autonomy-tier, and structural lines below describe the
-original build.
+unreliable) and runs on small (luna). The cron lanes are materialize, llm,
+and compact. The trajectory, autonomy-tier, and structural lines below
+describe the original build.
 
 ## New packages
 - atif-models: model alias registry + structured-output LLM client. NO other
-  package hardcodes a model id.
+  package hardcodes the id of an LLM it calls.
 - atif-analytics: the v2 pipelines (classify, trajectory, conflicts,
   friction, perceived, cluster, terms, community). Depends on atif-models
   ONLY; the `forbidden` contract bars atif-duck. atif-cli composes.
@@ -74,12 +74,14 @@ friction=small (per-message enum), embed unchanged
 second adapter behind EmbeddingProvider).
 
 ## Ports & state: one shape per seam, declared in domain/ports.py
-CachePort/CheckpointPort/RetryQueuePort/VectorStorePort, sqlite WAL state.db
-per corpus, parquet shard dirs under <corpus_root>/analytics/<name>/,
-checkpoint keyed (session_id, pipeline) on (last_ts, last_mtime).
+SessionSource (atif-analytics) and VectorStorePort (atif-embed), each in its
+package's domain/ports.py; ParquetCache/SqliteCheckpoint/SqliteRetryQueue in
+atif-analytics infrastructure over a sqlite WAL state.db per corpus,
+parquet shard dirs under <corpus_root>/analytics/<name>/, checkpoint keyed
+(session_id, pipeline) on (last_ts, last_mtime).
 KEY PROPERTY: pipelines read the MATERIALIZED corpus
-(atif-duck views: steps/messages/edges), not raw JSONL. Transcript text for
-prompts = steps-based rendering under fixed caps (800K/session). Tool
+(trajectory.json steps + edges.jsonl, or the lake), not raw JSONL.
+Transcript text for prompts = steps-based rendering under fixed caps (800K/session). Tool
 calls render with their arguments (400 chars); each tool result renders as a
 size stub, so tool output stays on disk.
 ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true sends result bodies instead,
@@ -101,11 +103,13 @@ primary uuid (first source uuid per step; document choice).
 
 ## Cron
 scripts/atif-sql-refresh.sh: lanes (materialize */10, structural :17,
-llm nightly 10:20Z), flock per lane, AWS env hygiene + bearer-token read at
-runtime, both corpora via ATIF_SQL_SOURCE_ROOT, log to
-scripts/.run/, selftest script with the opt-out tripwire pattern. Installs via
+llm nightly 10:20Z, compact nightly 03:40), flock per lane, AWS env hygiene +
+bearer-token read at runtime, every corpus (the primary config root plus each
+ATIF_SQL_EXTRA_CONFIG_DIRS entry) via CLAUDE_CONFIG_DIR + ATIF_SQL_SOURCE_ROOT,
+log to scripts/.run/, selftest script with the opt-out tripwire pattern. Installs via
 `atif-sql cron install` printing the crontab block (no silent crontab writes).
 
 ## Cost guards
 analyze defaults dry_run=true; --no-dry-run only in the cron llm lane;
-estimate_cost port; per-pipeline token accounting logged; embed --limit 500.
+estimate_cost in the registry; per-pipeline token accounting logged;
+embed --limit 500.

@@ -107,7 +107,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 | `atif-converter` | Claude Code and Codex CLI transcript → ATIF converters (ours, built on Harbor's ATIF models, vendored) + per-agent fidelity policy (loss accounting per session) |
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
-| `atif-models` | Model alias registry + structured-output LLM clients for GPT-6 and Claude 5.5 on Bedrock; no other package hardcodes a model id |
+| `atif-models` | Model alias registry + structured-output LLM clients for GPT-6 and Claude 5.5 on Bedrock; no other package hardcodes an LLM model id |
 | `atif-analytics` | the LLM pipelines `atif-sql analyze` runs: classify, conflicts, friction, and perceived |
 | `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine + LanceDB vector store + embedding backfill |
 | `atif-cli` | the composition root, and the source of the `atif-sql` command (see [What you can do](#what-you-can-do)) |
@@ -152,7 +152,7 @@ matching `ATIF_SQL_*` env var still wins.
 ```bash
 atif-sql materialize --agent codex
 atif-sql status --agent codex
-atif-sql query "SELECT agent, count(*) FROM sessions GROUP BY 1"
+atif-sql query --agent codex "SELECT agent, count(*) FROM sessions GROUP BY 1"
 ```
 
 One corpus holds one agent, so a Codex corpus and a Claude Code corpus stay
@@ -227,7 +227,7 @@ vulnerability in a tool that reads local transcripts are in
 corpus is registered (override with `ATIF_SQL_QUERY_MEMORY_LIMIT` and `ATIF_SQL_QUERY_THREADS`),
 a private spill directory outside the corpus that's removed on exit, no extension installs at
 query time (`atif-sql embed --install-extension` is where the lance extension comes from), file
-facing statements (`COPY`, `EXPORT`, `ATTACH`, `INSTALL`, `LOAD`, `PREPARE`, `EXECUTE`) refused
+facing statements (`COPY`, `EXPORT`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `PREPARE`, `EXECUTE`) refused
 before they run, and a refusal to run as root unless `ATIF_SQL_ALLOW_ROOT=1` says so. The details
 and the one accepted disclosure (`duckdb_settings()` lists the granted paths) are in
 [docs/reference/cli.md](docs/reference/cli.md#query).

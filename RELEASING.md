@@ -40,8 +40,8 @@ implementation that accepted the commit is the whole argument:
   CI computes, from the locked commitizen in `uv.lock`. A GitHub Action's release logic cannot
   be run locally at all, so its answer can only be observed after it has been committed.
 - **`version_files` rewrites arbitrary text in arbitrary files**, which is what a version living
-  in many places needs: one bump moves the published `[project] version`, `version = "0.2.0"` in
-  every member manifest, and `"atif-duck==0.2.0"` in the ones that carry dev pins. Keeping those
+  in many places needs: one bump moves the published `[project] version`, `version = "0.3.0"` in
+  every member manifest, and `"atif-duck==0.3.0"` in the ones that carry dev pins. Keeping those
   in step by hand is the failure this repository is most likely to ship.
 - **No new dependency.** commitizen is already in `[dependency-groups] dev`.
 
@@ -91,7 +91,7 @@ entries with no `atif-*` among them.
 
 ## What the preparation preflight asserts
 
-`publish.yml` preparation checks these properties before it attaches draft assets, and fails with a pointer to
+`publish.yml` preparation checks these properties (`release.yml` checks the third) before it attaches draft assets, and fails with a pointer to
 this file when one is missing. Each is a defect `twine check` passes over — the metadata stays
 structurally valid and the damage is semantic — and each becomes permanent the moment a first
 release goes out under the wrong name or an unpinned requirement.
@@ -131,15 +131,16 @@ is wrong are different failures.
 **3. `[tool.commitizen]` carries the version wiring.** commitizen's `version_provider` defaults
 to reading `version` out of `[tool.commitizen]` itself, which stays the source of truth; the
 root's `[project] version` is what a wheel carries and moves through `version_files`. Both hold
-one string. `release.yml` asserts the commitizen key exists, because without it `cz bump` has
-nothing to read and silently has nothing to do.
+one string. `release.yml` asserts the commitizen key exists before it runs the gate, because
+without it `cz bump` has nothing to read and fails only after `mise run check`, with
+`[NO_VERSION_SPECIFIED]`.
 
 **4. The CLI reports the distribution's version.** cyclopts resolves a default `--version` by
 looking the calling module's name up in the installed metadata. The module is `atif_cli` and the
 distribution is `atif-sql`, so `importlib.metadata.version("atif_cli")` raises
 `PackageNotFoundError` and cyclopts answers **`0.0.0`**. `atif_cli.app` therefore names the
 distribution explicitly, through a callable so `importlib.metadata` stays off the import path
-until `--version` is actually asked for (which the lean-import test pins). `publish.yml`
+until `--version` is actually asked for. `publish.yml`
 compares the installed CLI's `--version` against the tag, so a regression here cannot reach PyPI
 quietly.
 
@@ -154,7 +155,7 @@ governs. These properties of `[tool.commitizen]` are worth knowing before editin
   files are rewritten and before the commit, the only window where the re-resolved lockfile can
   land in the same commit as the versions it resolves. `git add` is separate because commitizen
   stages only the files it rewrote.
-- `version_files` entries are per-file rather than globbed, because `--check-consistency`
+- The pin entries in `version_files` are per-file rather than globbed, because `--check-consistency`
   requires a hit in every matched file and some members carry no intra-workspace
   pin.
 
@@ -172,11 +173,10 @@ which is interactive and silently does nothing if you answer `n`.
 ```bash
 git status --short                      # must be empty; commit anything here FIRST
 uv run cz bump --version-files-only --check-consistency --yes
-git diff --stat                          # expect only the lines listed above
+git diff --stat                          # expect only the lines listed above, plus CHANGELOG.md
 
-git checkout -- .                        # the version rewrites
+git checkout -- .                        # the version rewrites and CHANGELOG.md
 git restore --staged --worktree uv.lock  # the staged re-lock
-rm -f CHANGELOG.md                       # written even in this mode
 git status --short                       # must be empty again
 ```
 
@@ -258,8 +258,8 @@ litellm`) prints nothing, and `test_dev_only_imports_guard.py` fails if `src/` i
 
 ## What a GitHub release carries, and how to verify it
 
-Every release carries the same six assets, staged by `mise run release:assets` on the tag and
-attached to the draft by `publish.yml` preparation:
+Every release carries the same six assets, staged by `mise run release:assets` on the tag (the
+attestation bundle by the `attest` job) and attached to the draft by `publish.yml` preparation:
 
 | Asset | What it is |
 | --- | --- |
@@ -360,7 +360,7 @@ rehearsal that cannot rehearse the thing that matters.
 
 - What it would catch — invalid metadata, a malformed sdist or wheel — `publish.yml` already
   catches offline and deterministically, with `twine check` plus an actual
-  `uv tool install --find-links dist atif-sql` followed by running the installed command.
+  `uv tool install --reinstall --find-links dist atif-sql` followed by running the installed command.
 - What it cannot catch is a resolution against PyPI's index, because TestPyPI's index holds
   different packages. An install test there resolves a different graph than a user's.
 - The remaining failure a rehearsal would find is a misconfigured publisher — and TestPyPI
@@ -384,7 +384,7 @@ the fat-wheel restructure above. Neither is on the table.
 | Ruleset `main review` on the default branch | Settings → Rules → Rulesets | Pull requests with two approvals, Code Owner review, the latest push approved, review threads resolved, stale approvals dismissed. Bypass actors: the deploy key, and the repository admin role for pull requests only. See below. |
 | Environment `release` with secret `RELEASE_DEPLOY_KEY`, deployments from `main` only | Settings → Environments | The private half of the write deploy key `release.yml` pushes the bump commit and tag with. See below. |
 | **Immutable releases** on | Settings → General → Releases | Preparation attaches all signed assets to the draft. Publishing locks those assets and the tag before the PyPI job downloads them. |
-| Pages **Source = GitHub Actions** | Settings → Pages | `docs.yml` deploys through `actions/deploy-pages`, which needs the Actions source rather than a branch. `base: "/atif-sql/"` in `site/astro.config.ts` matches the resulting project-site path. |
+| Pages **Source = GitHub Actions** | Settings → Pages | `docs.yml` deploys through `actions/deploy-pages`, which needs the Actions source rather than a branch. `base: SITE_BASE` in `site/astro.config.ts` (`"/atif-sql/"`, from `site/src/lib/repo.ts`) matches the resulting project-site path. |
 | The AI-crawler policy, at the ORIGIN root | The `laithalsaadoon.github.io` user-pages repository | `robots.txt` is per-origin (RFC 9309 §2.3), so a project site served from a path segment cannot own one: Astro emits this site's copy to `/atif-sql/robots.txt`, which no crawler fetches. `site/public/robots.txt` is the decided policy and the exact text to install at `https://laithalsaadoon.github.io/robots.txt`. Until it is installed there, these pages inherit whatever that origin already serves — and absent a file, that is fully permissive. Outside this repository's reach, so no gate here can assert it. |
 
 ### The release push and branch protection
@@ -505,7 +505,7 @@ rather than spending another version:
 gh workflow run publish.yml -f tag=v0.2.0
 ```
 
-The publish steps set `skip-existing: true`, so a re-run after a partial upload completes the
+The publish step sets `skip-existing: true`, so a re-run after a partial upload completes the
 legs that failed instead of taking a 400 on the ones that succeeded. PyPI refuses to overwrite
 an existing filename either way, so this cannot replace bytes.
 
@@ -514,8 +514,8 @@ an existing filename either way, so this cannot replace bytes.
 | Symptom | Cause |
 | --- | --- |
 | `[tool.commitizen] in pyproject.toml carries no 'version' key` | The `version` key was removed from `[tool.commitizen]`. Property 3 above. |
-| `no wheel built for: atif-sql` / `unexpected distribution(s) built: atif-cli` | `packages/atif-cli/pyproject.toml` declares a `[project] name` other than `atif-sql`. Property 1 above. |
-| `intra-workspace requirement 'atif-duck' is not pinned to ==<version>` | A sibling dependency lost its `==` pin. Property 2 above. |
+| `<wheel>: Name is '<name>', expected 'atif-sql'` | The root `pyproject.toml` declares a `[project] name` other than `atif-sql`. Property 1 above. |
+| `<wheel>: requires unpublished sibling(s): [...]` | An `atif-*` requirement reached the root `[project.dependencies]`. Property 2 above. |
 | `Version is '0.1.0', tag says '0.2.0'` | The tag and the manifests disagree — a `cz bump` that partially applied, or a hand-moved tag. |
 | `the installed CLI reports version '0.0.0'` | `cyclopts.App` has no explicit `version=`, so it looked up the module name instead of the distribution name. |
 | `EOFError` from `cz bump`, no other output | `--get-next` without `--yes` opens a prompt and dies on a non-TTY. |
@@ -527,4 +527,4 @@ an existing filename either way, so this cannot replace bytes.
 | Preparation refuses a draft with existing assets | Rerun the failed upload job to reuse its saved artifacts. A fresh build cannot replace existing assets. |
 | Immutable release verification fails | The release is still a draft, immutability is disabled, or its attestation does not verify. Publication stops before PyPI. |
 | 403 from PyPI naming a publisher it cannot find | On a first release, the pending publisher does not exist yet. Afterwards, the publisher does not match the claims. |
-| `expected one sdist and one wheel for <project>, staged 0` | `uv build --all-packages` did not produce that project — usually a member removed from `[tool.uv.workspace] members`. |
+| `expected exactly one wheel and one sdist, found <n> and <m>` | `uv build --out-dir dist` built no root distribution, or built more than the root project (an `--all-packages` build adds the seven dev manifests). |
