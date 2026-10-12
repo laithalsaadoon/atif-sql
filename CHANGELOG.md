@@ -1,3 +1,10 @@
+## v0.3.0 (2026-10-12)
+
+### Feat
+
+- **analytics**: keep tool-result bodies out of LLM transcripts by default
+- **models,analytics**: GPT-6 and Claude 5.5 families, prompts tuned for both
+
 ## v0.2.0 (2026-10-11)
 
 ### BREAKING CHANGE

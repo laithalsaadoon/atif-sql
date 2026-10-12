@@ -199,7 +199,7 @@ wheels = [
 
 [[package]]
 name = "atif-analytics"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-analytics" }
 dependencies = [
     { name = "atif-models" },
@@ -224,7 +224,7 @@ requires-dist = [
 
 [[package]]
 name = "atif-cli"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-cli" }
 dependencies = [
     { name = "atif-analytics" },
@@ -251,7 +251,7 @@ requires-dist = [
 
 [[package]]
 name = "atif-converter"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-converter" }
 dependencies = [
     { name = "imagesize" },
@@ -270,7 +270,7 @@ requires-dist = [
 
 [[package]]
 name = "atif-corpus"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-corpus" }
 dependencies = [
     { name = "loguru" },
@@ -289,7 +289,7 @@ requires-dist = [
 
 [[package]]
 name = "atif-duck"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-duck" }
 dependencies = [
     { name = "duckdb" },
@@ -314,7 +314,7 @@ requires-dist = [
 
 [[package]]
 name = "atif-embed"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-embed" }
 dependencies = [
     { name = "boto3" },
@@ -364,7 +364,7 @@ provides-extras = ["local"]
 
 [[package]]
 name = "atif-models"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/atif-models" }
 dependencies = [
     { name = "anthropic" },
@@ -389,7 +389,7 @@ requires-dist = [
 
 [[package]]
 name = "atif-sql"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
