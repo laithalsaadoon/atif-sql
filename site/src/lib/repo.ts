@@ -46,3 +46,12 @@ export const SITE_ORIGIN = "https://laithalsaadoon.github.io"
  * closes the twin half; every URL helper takes this value rather than concatenating it.
  */
 export const SITE_BASE = "/atif-sql/"
+
+/**
+ * The site's one-line description: the llms.txt summary, the meta description of every synced page,
+ * and the JSON-LD site node. `authored/index.md` carries the same sentence in its frontmatter, since
+ * an authored page's description comes from its own file.
+ */
+export const SITE_DESCRIPTION =
+  "ATIF-native analytics over Claude Code and Codex CLI agent trajectories: convert sessions to " +
+  "ATIF, materialize a corpus, query it through DuckDB views."
