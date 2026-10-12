@@ -4,7 +4,8 @@ Model alias registry + structured-output LLM client for the atif-sql
 workspace (CONTRACT-V2 §Model registry / §Client contract).
 
 - `atif_models.domain.registry` — frozen `ModelSpec` + size-alias registry.
-  NO other package hardcodes a Bedrock model id.
+  NO other package hardcodes a Bedrock LLM id (the embedding model ids are
+  atif-embed settings).
 - `atif_models.domain.ports` — `LlmStructuredProvider` protocol, error
   taxonomy (`RefusalError` / `ProviderUnavailable`), `CallUsage` +
   `UsageAccumulator` token accounting.

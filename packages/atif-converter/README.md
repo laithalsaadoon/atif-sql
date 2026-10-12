@@ -2,8 +2,10 @@
 
 Converts Claude Code session JSONL and Codex rollouts into ATIF trajectories
 (converters ported from harbor and held to parity with harbor 0.24.0, on harbor's ATIF models vendored in
-`atif_converter.domain.atif`), and owns the FIDELITY POLICY: the seven known upstream
-conversion gaps are encoded as `atif_converter.domain.fidelity.FidelityGap`,
+`atif_converter.domain.atif`), and owns the FIDELITY POLICY: the known upstream
+conversion gaps are encoded as `atif_converter.domain.fidelity.FidelityGap` (six
+for Claude Code, plus one retired number) and
+`atif_converter.domain.codex_fidelity.CodexFidelityGap` (six for Codex),
 and every conversion is audited into a `LossReport` (raw-side census vs
 converted output). harbor is a dev dependency only; the tests pin harbor 0.24.0
 behavior and hold the vendored models to it, so they are the drift alarm for a
@@ -14,7 +16,7 @@ harbor bump.
 `LossReport.record_counts` (and therefore `records_total` / `records_dropped`)
 counts every record of every `*.jsonl` discovered under the session's side
 directory, at any depth and regardless of whether a `subagents/` part appears
-in the path. That is the same file set the adapter stages into harbor and the
+in the path. That is the same file set the converter reads and the
 same set `edges.jsonl` is built from, so `records_total` always equals the
 edges line count. A session with a side-file outside `subagents/` reports a
 higher `records_total` than a census scoped to `subagents/` alone would.

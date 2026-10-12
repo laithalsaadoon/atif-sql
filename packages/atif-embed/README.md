@@ -39,6 +39,7 @@ atif_embed/
     discovery.py         PendingSelection — first-wins, hash skip, stale, limit
     embedding_guard.py   ensure_store_matches — fail-loud (model, dim) guard
     errors.py            DomainError taxonomy
+    sql_literal.py       SqlFragment + sql_literal (the Lance delete predicate's quoting)
     text_stamp.py        text_hash + the 50K cap + PendingText
   infrastructure/
     cohere_bedrock.py    Cohere Embed v4 adapter (batch 96, semaphore 8,
@@ -59,13 +60,13 @@ atif_embed/
 ## Independence: why TextRowsPort exists
 
 atif-embed is a workspace-independent package (import-linter independence
-contract: converter / corpus / duck / embed may never import each other;
+contract: converter / corpus / duck / models / embed may never import each other;
 only atif-cli composes). But the backfill needs the corpus's embeddable
 text rows — a surface atif-duck's `steps` view already computes.
 
 Resolution (the ConverterPort precedent from atif-corpus): the use case
 depends on a domain port, `TextRowsPort.iter_unembedded(corpus_root,
-exclude, limit)`, and atif-embed ships its OWN DuckDB implementation
+embedded, limit)`, and atif-embed ships its OWN DuckDB implementation
 (`DuckDbTextRows`) that reads the CONTRACT corpus layout directly —
 `read_json` over each session's stored trajectory (`trajectory.json.zst`, or
 the plain `trajectory.json` of an older corpus, batched by decompressed size) with the
@@ -160,10 +161,10 @@ An `embed --all` over a large corpus is a multi-hour, billed run, so nothing
 already paid for is thrown away:
 
 - discovery splits the trajectory files into batches of at most 4 MB of total
-  file bytes and runs ONE DuckDB statement per batch. DuckDB materializes a
-  result set fully inside `execute()`, so paging a single all-paths query off
-  `fetchmany` bounds nothing — the split is what bounds it. Bytes, rather
-  than a file count, is the axis because residency tracks the bytes one
+  decompressed trajectory bytes and runs ONE DuckDB statement per batch.
+  DuckDB materializes a result set fully inside `execute()`, so paging a
+  single all-paths query off `fetchmany` bounds nothing; the split is what
+  bounds it. Bytes, rather than a file count, is the axis because residency tracks the bytes one
   statement reads while wall time tracks the statement COUNT; batching by
   bytes bounds both. Peak resident text is therefore
   `max(4 MB budget, largest single session)`, so a corpus holding one huge
@@ -221,12 +222,13 @@ already paid for is thrown away:
   deliberate twin of atif-models' copy and is pinned by a test on both sides.
 
 Every adapter failure surfaces as a `DomainError` subclass
-(`EmbeddingProviderUnavailable` / `EmbeddingResponseInvalid`), which is what
-the CLI catches to emit a classified `{kind, exit_code, hint}` envelope; a raw
+(`EmbeddingProviderUnavailable` / `EmbeddingResponseInvalid` /
+`EmbeddingProviderNotInstalled`), which is what the CLI catches to emit a
+classified `{kind, message, hint}` envelope and exit with its code; a raw
 botocore traceback would escape that.
 
-Documents are stored int8-encoded then float-widened; queries always embed
-as float. Cosine ranking is therefore on mixed-magnitude vectors — cosine
-similarity/distance is magnitude-invariant, but do NOT swap in L2
+With Cohere, documents are stored int8-encoded then float-widened; queries
+always embed as float. Cosine ranking is therefore on mixed-magnitude
+vectors; cosine similarity/distance is magnitude-invariant, but do NOT swap in L2
 (`array_distance`) downstream: raw int8-derived document vectors have
 magnitudes in the thousands while query vectors are unit-normalized.

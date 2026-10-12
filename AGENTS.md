@@ -10,7 +10,8 @@ documents, and layers DuckDB views on top. One corpus holds one agent, and
 
 ## Workspace layout
 
-uv WORKSPACE (virtual root, members under `packages/*`):
+uv WORKSPACE (the root is the one published `atif-sql` distribution, whose
+wheel bundles every member; members under `packages/*`):
 
 - `packages/atif-converter`: converts Claude Code and Codex transcripts to
   ATIF (ported from harbor's converters, on the ATIF models vendored in
@@ -56,11 +57,13 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   clients, one adapter per family (`openai_bedrock` for GPT-6,
   `anthropic_bedrock` for Claude 5.5, picked by
   `infrastructure.providers.build_structured_provider`). No other package
-  hardcodes a Bedrock model id. Layered: `infrastructure` > `domain`.
+  hardcodes a Bedrock LLM model id (atif-embed's settings carry the
+  embedding model's default). Layered: `infrastructure` > `domain`.
 - `packages/atif-analytics`: the LLM pipelines that spend money at
   Bedrock and are checkpointed per session (classify, conflicts, friction,
   perceived; see `PIPELINE_NAMES` in
-  `infrastructure/sqlite_state/checkpointer.py`). They read human turns only
+  `infrastructure/sqlite_state/checkpointer.py`, which spells friction
+  `user_friction`). They read human turns only
   (`domain.authorship`), and classify and conflicts skip automated review
   (`turn_audit`) and one-shot-job sessions. Session data comes through the
   `SessionSource` port (`domain.ports`): the default reads each session's
@@ -136,11 +139,12 @@ Rules of the road:
   statements DuckDB won't prepare (`ATTACH`, the producer's session row) go
   through `sql_literal`. Helpers that build SQL take and return `SqlFragment`
   (`atif_duck.domain.sql_literal`). Every site that still interpolates
-  carries `# noqa: S608  # nosec B608 - <what it interpolates>` (ruff reads
+  carries `# nosec B608 - <what it interpolates>`, after `# noqa: S608`
+  wherever ruff flags the line too (ruff reads
   the first marker, Bandit only the second; never blanket-skip B608 in
   `[tool.bandit]`), and `packages/atif-duck/tests/test_sql_text_boundaries.py`
   runs an AST audit over `registry.py`, `columnar.py`, `analytics.py`,
-  `authorship.py`, `lake.py` (both layers of each), `lake_steps.py` and atif-embed's
+  `authorship.py`, `lake.py`, `lake_sessions.py` (both layers of each), `lake_steps.py` and atif-embed's
   `corpus_text_rows.py` that fails on any placeholder that isn't a constant, a
   projection call, or `sql_literal(...)`. A statement built per table is a
   module-level constant (a dict comprehension over the table specs), which the
@@ -325,8 +329,8 @@ copy of the queryable rows:
   force a full lake read; no usable lake falls back to the per-session
   reader. The watermark only moves after a run that read to the end (not to
   a `--limit`) and embedded every row. `embed --prune-orphans` counts stored
-  rows whose uuid is no lake step's (dry run unless `--no-dry-run`, refused
-  while sessions are pending a lake write).
+  rows whose uuid is no lake step's (dry run unless `--no-dry-run`; the real
+  run is refused while sessions are pending a lake write).
 - Analytics: `analyze` reads session data from the lake when the lake holds
   the corpus (`--no-lake` reads the files). A session is read from the lake
   only when its `session_meta` row carries the `materialized_at` and
@@ -356,8 +360,9 @@ copy of the queryable rows:
   `--corpus-root`s given) beside the old one and swaps the directory in.
   `lake verify` compares every session's row count and content hash, table by
   table, between the lake and its artifacts and exits 65 on a difference (78
-  with no usable lake). `lake status` (also folded into `atif-sql status`)
-  reports the state, snapshots, files and pending sessions. `lake compact`
+  with no usable lake). `lake status` reports the state, corpora, snapshots,
+  files, and last write; `atif-sql status` folds the same into its lake
+  section and adds the corpus's pending sessions. `lake compact`
   merges small files, rewrites delete-heavy ones, expires snapshots older than
   `--expire-older-than-days` (default 30) and removes unreferenced files once
   they're an hour old, so a reader on the previous catalog copy still finds
@@ -397,7 +402,8 @@ For an LLM agent driving `atif-sql`, the discovery loop is this:
    `requires: vss` needs `atif-sql embed --all --no-dry-run` (a bare `embed`
    exits 64: a real run needs an explicit scope). For semantic search over TEXT,
    prefer `atif-sql search 'query'`, which embeds the text first, then runs
-   the same `semantic_search` kNN.
+   its own cosine kNN over `message_embeddings` (the ranking `semantic_search`
+   uses) and joins each hit to its step for a snippet.
 
    What the query sandbox will and won't do: `SELECT`, `EXPLAIN`, `SET
    TimeZone`, and in-memory DDL/DML run; `COPY`, `EXPORT`, `ATTACH`,
@@ -417,13 +423,14 @@ the derived example must execute (or a documented `EXCLUSIONS` entry).
 
 ## Definition of done
 
-`mise run check` fully green (lint + fmt + typecheck + lint:imports + lint:workflows +
+`mise run check` fully green (lint + fmt + typecheck + typecheck:pyright + lint:imports + lint:workflows +
 lint:hooks + lint:pnpm-lock + security:vex:check + docs:prose + test). `docs:prose` is Vale over
 the published prose (docs/, site/authored/, README.md, AGENTS.md, CONTRIBUTING.md) at error level,
 with a file floor per glob so a shrunken scope is red, and a per-rule warning ratchet against `.vale-baseline.json`: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. When a count falls, run `mise run docs:prose:baseline` and commit the lower file; never raise it. A spaced dash is an error (`Google.EmDash`), not a warning: write a colon, comma, period, or parentheses instead. `mise run security` is the report-only tier beside it: findings do not fail
-it, a scanner that produced no usable SARIF does.
+it, a scanner that produced no usable report does.
 A change under docs/ or site/ also needs `mise run docs:gate`: the site build, then `docs:links`,
-which crawls site/dist as GitHub Pages serves it and fails on any internal 404. Link page to page by
+which crawls site/dist as GitHub Pages serves it and fails on any internal 404, then `astro check` and
+the site's dist probes (`pnpm run check && pnpm run test` in site/). Link page to page by
 relative `.md` path as GitHub renders it; the build turns each link into the page's route, or into
 the GitHub blob for a Markdown file the site does not publish.
 First-time setup: `mise trust && mise install && mise run install`.
@@ -436,10 +443,10 @@ for a finding.
 
 ## Experiments
 
-`experiments/` holds numbered experiment protocols (README per experiment).
-Outputs go to `experiments/**/out/` (gitignored). No experiment is wired
-into a gate: `mise run check` and pytest's `testpaths` both skip the
-directory.
+`experiments/` is where numbered experiment protocols go (README per
+experiment); the tree holds none. Outputs go to `experiments/**/out/`
+(gitignored). No experiment is wired into a gate: no `check` task runs one,
+and pytest's `testpaths` skip the directory.
 
 Migration parity oracles are not part of this repo. Parity is not a standing
 gate: re-running one would need a reference implementation this workspace does

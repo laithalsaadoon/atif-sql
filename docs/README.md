@@ -6,9 +6,9 @@ this codebase quietly assumes. Every factual claim carries a `path:LOC` citation
 Prose is generated; structure is mechanical. Cross-references are deterministic.
 
 Citations come as full paths or as shorthands, and each one resolves into a
-source file. A validator rejects any citation naming a file that does not exist, a line
-outside that file's range, or a shorthand with no resolvable antecedent, and it exits non-zero on the
-first one, so a citation here resolves or the tree does not ship.
+source file. The docs site build turns each one into a link and fails on the first citation naming
+a file that does not exist at the commit it links to, or a shorthand with no resolvable antecedent,
+so a citation here resolves or the tree does not ship.
 
 ## Start here
 
@@ -24,8 +24,8 @@ first one, so a citation here resolves or the tree does not ship.
 
 - [System overview](architecture/system-overview.md): the short version, the stack, and one
   diagram of the workspace members.
-- [Module map](architecture/module-map.md): one section per member, ordered by source size, with the
-  files in each that carry the weight.
+- [Module map](architecture/module-map.md): one section per member, with the files in each that
+  carry the weight.
 - [Data flow](architecture/data-flow.md): the flows (`materialize`, `query`, `analyze`) traced end
   to end, each as a sequence diagram.
 
@@ -75,11 +75,11 @@ first one, so a citation here resolves or the tree does not ship.
 
 ## Documents this tree deliberately omits
 
-- **`analysis/ownership.md`**: the history sits under a single bot identity,
-  with no human authors. A per-person ranked table and a bus-factor list would be noise dressed as
+- **`analysis/ownership.md`**: every commit in the history names either the one maintainer or a
+  GitHub bot account. A per-person ranked table and a bus-factor list would be noise dressed as
   analysis.
 - **`reference/rpc-tools.md`**: there is no RPC, MCP, or HTTP surface. `fastapi`, `uvicorn`,
-  `starlette`, and the supabase client stack do appear in the installed dependency closure, arriving
+  `starlette`, and the supabase client stack do appear in the locked dev dependency closure, arriving
   transitively through harbor, and no first-party module imports any of them.
 
 An empty file in either slot would imply absence by omission rather than by silence, which is why
