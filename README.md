@@ -53,6 +53,13 @@ are not supported. [RELEASING.md](RELEASING.md) says how to measure the install.
 `ATIF_SQL_EMBED_PROVIDER=gemma`, `embed` and `search` run on this machine instead and cost
 nothing. Nothing else in the tool needs a credential.
 
+`analyze` runs on OpenAI's GPT-6 models by default, and `ATIF_SQL_LLM_FAMILY=anthropic` switches
+it to Claude 5.5. It sends the user and agent turns of each session plus every tool call's name and
+the first 400 characters of its arguments. Each tool result goes as its size only, so command
+output and file contents stay on your machine unless you set
+`ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true`. The turns themselves still reach the model, so
+anything pasted into a conversation does too.
+
 ## What you can do
 
 Start with the question you want to answer or the work you want to keep. Each command links
@@ -100,7 +107,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 | `atif-converter` | Claude Code and Codex CLI transcript → ATIF converters (ours, built on Harbor's ATIF models, vendored) + per-agent fidelity policy (loss accounting per session) |
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
-| `atif-models` | Model alias registry + structured-output LLM client; no other package hardcodes a model id |
+| `atif-models` | Model alias registry + structured-output LLM clients for GPT-6 and Claude 5.5 on Bedrock; no other package hardcodes a model id |
 | `atif-analytics` | the LLM pipelines `atif-sql analyze` runs: classify, conflicts, friction, and perceived |
 | `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine + LanceDB vector store + embedding backfill |
 | `atif-cli` | the composition root, and the source of the `atif-sql` command (see [What you can do](#what-you-can-do)) |

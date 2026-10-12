@@ -133,10 +133,10 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1240`
    it, shared by every stage: the steps memo is the expensive part and every
    stage walks the same sessions
    (`packages/atif-analytics/src/atif_analytics/application/analyze.py:62`,
-   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:263`).
+   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:314`).
 3. Construct the run-wide `RunBudget` from `llm_max_cost_usd_per_run`, priced
    from the providers' running actual usage rather than estimates:
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:94`.
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:97`.
 4. Walk the stages (classify, conflicts, friction, perceived) in
    declaration order. A stage entered with the budget already exhausted is
    skipped with nothing stamped, its consecutive-skip streak persisted, and the
@@ -157,7 +157,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1240`
 
 ## classify: the LLM analytics stage shape
 
-Entry point: `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`
+Entry point: `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:374`
 
 `conflicts`, `friction`, and `perceived` are entered the same way from the
 stages table and share this shape through `_shared.py`. classify and conflicts
@@ -166,14 +166,18 @@ turns, the main-chain user steps whose author is `human`.
 
 1. Resolve the layout, the reader, and the sharded parquet cache, then resolve
    the model through the atif-models registry by pipeline size (no pipeline
-   writes down a model id): `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`,
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:32`.
+   writes down a model id) and build the adapter atif-models wires for the
+   spec's family, OpenAI chat-completions by default or Anthropic Messages:
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:374`,
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:49`,
+   `packages/atif-models/src/atif_models/infrastructure/providers.py:20`.
 2. Under `dry_run`, the default, return a plan dict whose input tokens are
-   measured from the actually rendered transcripts and whose session count is
-   the same newest-first cap the real run applies:
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:293`.
+   measured from the actually rendered transcripts at the resolved model's
+   `chars_per_token` ratio and whose session count is the same newest-first
+   cap the real run applies:
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:311`.
 3. Anti-join the cache for session ids already written, then drop sessions
-   whose last-step timestamp and mtime bounds are unchanged since the last run (`:74`,
+   whose last-step timestamp and mtime bounds are unchanged since the last run (`:115`,
    `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:136`).
 4. Drain the retry queue back into the admission set, then subtract units with
    a live entry (inside backoff or past the attempt cap) because the retry
@@ -185,29 +189,37 @@ turns, the main-chain user steps whose author is `human`.
    deferred session is never rendered; a session that renders to nothing, or
    whose kind isn't `interactive`, is checkpointed at current bounds instead of
    re-rendered every tick:
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:146`.
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:147`.
+   The rendered transcript carries each tool result as a size stub,
+   `[tool_result <id> <ts>] (N chars omitted)`, unless
+   `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES` turns the bodies on:
+   `packages/atif-analytics/src/atif_analytics/domain/transcript.py:306`.
 6. Dispatch each write chunk in budget-checked sub-batches of
    `BUDGET_CHECK_BATCH`, advancing the cursor by what was actually sent so a
    mid-chunk budget stop leaves the remainder unstamped rather than silently
-   skipped:
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:155`,
-   `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:217`.
+   skipped. Each call sends the stage's system prompt and a user message
+   holding the fenced transcript followed by the one-line request:
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:160`,
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:218`,
+   `packages/atif-analytics/src/atif_analytics/application/prompts.py:742`,
+   `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:149`,
+   `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:185`.
 7. Route each result: a `RefusalError` is terminal and writes the documented
    `goal='[refused]'` sentinel row so the refusal is queryable and never
    re-billed, while any other exception enqueues a retry
-   (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:219`).
+   (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:247`).
 8. Write the chunk as a parquet part, checkpoint the completed sessions at
    current bounds, and clear them from the retry queue:
    `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:268`,
-   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:272`.
+   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:288`.
 
 ### Related
 
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:337`
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:531`
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:357`
-- `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:191`
-- `packages/atif-models/src/atif_models/domain/ports.py:116`
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:354`
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:501`
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:361`
+- `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:196`
+- `packages/atif-models/src/atif_models/domain/ports.py:131`
 
 ## embed: backfill step embeddings into LanceDB
 

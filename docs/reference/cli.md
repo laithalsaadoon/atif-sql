@@ -124,6 +124,10 @@ atif-sql analyze [OPTIONS]
 Run the LLM analytics pipelines: classify, conflicts, friction, and perceived.
 `packages/atif-cli/src/atif_cli/app.py:1240`
 
+The stages run on the model family `ATIF_SQL_LLM_FAMILY` names: `openai` (GPT-6, the default) or
+`anthropic` (Claude 5.5). Transcripts carry tool results as size stubs unless
+`ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true`.
+
 Flags:
 
 - `--since-days`: restrict the stages to sessions whose last step is within N days; default `30`. `:1242`

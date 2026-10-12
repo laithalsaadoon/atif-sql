@@ -53,8 +53,10 @@ uv WORKSPACE (virtual root, members under `packages/*`):
   `infrastructure.lake` writes, reads, verifies and compacts it; see
   "Storage" below). Layered: `infrastructure` > `domain`.
 - `packages/atif-models`: model alias registry + structured-output LLM
-  client. No other package hardcodes a Bedrock model id. Layered:
-  `infrastructure` > `domain`.
+  clients, one adapter per family (`openai_bedrock` for GPT-6,
+  `anthropic_bedrock` for Claude 5.5, picked by
+  `infrastructure.providers.build_structured_provider`). No other package
+  hardcodes a Bedrock model id. Layered: `infrastructure` > `domain`.
 - `packages/atif-analytics`: the LLM pipelines that spend money at
   Bedrock and are checkpointed per session (classify, conflicts, friction,
   perceived; see `PIPELINE_NAMES` in

@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from atif_embed.infrastructure.settings import EmbedSettings
 
 #: Bedrock error codes that tenacity should retry. TWIN of
-#: ``atif_models.infrastructure.openai_bedrock.RETRY_CODES`` — the two
+#: ``atif_models.infrastructure.bedrock_common.RETRY_CODES`` — the two
 #: packages may not import each other (independence contract), so each pins
 #: this set against the same literal in its own test suite. Dropping a
 #: throttle code here turns a mid-backfill throttle into an aborted run.

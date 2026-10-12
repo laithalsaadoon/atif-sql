@@ -1,14 +1,16 @@
 # atif-sql · Module map
 
-The uv workspace members live under `packages/*`, declared at `pyproject.toml:100`; the root carries
-no `[project]` table because it is a virtual workspace holding only the member list, the shared dev
-dependency-group, and the shared tool config (`pyproject.toml:1`). The internal import graph is a
+The uv workspace members live under `packages/*`, declared at `pyproject.toml:111`. The root is
+both the workspace and the one published distribution: its `[project]` table builds a single
+`atif-sql` wheel carrying all seven module trees, its dependency list is the union of the members'
+third-party requirements, and it also holds the shared dev dependency-group and the shared tool
+config (`pyproject.toml:1`, `:16`, `:34`). The internal import graph is a
 star: atif-cli declares its siblings as `==`-pinned dependencies
 (`packages/atif-cli/pyproject.toml:32`), plus one further edge from atif-analytics to atif-models that
-a `forbidden` import-linter contract leaves open (`pyproject.toml:520`), with every other pair closed
-by an `independence` contract (`pyproject.toml:515`). Every cross-package import sits inside a
+a `forbidden` import-linter contract leaves open (`pyproject.toml:608`), with every other pair closed
+by an `independence` contract (`pyproject.toml:603`). Every cross-package import sits inside a
 function body or a `TYPE_CHECKING` block so the CLI's fast path pulls in no duckdb, harbor, lancedb,
-boto3, or polars, which is why `PLC0415` is ignored workspace-wide (`pyproject.toml:164`). Modules
+boto3, or polars, which is why `PLC0415` is ignored workspace-wide (`pyproject.toml:227`). Modules
 below are ordered by total source size, descending.
 
 ## atif-analytics
@@ -16,18 +18,25 @@ below are ordered by total source size, descending.
 `run_analyze` composes the LLM pipelines in a fixed stage order: classify, conflicts, friction,
 perceived (`packages/atif-analytics/src/atif_analytics/application/analyze.py:36`). Every stage calls
 a model and honors `dry_run`, which defaults to True as a cost guard so the stages return plan dicts
-instead of spending (`:13`). Every classifier system prompt lives in one module,
-each assembled by concatenating a shared appendix
-(`packages/atif-analytics/src/atif_analytics/application/prompts.py:739`), and the pydantic v2
+instead of spending (`:13`); each plan turns a measured prompt length into tokens at the resolved
+model's own `chars_per_token`
+(`packages/atif-analytics/src/atif_analytics/domain/costs.py:28`). Every classifier system prompt
+lives in one module, each assembled by joining a task body to shared sections
+(`packages/atif-analytics/src/atif_analytics/application/prompts.py:714`), and the same text goes to
+both model families. The user message comes from the same module: the transcript, or friction's one
+message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:742`,
+`:753`). The pydantic v2
 response schemas they bind against are pure domain models whose field descriptions are themselves
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
 wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
 table (`packages/atif-analytics/src/atif_analytics/domain/authorship.py`). This is the one member
-permitted to import a sibling: atif-models and nothing else (`pyproject.toml:520`).
+permitted to import a sibling: atif-models and nothing else (`pyproject.toml:608`).
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py`: the task-framing
   system prompts, public constants assembled at
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:739`.
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:714`, the request lines
+  (`:726`), and the two user-message builders, `transcript_prompt` (`:742`) and `message_prompt`
+  (`:753`).
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py`: the
   friction tiers behind a human-turn and message-length pre-filter: regex fast path, deterministic
   stamp rules, then the LLM (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:5`).
@@ -42,6 +51,12 @@ permitted to import a sibling: atif-models and nothing else (`pyproject.toml:520
   per interactive session carrying `work_category` and `goal`, anti-joined against the parquet cache
   and written in crash-resilient chunks
   (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:3`).
+- `packages/atif-analytics/src/atif_analytics/domain/transcript.py`: `render_session_text`
+  renders the transcript a stage sends, each tool result as a one-line stub with the content's
+  length, so what a tool returned stays on disk and never reaches Bedrock
+  (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:247`).
+  `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
+  characters (`packages/atif-analytics/src/atif_analytics/domain/config.py:21`).
 - `packages/atif-analytics/src/atif_analytics/domain/models.py`: the response schemas, from
   `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:22`) to
   `PerceivedErrorsResult` (`:355`).
@@ -58,7 +73,7 @@ macros register separately, each only when its backing parquet is populated, bec
 `atif-sql analyze` run is the default state
 (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`). It is the one member with
 `domain/` and `infrastructure/` but no `application/`, a deliberate shape that is why it carries no
-layers contract among the members (`pyproject.toml:462`).
+layers contract among the members (`pyproject.toml:550`).
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py`: the raw readers, most
   of the core views and macros, and the Lance attach path
@@ -319,41 +334,70 @@ table doesn't price is NULL. litellm is a dev dependency, for the identity test 
 ## atif-models
 
 A deliberately narrow seam: a system prompt, a user prompt, and a pydantic schema in; a validated
-instance of that schema out (`packages/atif-models/src/atif_models/domain/ports.py:116`). Its only
+instance of that schema out (`packages/atif-models/src/atif_models/domain/ports.py:131`). Its only
 in-repo consumer is atif-analytics, the single edge the `forbidden` contract leaves open
-(`pyproject.toml:520`), and the registry is the only place in the workspace where a Bedrock model id
+(`pyproject.toml:608`), and the registry is the only place in the workspace where a Bedrock model id
 is written down, so a pipeline names a family and a size alias and lets `resolve` pick the id
-(`packages/atif-models/src/atif_models/domain/registry.py:6`, `:109`). The default adapter posts an
-OpenAI chat-completions body to `invoke_model` in strict `json_schema` mode, dispatching the blocking
-call through `anyio.to_thread` under a capacity limiter with tenacity owning the retry loop and
-botocore's own retries disabled
-(`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:142`). Strict mode demands
-`additionalProperties: false` at every object level and every property listed in `required`, which one
-pure transform enforces before the schema reaches the wire
+(`packages/atif-models/src/atif_models/domain/registry.py:6`, `:162`). Small, medium, and large resolve
+to the GPT-6 models (`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`) in the openai family, the default,
+and to Claude Haiku 5.5, Sonnet 5.5, and Opus 5.5 in the anthropic family (`:95`). Both families run:
+`build_structured_provider` picks the adapter by the spec's family and imports only that adapter's
+module (`packages/atif-models/src/atif_models/infrastructure/providers.py:20`). The openai adapter
+posts an OpenAI chat-completions body to `invoke_model` in strict `json_schema` mode
+(`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:81`). The anthropic adapter
+posts a Messages body whose `output_config.format` carries the schema, after the Anthropic SDK's
+`transform_schema` moves the constraints Claude rejects into the field descriptions
+(`packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:172`). Both dispatch the
+blocking call through `anyio.to_thread` under a capacity limiter, with tenacity owning the retry loop
+and botocore's own retries disabled in the client they build the same way
+(`packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:88`). OpenAI strict mode
+demands `additionalProperties: false` at every object level and every property listed in `required`,
+which one pure transform enforces before the schema reaches the wire
 (`packages/atif-models/src/atif_models/domain/schema.py:40`).
 
+- `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py`:
+  `AnthropicBedrockProvider`
+  (`packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:130`), which joins the
+  `text` blocks that follow any `thinking` block, folds a string enum value that differs from the
+  schema only in letter case onto the declared one (`fold_enum_case`, `:102`), raises
+  `RefusalError` on `stop_reason: refusal`, and retries a `max_tokens` stop once at one effort step
+  lower (`:185`, `:239`); usage extraction (`:81`).
 - `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py`:
   `OpenAiBedrockProvider`
-  (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:142`), the retryable-code
-  set (`:63`), and usage extraction (`:124`).
+  (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:81`), which retries a
+  `length` finish once at one effort step lower (`:149`), and usage extraction (`:63`).
 - `packages/atif-models/src/atif_models/domain/registry.py`: `ModelSpec`
-  (`packages/atif-models/src/atif_models/domain/registry.py:39`), `resolve` (`:109`), and
-  `estimate_cost` over per-1M-token rates (`:125`).
+  (`packages/atif-models/src/atif_models/domain/registry.py:50`), whose long-context threshold and
+  rates price a request over the threshold at the long rates and whose `chars_per_token` is the
+  family's measured characters per token on rendered transcripts; `resolve` (`:162`),
+  `is_long_context` (`:175`), and `estimate_cost` over per-1M-token rates, which bills the
+  long-context share of the tokens at the long rates (`:180`).
 - `packages/atif-models/src/atif_models/domain/ports.py`: the `LlmStructuredProvider`
-  Protocol (`packages/atif-models/src/atif_models/domain/ports.py:116`), the
-  terminal-versus-retryable error split (`:43`), and lock-guarded usage accumulation (`:78`).
+  Protocol (`packages/atif-models/src/atif_models/domain/ports.py:131`), the
+  terminal-versus-retryable error split (`:43`), and lock-guarded usage accumulation that keeps the
+  long-context share apart (`:81`).
 - `packages/atif-models/src/atif_models/domain/schema.py`: `to_openai_strict` keeps `$defs`
   and `$ref`, drops `default` and `title`
   (`packages/atif-models/src/atif_models/domain/schema.py:40`).
+- `packages/atif-models/src/atif_models/infrastructure/bedrock_common.py`: what both adapters
+  share: the retryable-code set (`packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:31`)
+  and its predicate `is_retryable` (`:66`), the one-step effort ladder for a truncated response
+  (`:50`), the `LengthTruncation` marker (`:58`), the backoff log line (`:76`), and
+  `build_runtime_client` (`:88`).
 - `packages/atif-models/src/atif_models/infrastructure/settings.py`: `LlmSettings` carries
   the family, region, concurrency, and per-pipeline size overrides
-  (`packages/atif-models/src/atif_models/infrastructure/settings.py:28`).
+  (`packages/atif-models/src/atif_models/infrastructure/settings.py:28`), and settings load refuses
+  a family outside `RUNNABLE_FAMILIES`, openai and anthropic (`:25`).
+- `packages/atif-models/src/atif_models/infrastructure/providers.py`:
+  `build_structured_provider`, the factory atif-analytics calls: anthropic gets
+  `AnthropicBedrockProvider` and openai gets `OpenAiBedrockProvider`, each module imported only when
+  its family is asked for (`packages/atif-models/src/atif_models/infrastructure/providers.py:20`).
 - `packages/atif-models/src/atif_models/__init__.py`: states the ownership rule: no other
   member hardcodes a model id (`packages/atif-models/src/atif_models/__init__.py:9`).
 - `packages/atif-models/src/atif_models/domain/__init__.py`: the pure layer: no boto3, no
   env, no clock (`packages/atif-models/src/atif_models/domain/__init__.py:7`).
-- `packages/atif-models/src/atif_models/infrastructure/__init__.py`: adapters and env
-  settings, importing downward into `domain` only
+- `packages/atif-models/src/atif_models/infrastructure/__init__.py`: the adapters, the factory, and
+  env settings, importing downward into `domain` only
   (`packages/atif-models/src/atif_models/infrastructure/__init__.py:7`).
 
 ## See also

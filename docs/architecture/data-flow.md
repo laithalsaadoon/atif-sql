@@ -203,9 +203,9 @@ sequenceDiagram
    reading ahead in the newest-first walk order, and every other session from its files. Without
    a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json.zst` (or the plain file on an old-layout session);
    atif-analytics never imports DuckDB or atif-duck, which the `forbidden` import contract puts
-   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:225`).
+   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238`).
    Either way the steps sit behind the reader's bounded memos
-   (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:263`), and the
+   (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:317`), and the
    reader labels each session's kind with the same rule `session_outcomes.kind` applies, so
    classify and conflicts can skip `turn_audit` and `one_shot_job` sessions.
 4. Before the first stage starts, one `RunBudget` is constructed from the per-run dollar ceiling
@@ -214,10 +214,25 @@ sequenceDiagram
    the budget exhausted is skipped with nothing stamped (`:123`).
 5. A stage drops the sessions whose checkpoint row still matches their mtime and last step
    timestamp, so a re-run costs nothing for unchanged work (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:137`).
-6. The concrete provider satisfies `LlmStructuredProvider` structurally, and its synchronous inner
-   method is the only place a Bedrock `invoke_model` call is issued, under tenacity retry with
-   token usage accumulated against the budget (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:258`).
-7. Results land as sharded `part-<ns>.parquet` files under `<corpus_root>/analytics/`
+6. Each call's user message is the session transcript (friction sends one short message instead)
+   fenced in a tag pair whose id is a digest of the text, so the text can't close its own fence,
+   then the one-line request (`packages/atif-analytics/src/atif_analytics/application/prompts.py:742`,
+   `:753`). The renderer writes each tool result as a one-line stub with the content's length, so
+   what a tool returned stays on disk and never reaches Bedrock;
+   `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
+   characters (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:247`).
+7. `build_structured_provider` picks the adapter by the resolved spec's family and imports only that
+   adapter's module: `OpenAiBedrockProvider` for openai, the default, and `AnthropicBedrockProvider`
+   for anthropic (`packages/atif-models/src/atif_models/infrastructure/providers.py:20`). Each
+   satisfies `LlmStructuredProvider` structurally, and each one's synchronous `_invoke_sync` is the
+   only place it issues a Bedrock `invoke_model` call, under tenacity retry with token usage
+   accumulated against the budget
+   (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:190`,
+   `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:228`). A truncated
+   response is retried once at one reasoning-effort step lower
+   (`packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:50`), and a refusal raises
+   the terminal `RefusalError`.
+8. Results land as sharded `part-<ns>.parquet` files under `<corpus_root>/analytics/`
    (`packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`), and each
    completed session is upserted into the SQLite WAL checkpoint (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:180`).
 
@@ -233,9 +248,11 @@ sequenceDiagram
     Ana->>Disk: CorpusReader.load_steps (lake batch, or json over the stored trajectory)
     Disk-->>Ana: StepEvent rows
     loop each LLM stage under one RunBudget
+        Ana->>Models: build_structured_provider(spec), the family's adapter
         Ana->>Disk: filter_unchanged against state.db
-        Ana->>Models: classify_structured(prompt, schema)
-        Models->>Bedrock: invoke_model (tenacity retry)
+        Ana->>Ana: render transcript, tool results as size stubs
+        Ana->>Models: classify_structured(system, fenced transcript + request, schema)
+        Models->>Bedrock: invoke_model, chat-completions or Messages body (tenacity retry)
         Bedrock-->>Models: structured JSON + usage
         Models-->>Ana: parsed rows, cost accrued
         Ana->>Disk: write_part parquet, mark_completed

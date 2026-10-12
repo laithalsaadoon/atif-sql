@@ -101,15 +101,19 @@ sequenceDiagram
     participant ORCH as run_analyze
     participant RD as CorpusReader
     participant LLM as LLM stages
+    participant PV as provider adapter
     participant BR as Bedrock runtime
     participant AN as analytics dir
     CLI->>ORCH: run_analyze()
     ORCH->>RD: CorpusReader()
     ORCH->>LLM: stage fns
+    LLM->>PV: build_structured_provider()
     LLM->>AN: checkpoint read
     LLM->>RD: session_text()
-    LLM->>BR: invoke_model()
-    BR-->>LLM: schema JSON
+    LLM->>PV: classify_structured()
+    PV->>BR: invoke_model()
+    BR-->>PV: response JSON
+    PV-->>LLM: schema instance
     LLM->>AN: write_part
 ```
 
@@ -119,33 +123,46 @@ Sources, in dispatch order:
   `run_analyze` called at `:1312`.
 - run_analyze: `packages/atif-analytics/src/atif_analytics/application/analyze.py:36`; the
   `stages` list at `:97-102`, each stage invoked at `:123`.
-- CorpusReader: `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`,
+- CorpusReader: `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:314`,
   constructed once per run at
   `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`; `session_text` at
-  `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:289`.
+  `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:484`.
 - LLM stages: the classify exemplar at
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368`; provider built
-  by `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36`, structured
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:374`; structured
   call dispatched at
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:214`.
-- Bedrock runtime: `OpenAiBedrockProvider.classify_structured`
-  `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:217`, blocking
-  `invoke_model` at `:261` on the `bedrock-runtime` client built at `:195`.
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:218`, its user
+  message the fenced transcript and request line built by
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:742`.
+- provider adapter: built once per stage by
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36` through
+  `build_structured_provider` at
+  `packages/atif-models/src/atif_models/infrastructure/providers.py:20`, which returns
+  `OpenAiBedrockProvider` for the default `openai` family
+  (`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:81`;
+  `classify_structured` at `:149`, response parsed into the schema instance at `:201`)
+  and `AnthropicBedrockProvider` for `anthropic`
+  (`packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:130`;
+  `classify_structured` at `:185`, response parsed at `:239`).
+- Bedrock runtime: blocking `invoke_model` at
+  `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:193` and
+  `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:231`, on the
+  `bedrock-runtime` client both adapters build through
+  `packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:88`.
 - analytics dir: `<corpus_root>/analytics/`, defined at
   `packages/atif-analytics/src/atif_analytics/domain/layout.py:51`, holding both the sharded parquet
   caches (`write_part`
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`, called at
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:278`) and the single
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:282`) and the single
   SQLite WAL `state.db`
   (`packages/atif-analytics/src/atif_analytics/domain/layout.py:81`).
 - analytics dir, SQLite arm: `filter_unchanged`
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:137` called
-  at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:111`;
+  at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:115`;
   `mark_completed`
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:300` called
-  at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:286`; retry drain
+  at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:290`; retry drain
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:265` called
-  at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:120`.
+  at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:124`.
 
 ## See also
 
