@@ -172,6 +172,13 @@ pre-push:
       # edit that trips an error-level rule is cheaper to reword here than after a CI round trip.
       run: mise run docs:prose
 
+    - name: docs-citations
+      # A code change moves the lines a docs citation names without touching the docs, so this
+      # runs on every push, not only on docs changes: about 2 s, against the merge base with
+      # origin/main.
+      run: mise run docs:citations
+      fail_text: "A docs citation points at lines that moved or are gone: run `mise run docs:citations:fix`, then fix what it still names."
+
     - name: docs-links
       # The site build plus `docs:links`, the offline crawl of site/dist that fails on any
       # internal 404 GitHub Pages would serve. Only when the push touches the docs tree or the

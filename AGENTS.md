@@ -428,7 +428,9 @@ lint:hooks + lint:pnpm-lock + security:vex:check + docs:prose + test). `docs:pro
 the published prose (docs/, site/authored/, README.md, AGENTS.md, CONTRIBUTING.md) at error level,
 with a file floor per glob so a shrunken scope is red, and a per-rule warning ratchet against `.vale-baseline.json`: reword the sentence it flags, or add a real term to `.vale/styles/config/vocabularies/atif-sql/accept.txt`. When a count falls, run `mise run docs:prose:baseline` and commit the lower file; never raise it. A spaced dash is an error (`Google.EmDash`), not a warning: write a colon, comma, period, or parentheses instead. `mise run security` is the report-only tier beside it: findings do not fail
 it, a scanner that produced no usable report does.
-A change under docs/ or site/ also needs `mise run docs:gate`: the site build, then `docs:links`,
+A change that moves cited code needs `mise run docs:citations`, which fails on a docs citation whose
+lines moved, were removed, or don't exist; `mise run docs:citations:fix` re-points the moved ones.
+A change under docs/ or site/ also needs `mise run docs:gate`: `docs:citations`, the site build, then `docs:links`,
 which crawls site/dist as GitHub Pages serves it and fails on any internal 404, then `astro check` and
 the site's dist probes (`pnpm run check && pnpm run test` in site/). Link page to page by
 relative `.md` path as GitHub renders it; the build turns each link into the page's route, or into

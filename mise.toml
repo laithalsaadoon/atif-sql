@@ -816,9 +816,29 @@ description = "Crawl the deployed docs site from its sitemap: fail on any intern
 # the rule scripts/vale_gate.py states for its docs/ floor.
 run = "python3 scripts/docs_links.py live --min-pages 15"
 
+[tasks."docs:citations"]
+description = "Fail on a docs citation whose lines don't exist, or whose cited code moved since the base commit"
+# Two checks over docs/ and site/authored/, the Markdown the site's citation pass links. Static:
+# every `path:LINE` names a tracked file and lines inside it, and every `:LINE` shorthand has an
+# antecedent. Drift: each citation on a doc line this change leaves alone is mapped through its
+# cited file's diff from the base (ATIF_SQL_CITATIONS_BASE, which docs.yml sets to the pull
+# request's base, else the merge base with origin/main); a moved block fails with the new span,
+# removed or rewritten lines fail for a reader to re-point, an edit in place prints a note.
+# citation-links.ts checks only that a path exists, which is how 1,318 of main's 2,177 citations
+# came to need a re-point, a rewrite, or removal by 2026-10-12. `python3`: stdlib only, like the other
+# gate helpers. Its planted-defect tests (packages/atif-cli/tests/test_docs_citations.py) run
+# under `test`, and one of them runs the static check over the real tree, so `check` holds it.
+run = "python3 scripts/docs_citations.py"
+
+[tasks."docs:citations:fix"]
+description = "Rewrite every citation docs:citations reports as moved to the lines its code moved to"
+# Only `moved` findings: the same text at new line numbers, so the rewrite is mechanical. A
+# `changed` finding needs a reader, and the task prints it again after the rewrite.
+run = "python3 scripts/docs_citations.py --fix"
+
 [tasks."docs:gate"]
-description = "Docs site definition of done: build + built-site link crawl + astro check + the dist probes"
-depends = ["docs:build", "docs:links"]
+description = "Docs site definition of done: citations + build + built-site link crawl + astro check + the dist probes"
+depends = ["docs:citations", "docs:build", "docs:links"]
 dir = "site"
 # The probes read site/dist rather than the inputs, and derive every count from the build —
 # a hardcoded page or diagram count would pass a build that emitted neither.

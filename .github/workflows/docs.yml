@@ -66,9 +66,13 @@ jobs:
 
       - run: mise run docs:install
 
+      # ATIF_SQL_CITATIONS_BASE is what `docs:citations` maps each citation forward from: the
+      # pull request's base, or on a push the commit main held before it. Empty on a manual run,
+      # where the gate falls back to the merge base with origin/main.
       - name: gate the site
         env:
           ATIF_SQL_DOCS_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          ATIF_SQL_CITATIONS_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: mise run docs:gate
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
