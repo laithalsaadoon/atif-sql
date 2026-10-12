@@ -13,13 +13,17 @@ workspace (CONTRACT-V2 §Model registry / §Client contract).
 - `atif_models.infrastructure.openai_bedrock` — the default provider:
   OpenAI chat-completions body shape on `bedrock-runtime` `invoke_model`
   with `response_format: json_schema, strict: true`.
+- `atif_models.infrastructure.anthropic_bedrock` — the Claude provider,
+  with the Anthropic Messages body shape on `invoke_model` and
+  `output_config.format: json_schema`, the schema passed through
+  `anthropic.transform_schema`.
+- `atif_models.infrastructure.providers` — `build_structured_provider`, which
+  picks the adapter for a spec's family.
 - `atif_models.infrastructure.settings` — `ATIF_SQL_LLM_*` env settings,
   per-pipeline size overrides, and `RUNNABLE_FAMILIES`.
 
-`openai` is the only runnable family: the registry carries anthropic model
-ids and pricing, but no anthropic provider adapter exists, so
-`ATIF_SQL_LLM_FAMILY=anthropic` is rejected at settings load rather than
-400-ing on every Bedrock call.
+Both families are runnable. `openai` (GPT-6) is the default, and
+`ATIF_SQL_LLM_FAMILY=anthropic` switches every pipeline to Claude 5.5.
 
 Only atif-cli and atif-analytics may import this package (import-linter
 independence contract at the workspace root).

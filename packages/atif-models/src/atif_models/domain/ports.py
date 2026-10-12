@@ -62,17 +62,20 @@ class ProviderUnavailable(DomainError):  # noqa: N818 — names a provider state
 class CallUsage:
     """Token accounting for one structured-output call.
 
-    ``reasoning_tokens`` is the GPT-5.6 ``completion_tokens_details.reasoning_tokens``
-    count (a subset of ``output_tokens``, already billed as output);
-    ``cached_tokens`` is ``prompt_tokens_details.cached_tokens`` (a subset
-    of ``input_tokens`` billed at the cached rate). Both are 0 when the
-    provider does not report them.
+    ``input_tokens`` counts every input token the request billed, cached
+    ones included. ``reasoning_tokens`` is the reasoning or thinking count
+    (a subset of ``output_tokens``, already billed as output);
+    ``cached_tokens`` is the cache-read count (a subset of ``input_tokens``
+    billed at the cached rate). Both are 0 when the provider does not report
+    them. ``long_context`` is True when the request crossed the model's
+    long-context threshold, so the whole call bills at the long rates.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
     cached_tokens: int = 0
+    long_context: bool = False
 
 
 class UsageAccumulator:
@@ -90,6 +93,8 @@ class UsageAccumulator:
         self._output_tokens = 0
         self._reasoning_tokens = 0
         self._cached_tokens = 0
+        self._long_input_tokens = 0
+        self._long_output_tokens = 0
 
     def add(self, usage: CallUsage) -> None:
         """Fold one call's usage into the totals (safe from any thread)."""
@@ -99,9 +104,17 @@ class UsageAccumulator:
             self._output_tokens += usage.output_tokens
             self._reasoning_tokens += usage.reasoning_tokens
             self._cached_tokens += usage.cached_tokens
+            if usage.long_context:
+                self._long_input_tokens += usage.input_tokens
+                self._long_output_tokens += usage.output_tokens
 
     def summary(self) -> dict[str, int]:
-        """Snapshot of the totals: calls + the four token counters."""
+        """Snapshot of the totals: calls + the token counters.
+
+        ``long_input_tokens`` / ``long_output_tokens`` are the part of the
+        input and output totals from long-context calls, the split
+        :func:`atif_models.domain.registry.estimate_cost` prices.
+        """
         with self._lock:
             return {
                 "calls": self._calls,
@@ -109,6 +122,8 @@ class UsageAccumulator:
                 "output_tokens": self._output_tokens,
                 "reasoning_tokens": self._reasoning_tokens,
                 "cached_tokens": self._cached_tokens,
+                "long_input_tokens": self._long_input_tokens,
+                "long_output_tokens": self._long_output_tokens,
             }
 
 

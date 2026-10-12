@@ -11,7 +11,7 @@ accept a JSON Schema subset with two hard rules this module enforces:
   null branch), never by omitting it from ``required``.
 
 ``$defs``/``$ref`` are KEPT: OpenAI strict accepts them, including a
-``$defs``-referenced enum, on all three gpt-5.6 sizes. Ref inlining is a
+``$defs``-referenced enum, on all three GPT-6 sizes. Ref inlining is a
 per-provider wire-format concern, so it belongs in whichever adapter needs
 it rather than here.
 

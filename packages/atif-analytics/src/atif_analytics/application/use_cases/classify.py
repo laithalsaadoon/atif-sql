@@ -41,7 +41,11 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 from loguru import logger
 
-from atif_analytics.application.prompts import CLASSIFY_SYSTEM_PROMPT
+from atif_analytics.application.prompts import (
+    CLASSIFY_REQUEST,
+    CLASSIFY_SYSTEM_PROMPT,
+    transcript_prompt,
+)
 from atif_analytics.application.use_cases._shared import (
     RunBudget,
     build_cache,
@@ -75,7 +79,7 @@ _PARQUET_SCHEMA: dict[str, Any] = {
 
 #: Dry-run OUTPUT budget per session (~150 structured-output tokens: two
 #: labels and a one-sentence goal). Input
-#: is MEASURED from the rendered transcript (chars/4), never a static prior:
+#: is MEASURED from the rendered transcript (at the model's chars-per-token ratio), never a static prior:
 #: a real transcript runs an order of magnitude past any fixed guess.
 _AVG_OUT_TOKENS = 150
 
@@ -213,7 +217,7 @@ async def _classify_async(
             pending[i : i + chunk_size],
             make_coro=lambda unit: provider.classify_structured(
                 system=CLASSIFY_SYSTEM_PROMPT,
-                prompt=unit[1],
+                prompt=transcript_prompt(unit[1], request=CLASSIFY_REQUEST),
                 schema=SessionClassification,
             ),
             budget=budget,
@@ -316,7 +320,7 @@ def _dry_run_plan(
     """The classify ``--dry-run`` plan dict, with measured token counts.
 
     Input tokens are MEASURED per pending session from the actual rendered
-    transcript (chars/4) instead of a static average, and the plan surfaces
+    transcript (at the model's chars-per-token ratio) instead of a static average, and the plan surfaces
     the budget ceilings plus the capped session count — what WOULD run.
     The kind gate applies here as in the real run: only interactive
     sessions count toward the cap and the estimate.
@@ -334,7 +338,9 @@ def _dry_run_plan(
             skipped_kind += 1
             continue
         capped.append(sid)
-    in_tokens = sum(tokens_for_chars(len(text)) for text in reader.session_texts(capped))
+    in_tokens = sum(
+        tokens_for_chars(len(text), spec.chars_per_token) for text in reader.session_texts(capped)
+    )
     out_tokens = len(capped) * _AVG_OUT_TOKENS
     pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)
     cost = estimate_cost_tokens(in_tokens, out_tokens, pricing)

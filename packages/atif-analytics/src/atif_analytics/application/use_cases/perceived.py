@@ -64,7 +64,11 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 from loguru import logger
 
-from atif_analytics.application.prompts import PERCEIVED_SYSTEM_PROMPT
+from atif_analytics.application.prompts import (
+    PERCEIVED_REQUEST,
+    PERCEIVED_SYSTEM_PROMPT,
+    transcript_prompt,
+)
 from atif_analytics.application.use_cases._shared import (
     RunBudget,
     build_cache,
@@ -106,7 +110,7 @@ _PARQUET_SCHEMA: dict[str, Any] = {
 _MIN_HUMAN_AI_PAIRS = 2
 
 #: Dry-run OUTPUT budget per session (structured array, conflicts-sized).
-#: Input is MEASURED from the rendered uuid-headed transcript (chars/4).
+#: Input is MEASURED from the rendered uuid-headed transcript (at the model's chars-per-token ratio).
 _AVG_OUT_TOKENS = 400
 
 
@@ -249,7 +253,7 @@ async def _perceived_async(
             pending[i : i + chunk_size],
             make_coro=lambda unit: provider.classify_structured(
                 system=PERCEIVED_SYSTEM_PROMPT,
-                prompt=unit[1],
+                prompt=transcript_prompt(unit[1], request=PERCEIVED_REQUEST),
                 schema=PerceivedErrorsResult,
             ),
             budget=budget,
@@ -389,7 +393,7 @@ def detect_perceived_errors(
 
     if dry_run:
         # Measured estimation: input tokens from the actual rendered
-        # uuid-headed transcript (chars/4), eligibility-gated and capped
+        # uuid-headed transcript (at the model's chars-per-token ratio), eligibility-gated and capped
         # like the real run.
         already = _already_done(cache)
         bounds = reader.session_bounds(since_days=since_days, limit=limit)
@@ -398,7 +402,8 @@ def detect_perceived_errors(
         max_sessions = settings.llm_max_sessions_per_run
         capped = eligible[:max_sessions]
         in_tokens = sum(
-            tokens_for_chars(len(text)) for text in reader.session_texts(capped, include_uuids=True)
+            tokens_for_chars(len(text), spec.chars_per_token)
+            for text in reader.session_texts(capped, include_uuids=True)
         )
         out_tokens = len(capped) * _AVG_OUT_TOKENS
         pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)

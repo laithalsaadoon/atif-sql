@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""LIVE smoke: one strict structured-output call per openai registry entry.
+"""LIVE smoke: one structured-output call per registry entry.
 
-Calls luna, terra, and sol once each through
-:class:`atif_models.infrastructure.openai_bedrock.OpenAiBedrockProvider`
-with a tiny schema at the registry defaults (reasoning_effort=high,
-max_completion_tokens=32000), verifies the strict output parses through
-pydantic, and prints per-model latency + usage + estimated cost.
+Calls the small, medium, and large model of each family once through the
+adapter :func:`atif_models.infrastructure.providers.build_structured_provider`
+picks, with a tiny schema at the registry defaults (reasoning_effort=high,
+max_completion_tokens=32000), verifies the output parses through pydantic,
+and prints per-model latency + usage + estimated cost.
 
 Costs real money (fractions of a cent) and needs ambient AWS creds with
 bedrock-runtime access in us-east-1. Run from the workspace root:
@@ -24,8 +24,9 @@ from enum import StrEnum
 import anyio
 from pydantic import BaseModel, Field
 
-from atif_models.domain.registry import Size, estimate_cost, resolve
-from atif_models.infrastructure.openai_bedrock import OpenAiBedrockProvider
+from atif_models.domain.ports import UsageAccumulator
+from atif_models.domain.registry import Family, Size, estimate_cost, resolve
+from atif_models.infrastructure.providers import build_structured_provider
 
 REGION = "us-east-1"
 
@@ -58,13 +59,14 @@ class SmokeVerdict(BaseModel):
     caveat: str | None = None
 
 
-async def _smoke_one(size: Size) -> None:
-    spec = resolve(size)
-    provider = OpenAiBedrockProvider(spec, region=REGION, concurrency=1)
+async def _smoke_one(family: Family, size: Size) -> None:
+    spec = resolve(size, family)
+    accumulator = UsageAccumulator()
+    provider = build_structured_provider(spec, region=REGION, concurrency=1, usage=accumulator)
     t0 = time.monotonic()
     verdict = await provider.classify_structured(system=SYSTEM, prompt=PROMPT, schema=SmokeVerdict)
     elapsed = time.monotonic() - t0
-    usage = provider.usage.summary()
+    usage = accumulator.summary()
     cost = estimate_cost(
         spec, input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"]
     )
@@ -76,8 +78,9 @@ async def _smoke_one(size: Size) -> None:
 
 
 async def _main() -> None:
-    for size in ("small", "medium", "large"):
-        await _smoke_one(size)
+    for family in ("openai", "anthropic"):
+        for size in ("small", "medium", "large"):
+            await _smoke_one(family, size)
 
 
 if __name__ == "__main__":

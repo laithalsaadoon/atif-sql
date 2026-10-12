@@ -16,18 +16,20 @@ post-run usage log uses the atif-models one.
 
 from __future__ import annotations
 
-#: The chars→tokens heuristic every measured dry-run estimate uses. Four
-#: chars per token is the standard English/code prior. Measuring the real
-#: rendered length matters more than the ratio: a fixed per-call "avg
-#: tokens" constant understates a real transcript by an order of magnitude.
-CHARS_PER_TOKEN: int = 4
+#: The fallback chars→tokens ratio, the standard English/code prior. The
+#: dry-run plans pass the resolved model's own ``ModelSpec.chars_per_token``
+#: instead, because tokenizers differ: on coding-agent transcripts GPT-6
+#: measured 3.3 and Claude 5.5 measured 2.2. Measuring the real rendered
+#: length matters more than the ratio: a fixed per-call "avg tokens"
+#: constant understates a real transcript by an order of magnitude.
+CHARS_PER_TOKEN: float = 4.0
 
 
-def tokens_for_chars(chars: int) -> int:
-    """Estimate the token count of ``chars`` characters (chars/4, floor 1 when non-empty)."""
+def tokens_for_chars(chars: int, chars_per_token: float = CHARS_PER_TOKEN) -> int:
+    """Estimate the token count of ``chars`` characters (floor 1 when non-empty)."""
     if chars <= 0:
         return 0
-    return max(1, chars // CHARS_PER_TOKEN)
+    return max(1, int(chars / chars_per_token))
 
 
 def estimate_cost_tokens(

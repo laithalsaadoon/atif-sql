@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 from loguru import logger
 
-from atif_analytics.application.prompts import USER_FRICTION_SYSTEM_PROMPT
+from atif_analytics.application.prompts import USER_FRICTION_SYSTEM_PROMPT, message_prompt
 from atif_analytics.application.use_cases._shared import (
     RunBudget,
     build_cache,
@@ -110,38 +110,12 @@ _WS_RE = re.compile(r"\s+")
 _SHORT_REVERT_MAX_CHARS = 30
 
 #: Dry-run OUTPUT budget per LLM message (~60 tokens of structured output).
-#: Input is MEASURED at plan time as system prompt + template + ~250 chars
-#: of message (the candidate cutoff is 300): the envelope, not the message,
+#: Input is MEASURED at plan time as system prompt + fenced message (~250 chars
+#: of message; the candidate cutoff is 300): the envelope, not the message,
 #: is most of the per-call bill, so estimating from the message alone
 #: understates it by more than an order of magnitude.
 _AVG_OUT_TOKENS = 60
 _AVG_MESSAGE_CHARS = 250
-
-_USER_PROMPT_TEMPLATE = """\
-Classify the following SHORT USER MESSAGE from a Claude Code coding session.
-
-You're looking for FRICTION SIGNALS — cues that the human is impatient,
-confused, interrupting the agent, correcting it, or asking for something
-the agent should have provided proactively but didn't.
-
-Examples of NON-obvious friction:
-- "screenshot?" → unmet_expectation (agent should have shared a screenshot)
-- "tests?" → unmet_expectation (agent didn't run tests)
-- "link?" → unmet_expectation (agent referenced a resource without linking)
-- "why?" / "why did you do that?" → confusion
-- "wait" / "actually..." → interruption
-- "no not that" / "nope" → correction
-- "are you there?" / "you alive?" → status_ping
-
-The MAJORITY of short messages are ordinary task instructions and should
-get label=none. Only flag a friction signal when the cue is clear.
-
-USER MESSAGE:
-```
-{text}
-```
-"""
-
 
 # ---------------------------------------------------------------------------
 # Candidates + deterministic stamp tier
@@ -426,7 +400,7 @@ async def _friction_async(
             llm_pending[i : i + chunk_size],
             make_coro=lambda unit: provider.classify_structured(
                 system=USER_FRICTION_SYSTEM_PROMPT,
-                prompt=_USER_PROMPT_TEMPLATE.format(text=unit[3]),
+                prompt=message_prompt(unit[3]),
                 schema=UserFrictionSignal,
             ),
             budget=budget,
@@ -559,8 +533,9 @@ def detect_user_friction(
         provider, spec = build_provider(settings, "friction")
 
     if dry_run:
-        # Measured estimation: candidate count × ~250 in-tokens (template +
-        # short message), capped at the session ceiling like the real run.
+        # Measured estimation: candidate count × the per-call input (system
+        # prompt + fenced short message), capped at the session ceiling like
+        # the real run.
         bounds = reader.session_bounds(since_days=since_days, limit=limit)
         max_sessions = settings.llm_max_sessions_per_run
         if limit is not None:
@@ -581,11 +556,11 @@ def detect_user_friction(
         # estimate must bound the worst case, not the average.
         llm_n = n
         # Per-call input measured from what each call actually sends: the
-        # system prompt + the rendered template + ~250 chars of message.
-        per_call_chars = (
-            len(USER_FRICTION_SYSTEM_PROMPT) + len(_USER_PROMPT_TEMPLATE) + _AVG_MESSAGE_CHARS
+        # system prompt + the fenced ~250-char message and its request line.
+        per_call_chars = len(USER_FRICTION_SYSTEM_PROMPT) + len(
+            message_prompt("x" * _AVG_MESSAGE_CHARS)
         )
-        in_tokens = llm_n * tokens_for_chars(per_call_chars)
+        in_tokens = llm_n * tokens_for_chars(per_call_chars, spec.chars_per_token)
         pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)
         cost = estimate_cost_tokens(in_tokens, llm_n * _AVG_OUT_TOKENS, pricing)
         logger.info(

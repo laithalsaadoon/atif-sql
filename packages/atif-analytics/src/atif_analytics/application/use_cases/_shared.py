@@ -40,13 +40,14 @@ def build_provider(
 
     Size assignments (atif-models ``LlmSettings``): classify=small,
     conflicts=large, friction=small, perceived=medium — all resolved through
-    the atif-models registry (no model id is written down here).
+    the atif-models registry (no model id is written down here), and the
+    adapter is the one atif-models wires for the spec's family.
     """
-    from atif_models.infrastructure.openai_bedrock import OpenAiBedrockProvider
+    from atif_models.infrastructure.providers import build_structured_provider
 
     llm = settings.llm()
     spec = llm.spec_for(pipeline)
-    provider = OpenAiBedrockProvider(
+    provider = build_structured_provider(
         spec,
         region=llm.llm_region,
         concurrency=llm.llm_concurrency,
@@ -54,7 +55,7 @@ def build_provider(
     logger.info(
         "{}: provider={} model={} concurrency={}",
         pipeline,
-        provider.provider,
+        getattr(provider, "provider", spec.family),
         spec.model_id,
         llm.llm_concurrency,
     )
@@ -78,6 +79,8 @@ def pipeline_usage(
                 spec,
                 input_tokens=summary["input_tokens"],
                 output_tokens=summary["output_tokens"],
+                long_input_tokens=summary.get("long_input_tokens", 0),
+                long_output_tokens=summary.get("long_output_tokens", 0),
             )
             logger.info(
                 "{}: usage calls={} in={} out={} reasoning={} cached={} est_cost={}",
@@ -134,6 +137,8 @@ class RunBudget:
                 spec,
                 input_tokens=summary["input_tokens"],
                 output_tokens=summary["output_tokens"],
+                long_input_tokens=summary.get("long_input_tokens", 0),
+                long_output_tokens=summary.get("long_output_tokens", 0),
             )
             total += cost or 0.0
         return total

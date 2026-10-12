@@ -54,7 +54,11 @@ from typing import TYPE_CHECKING, Any
 import polars as pl
 from loguru import logger
 
-from atif_analytics.application.prompts import CONFLICTS_SYSTEM_PROMPT
+from atif_analytics.application.prompts import (
+    CONFLICTS_REQUEST,
+    CONFLICTS_SYSTEM_PROMPT,
+    transcript_prompt,
+)
 from atif_analytics.application.use_cases._shared import (
     RunBudget,
     build_cache,
@@ -92,7 +96,7 @@ _PARQUET_SCHEMA: dict[str, Any] = {
 }
 
 #: Dry-run OUTPUT budget per session (~400 structured-output tokens). Input
-#: is MEASURED from the rendered uuid-headed transcript (chars/4), never a
+#: is MEASURED from the rendered uuid-headed transcript (at the model's chars-per-token ratio), never a
 #: static prior: a real transcript runs an order of magnitude past any
 #: fixed guess.
 _AVG_OUT_TOKENS = 400
@@ -225,7 +229,7 @@ async def _conflicts_async(
             pending[i : i + chunk_size],
             make_coro=lambda unit: provider.classify_structured(
                 system=CONFLICTS_SYSTEM_PROMPT,
-                prompt=unit[1],
+                prompt=transcript_prompt(unit[1], request=CONFLICTS_REQUEST),
                 schema=ConflictsResult,
             ),
             budget=budget,
@@ -381,7 +385,7 @@ def detect_conflicts(
 
     if dry_run:
         # Measured estimation: input tokens from the actual rendered
-        # uuid-headed transcript (chars/4), capped like the real run.
+        # uuid-headed transcript (at the model's chars-per-token ratio), capped like the real run.
         already = _already_done(cache)
         bounds = reader.session_bounds(since_days=since_days, limit=limit)
         pending = [sid for sid in bounds if sid not in already]
@@ -396,7 +400,8 @@ def detect_conflicts(
                 continue
             capped.append(sid)
         in_tokens = sum(
-            tokens_for_chars(len(text)) for text in reader.session_texts(capped, include_uuids=True)
+            tokens_for_chars(len(text), spec.chars_per_token)
+            for text in reader.session_texts(capped, include_uuids=True)
         )
         out_tokens = len(capped) * _AVG_OUT_TOKENS
         pricing = (spec.pricing_in or 0.0, spec.pricing_out or 0.0)

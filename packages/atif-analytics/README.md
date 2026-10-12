@@ -6,9 +6,9 @@ The v2 analytics pipelines over the materialized ATIF corpus:
   read the materialized corpus (`trajectory.json` steps + `edges.jsonl`,
   each stored compressed or plain),
   render session transcripts under the documented caps, and classify through
-  `atif_models.LlmStructuredProvider` (GPT-5.6 strict structured outputs on
-  bedrock-runtime; sizes classify=luna, conflicts=sol, friction=luna,
-  perceived=terra). `classify` labels `work_category` and `goal` only.
+  `atif_models.LlmStructuredProvider` (GPT-6 or Claude 5.5 structured
+  outputs on bedrock-runtime; sizes classify=small, conflicts=large,
+  friction=small, perceived=medium). `classify` labels `work_category` and `goal` only.
   `classify` and `conflicts` skip non-interactive sessions (`turn_audit`,
   `one_shot_job`), and `friction` and `perceived` read human turns only.
 * **Authorship** — `atif_analytics.domain.authorship` decides who wrote a

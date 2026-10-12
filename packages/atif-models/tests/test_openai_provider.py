@@ -111,7 +111,7 @@ class TestBodyConstruction:
         provider = _provider(client)
         _run(provider)
         kwargs = client.invoke_model.call_args.kwargs
-        assert kwargs["modelId"] == "global.openai.gpt-5.6-terra"
+        assert kwargs["modelId"] == "global.openai.gpt-6.1-sol"
         assert kwargs["contentType"] == "application/json"
         assert kwargs["accept"] == "application/json"
         assert json.loads(kwargs["body"]) == provider.build_body(
@@ -244,6 +244,8 @@ class TestUsageAccounting:
             "output_tokens": 80,
             "reasoning_tokens": 50,
             "cached_tokens": 120,
+            "long_input_tokens": 0,
+            "long_output_tokens": 0,
         }
 
     def test_usage_accumulated_even_on_length_failure(self):
@@ -271,7 +273,31 @@ class TestUsageAccounting:
             "output_tokens": 2,
             "reasoning_tokens": 3,
             "cached_tokens": 4,
+            "long_input_tokens": 0,
+            "long_output_tokens": 0,
         }
+
+
+class TestLongContextMarking:
+    def test_a_call_over_the_threshold_is_marked_long(self):
+        payload = _ok_payload()
+        payload["usage"]["prompt_tokens"] = 300_000  # GPT-6 bills >272K at the long rates
+        client = MagicMock()
+        client.invoke_model.return_value = _response(payload)
+        provider = _provider(client)
+        _run(provider)
+        summary = provider.usage.summary()
+        assert summary["long_input_tokens"] == 300_000
+        assert summary["long_output_tokens"] == 40
+
+    def test_a_call_at_the_threshold_is_standard(self):
+        payload = _ok_payload()
+        payload["usage"]["prompt_tokens"] = 272_000
+        client = MagicMock()
+        client.invoke_model.return_value = _response(payload)
+        provider = _provider(client)
+        _run(provider)
+        assert provider.usage.summary()["long_input_tokens"] == 0
 
 
 class TestRetry:
@@ -320,6 +346,6 @@ class TestRetryCodePin:
 
     @pytest.mark.parametrize("code", sorted(BEDROCK_RETRY_CODES))
     def test_every_shared_code_is_retryable_here(self, code: str):
-        from atif_models.infrastructure.openai_bedrock import _is_retryable
+        from atif_models.infrastructure.bedrock_common import is_retryable
 
-        assert _is_retryable(ClientError({"Error": {"Code": code, "Message": "x"}}, "InvokeModel"))
+        assert is_retryable(ClientError({"Error": {"Code": code, "Message": "x"}}, "InvokeModel"))
