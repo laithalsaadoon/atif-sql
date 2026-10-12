@@ -25,38 +25,51 @@ original build.
 
 ## Model registry (atif-models domain)
 Size aliases -> per-family concrete IDs (bedrock-runtime, GLOBAL inference profiles):
-  small : openai gpt-5.6 luna  = global.openai.gpt-5.6-luna
-          anthropic equivalent = global.anthropic.claude-haiku-4-5
-  medium: openai gpt-5.6 terra = global.openai.gpt-5.6-terra
-          anthropic equivalent = global.anthropic.claude-sonnet-5
-  large : openai gpt-5.6 sol   = global.openai.gpt-5.6-sol
-          anthropic equivalent = global.anthropic.claude-opus-5
-Default family: openai (per operator decision 2026-08-23; GPT 5.6 supports
-native strict structured outputs). Anthropic equivalents are registry entries
-only (selection escape hatch), not wired defaults.
+  small : openai    = global.openai.gpt-6-luna
+          anthropic = global.anthropic.claude-haiku-5-5
+  medium: openai    = global.openai.gpt-6.1-sol
+          anthropic = global.anthropic.claude-sonnet-5-5
+  large : openai    = global.openai.gpt-6-astra
+          anthropic = global.anthropic.claude-opus-5-5
+Default family: openai (per operator decision 2026-08-23). Both families are
+runnable: ATIF_SQL_LLM_FAMILY=anthropic selects the Claude column.
 Defaults: reasoning_effort="high", max_completion_tokens=32_000.
+GPT-6 bills a request over 272K input tokens at 2x input and 1.5x output,
+and Haiku 5.5 bills a request over 100K input tokens at $0.50/$2.50. Each adapter marks the calls that cross the line.
 Settings env: ATIF_SQL_LLM_FAMILY, ATIF_SQL_LLM_SIZE_<PIPELINE> overrides.
 
 ## Client contract (atif-models infrastructure)
-- bedrock-runtime invoke_model, OpenAI chat-completions body shape:
-  {messages, max_completion_tokens, reasoning_effort,
-   response_format: {type: json_schema, json_schema: {name, strict: true, schema}}}
-  (verified live on global.openai.gpt-5.6-terra 2026-08-23: strict schema honored,
-  usage carries reasoning_tokens + cached_tokens).
 - Port: LlmStructuredProvider protocol, the one seam to a model provider:
   async classify_structured(*, system, prompt, schema: type[BaseModel]) -> BaseModel.
-  system goes in as a "system" role message. Errors: RefusalError (terminal),
-  ProviderUnavailable (retryable -> retry queue).
-- Strict-mode schema rules for OpenAI: additionalProperties=false everywhere,
-  all properties required (OpenAI strict requirement: optional fields become
-  nullable-typed), $defs inlined where Bedrock chokes. Keep pydantic validation
-  as the second gate behind provider strict mode.
+  Errors: RefusalError (terminal), ProviderUnavailable (retryable -> retry queue).
+  build_structured_provider picks the adapter for spec.family.
+- openai adapter: bedrock-runtime invoke_model, OpenAI chat-completions body:
+  {messages, max_completion_tokens, reasoning_effort,
+   response_format: {type: json_schema, json_schema: {name, strict: true, schema}}}
+  system goes in as a "system" role message. Strict-mode schema rules:
+  additionalProperties=false everywhere, all properties required (optional
+  fields become nullable-typed). Verified live on all three GPT-6 ids
+  2026-10-12.
+- anthropic adapter: bedrock-runtime invoke_model, Anthropic Messages body:
+  {anthropic_version: bedrock-2023-05-31, max_tokens, system, messages,
+   output_config: {effort, format: {type: json_schema, schema}}}
+  The schema goes through anthropic.transform_schema, because Claude 5.5
+  rejects minimum/maximum/minLength/maxLength in a structured-output schema.
+  No temperature, top_p, or partial assistant turn (Claude 5.5 rejects all
+  three). Thinking
+  stays at the model default; the parser reads text blocks only and folds a
+  case-variant enum value onto the declared member. stop_reason refusal ->
+  RefusalError; max_tokens -> one retry at one effort step lower. Verified
+  live on all three Claude 5.5 ids 2026-10-12.
+- Pydantic validation is the second gate behind both providers' schema
+  enforcement, and the only gate for the constraints transform_schema moves
+  into descriptions.
 - tenacity retry over the retryable provider codes; token accounting accumulated
   per pipeline; concurrency via one anyio CapacityLimiter (default 16).
 
 ## Pipeline size assignments (defaults)
-classify=medium(terra), trajectory=medium, conflicts=large(sol, hardest
-judgment task), friction=small(luna, per-message enum), embed unchanged
+classify=small, perceived=medium, conflicts=large (hardest judgment task),
+friction=small (per-message enum), embed unchanged
 (cohere embed v4 1024-dim int8 by default; EmbeddingGemma 2 768-dim is the
 second adapter behind EmbeddingProvider).
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""OpenAI GPT-5.6 structured-output adapter on bedrock-runtime (the default).
+"""OpenAI GPT structured-output adapter on bedrock-runtime (the default family).
 
 Implements :class:`atif_models.domain.ports.LlmStructuredProvider` with the
 OpenAI chat-completions body shape on ``invoke_model``:
@@ -22,21 +22,13 @@ an ``anyio.CapacityLimiter`` so cancellation scopes propagate.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 from typing import Any
 
 import anyio
 import anyio.to_thread
-import boto3
-from botocore.config import Config as BotoConfig
-from botocore.exceptions import (
-    ClientError,
-    ConnectionError as BotoConnectionError,
-    EndpointConnectionError,
-    ReadTimeoutError,
-    SSLError,
-)
 from loguru import logger
 from pydantic import ValidationError
 from tenacity import (
@@ -53,78 +45,25 @@ from atif_models.domain.ports import (
     SchemaT,
     UsageAccumulator,
 )
-from atif_models.domain.registry import ModelSpec
+from atif_models.domain.registry import ModelSpec, is_long_context
 from atif_models.domain.schema import to_openai_strict
-
-#: Bedrock error codes worth retrying. TWIN of
-#: ``atif_embed.infrastructure.cohere_bedrock.RETRY_CODES`` — the two
-#: packages may not import each other (independence contract), so each pins
-#: this set against the same literal in its own test suite.
-RETRY_CODES: frozenset[str] = frozenset(
-    {
-        "ThrottlingException",
-        "ServiceUnavailableException",
-        "ModelTimeoutException",
-        "ModelErrorException",
-        "ProvisionedThroughputExceededException",
-        "TooManyRequestsException",
-        "InternalServerException",
-        "InternalFailure",
-    }
+from atif_models.infrastructure.bedrock_common import (
+    EFFORT_DEGRADE,
+    RETRY_CODES,
+    LengthTruncation,
+    build_runtime_client,
+    is_retryable,
+    log_before_sleep,
 )
 
 #: finish_reason values that mean "the model declined" (terminal).
 _REFUSAL_FINISH_REASONS = {"content_filter", "refusal"}
 
-#: One-step reasoning_effort degradation ladder for the finish_reason=length
-#: retry. Truncation is DETERMINISTIC for a fixed (prompt, parameters) pair —
-#: resending the same request would truncate identically and just double the
-#: bill — so the single retry changes a parameter: less reasoning leaves more
-#: of the completion budget for the answer. Efforts at "low" or below don't
-#: retry (nothing left to degrade to).
-_EFFORT_DEGRADE: dict[str, str] = {
-    "max": "xhigh",
-    "xhigh": "high",
-    "high": "medium",
-    "medium": "low",
-}
-
-
-class _LengthTruncation(ProviderUnavailable):
-    """Internal marker for ``finish_reason=length``.
-
-    Callers only ever see :class:`ProviderUnavailable`;
-    :meth:`OpenAiBedrockProvider.classify_structured` catches this one to run
-    the one-shot effort-degrade retry.
-    """
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    """True for throttle/service ``ClientError`` codes + network errors."""
-    if isinstance(exc, SSLError | BotoConnectionError | EndpointConnectionError | ReadTimeoutError):
-        return True
-    if not isinstance(exc, ClientError):
-        return False
-    code = exc.response.get("Error", {}).get("Code")
-    return code in RETRY_CODES
-
-
-def _log_before_sleep(retry_state: Any) -> None:
-    """Log one WARNING per backoff (loguru — stdlib logging is banned)."""
-    exc = retry_state.outcome.exception() if retry_state.outcome else None
-    logger.warning(
-        "bedrock invoke retry {}/10 in {:.1f}s after {}: {}",
-        retry_state.attempt_number,
-        getattr(retry_state.next_action, "sleep", 0.0),
-        type(exc).__name__ if exc else "?",
-        exc,
-    )
-
 
 def extract_usage(payload: dict[str, Any]) -> CallUsage:
     """Pull :class:`CallUsage` out of one chat-completions response.
 
-    GPT-5.6 on Bedrock reports ``usage.prompt_tokens`` /
+    GPT-6 and GPT-5.6 on Bedrock report ``usage.prompt_tokens`` /
     ``usage.completion_tokens`` plus ``completion_tokens_details.reasoning_tokens``
     and ``prompt_tokens_details.cached_tokens``. Missing fields default to 0.
     """
@@ -185,14 +124,7 @@ class OpenAiBedrockProvider:
         """
         with self._client_lock:
             if self._client is None:
-                boto_cfg = BotoConfig(
-                    region_name=self._region,
-                    retries={"max_attempts": 0, "mode": "standard"},
-                    max_pool_connections=self._pool_size,
-                    connect_timeout=10,
-                    read_timeout=600,
-                )
-                self._client = boto3.client("bedrock-runtime", config=boto_cfg)
+                self._client = build_runtime_client(region=self._region, pool_size=self._pool_size)
             return self._client
 
     def build_body(self, *, system: str, prompt: str, schema: type[SchemaT]) -> dict[str, Any]:
@@ -230,8 +162,8 @@ class OpenAiBedrockProvider:
             payload = await anyio.to_thread.run_sync(lambda: self._invoke_sync(body))
             try:
                 return self._parse_payload(payload, schema)
-            except _LengthTruncation as first:
-                degraded = _EFFORT_DEGRADE.get(str(body.get("reasoning_effort")))
+            except LengthTruncation as first:
+                degraded = EFFORT_DEGRADE.get(str(body.get("reasoning_effort")))
                 if degraded is None:
                     raise ProviderUnavailable(str(first)) from first
                 logger.warning(
@@ -245,14 +177,14 @@ class OpenAiBedrockProvider:
                 payload = await anyio.to_thread.run_sync(lambda: self._invoke_sync(retry_body))
                 try:
                     return self._parse_payload(payload, schema)
-                except _LengthTruncation as second:
+                except LengthTruncation as second:
                     raise ProviderUnavailable(str(second)) from second
 
     @retry(
         stop=stop_after_attempt(10),
         wait=wait_exponential(multiplier=2, min=2, max=60),
-        retry=retry_if_exception(_is_retryable),
-        before_sleep=_log_before_sleep,
+        retry=retry_if_exception(is_retryable),
+        before_sleep=log_before_sleep,
         reraise=True,
     )
     def _invoke_sync(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -274,7 +206,10 @@ class OpenAiBedrockProvider:
         :class:`ProviderUnavailable` with a hint, ``content_filter`` /
         ``refusal`` → :class:`RefusalError`.
         """
-        self.usage.add(extract_usage(payload))
+        usage = extract_usage(payload)
+        if is_long_context(self._spec, usage.input_tokens):
+            usage = dataclasses.replace(usage, long_context=True)
+        self.usage.add(usage)
         choices = payload.get("choices") or []
         if not choices:
             msg = f"no choices in response (keys: {sorted(payload.keys())})"
@@ -294,7 +229,7 @@ class OpenAiBedrockProvider:
                 f"max_completion_tokens (currently {self._spec.max_completion_tokens}), "
                 "lower reasoning_effort, or shrink the prompt"
             )
-            raise _LengthTruncation(msg)
+            raise LengthTruncation(msg)
         content = message.get("content")
         if not isinstance(content, str) or not content:
             msg = f"no message content (finish_reason={finish_reason!r})"

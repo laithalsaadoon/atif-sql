@@ -17,12 +17,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from atif_models.domain.registry import DEFAULT_FAMILY, Family, ModelSpec, Size, resolve
 
-#: Families with a wired provider adapter. The registry knows every family's
-#: model ids, but only these can actually be called: an unwired family
-#: resolves a model id and then sends it the OpenAI chat-completions body
-#: (``response_format`` / ``reasoning_effort``), which is a Bedrock 400 on
-#: every call. Rejecting at settings load turns that into a startup refusal.
-RUNNABLE_FAMILIES: frozenset[Family] = frozenset({"openai"})
+#: Families with a wired provider adapter
+#: (:func:`atif_models.infrastructure.providers.build_structured_provider`).
+#: A family the registry knows but no adapter serves would send another
+#: family's body shape to its model ids, a Bedrock 400 on every call, so
+#: settings load refuses it up front.
+RUNNABLE_FAMILIES: frozenset[Family] = frozenset({"openai", "anthropic"})
 
 
 class LlmSettings(BaseSettings):
@@ -54,15 +54,15 @@ class LlmSettings(BaseSettings):
         raise ValueError(msg)
 
     # Per-pipeline size assignments (CONTRACT-V2 §Pipeline size assignments):
-    # conflicts is the hardest judgment task (sol), friction is a
-    # per-message enum (luna). classify moved to luna on 2026-09-27 when its
-    # schema shrank to work category + goal; the trajectory pipeline (and its
-    # size) left the same day.
+    # conflicts is the hardest judgment task (large), friction is a
+    # per-message enum (small). classify moved to small on 2026-09-27 when
+    # its schema shrank to work category + goal; the trajectory pipeline (and
+    # its size) left the same day.
     llm_size_classify: Size = "small"
     llm_size_conflicts: Size = "large"
     llm_size_friction: Size = "small"
-    # perceived judges user-visible evidence over full transcripts — medium
-    # (terra). Env: ATIF_SQL_LLM_SIZE_PERCEIVED.
+    # perceived judges user-visible evidence over full transcripts — medium.
+    # Env: ATIF_SQL_LLM_SIZE_PERCEIVED.
     llm_size_perceived: Size = "medium"
 
     def size_for(self, pipeline: str) -> Size:

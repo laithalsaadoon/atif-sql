@@ -248,9 +248,9 @@ perceived pipeline admits a session only at 2 or more pairs
 - **No package hardcodes a model id:** every pipeline names a `(family, size)` pair and
   the registry resolves it; that is itself the policy.
   `packages/atif-models/src/atif_models/domain/registry.py:5-8`.
-- **Runnable-family gate:** only families with a wired provider adapter may be selected
-  (`RUNNABLE_FAMILIES` is `openai` alone); the anthropic column records ids and pricing
-  for a future adapter and is rejected at settings load until one exists.
+- **Runnable-family gate:** only families with a wired provider adapter may be selected.
+  `RUNNABLE_FAMILIES` holds `openai` and `anthropic`, and
+  `build_structured_provider` picks the adapter for the resolved spec's family.
   `packages/atif-models/src/atif_models/infrastructure/settings.py:20-25`,
   `packages/atif-models/src/atif_models/infrastructure/settings.py:41-54`; tests `packages/atif-models/tests/test_settings.py:69` and `packages/atif-models/tests/test_settings.py:72`.
 - **Per-pipeline size assignment:** classify and friction take `small`, perceived takes

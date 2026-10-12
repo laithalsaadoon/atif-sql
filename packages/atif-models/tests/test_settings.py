@@ -52,16 +52,23 @@ class TestEnvOverrides:
 class TestRunnableFamilyGate:
     """A family with no provider adapter must be refused at settings load.
 
-    Otherwise it resolves a real model id and then gets sent the OpenAI
-    chat-completions body, which 400s on every call at runtime.
+    Otherwise it resolves a real model id and then gets sent another family's
+    body shape, which 400s on every call at runtime.
     """
 
-    def test_unwired_family_is_rejected_at_load(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("ATIF_SQL_LLM_FAMILY", "anthropic")
-        with pytest.raises(ValidationError, match="no provider adapter"):
-            _settings()
+    def test_both_families_are_runnable(self):
+        assert {"openai", "anthropic"} == RUNNABLE_FAMILIES
 
-    def test_rejection_names_the_runnable_families(self, monkeypatch: pytest.MonkeyPatch):
+    def test_anthropic_family_loads(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATIF_SQL_LLM_FAMILY", "anthropic")
+        settings = _settings()
+        assert settings.llm_family == "anthropic"
+        assert settings.spec_for("conflicts").model_id == "global.anthropic.claude-opus-5-5"
+
+    def test_unwired_family_is_rejected_at_load(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(
+            "atif_models.infrastructure.settings.RUNNABLE_FAMILIES", frozenset({"openai"})
+        )
         monkeypatch.setenv("ATIF_SQL_LLM_FAMILY", "anthropic")
         with pytest.raises(ValidationError, match="Runnable families: openai"):
             _settings()
@@ -76,14 +83,14 @@ class TestRunnableFamilyGate:
 class TestSpecFor:
     def test_spec_for_resolves_pipeline_to_model(self):
         settings = _settings()
-        assert settings.spec_for("conflicts").model_id == "global.openai.gpt-5.6-sol"
-        assert settings.spec_for("friction").model_id == "global.openai.gpt-5.6-luna"
-        assert settings.spec_for("perceived").model_id == "global.openai.gpt-5.6-terra"
+        assert settings.spec_for("conflicts").model_id == "global.openai.gpt-6-astra"
+        assert settings.spec_for("friction").model_id == "global.openai.gpt-6-luna"
+        assert settings.spec_for("perceived").model_id == "global.openai.gpt-6.1-sol"
 
     def test_perceived_size_env_override(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATIF_SQL_LLM_SIZE_PERCEIVED", "large")
         settings = _settings()
-        assert settings.spec_for("perceived").model_id == "global.openai.gpt-5.6-sol"
+        assert settings.spec_for("perceived").model_id == "global.openai.gpt-6-astra"
 
     def test_unknown_pipeline_raises_keyerror(self):
         settings = _settings()

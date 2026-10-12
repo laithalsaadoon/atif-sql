@@ -39,6 +39,7 @@ classifiers = [
 # equals the members' union exactly, and a member that adds a dependency without
 # adding it here fails that test rather than shipping an ImportError.
 dependencies = [
+    "anthropic>=1.11.0",
     "anyio>=4.11.0",
     "boto3>=1.42.91",
     "cyclopts>=5.1.1",

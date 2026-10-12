@@ -16,6 +16,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    # The Anthropic SDK for one function: `transform_schema`, Anthropic's own
+    # mapping of a pydantic schema onto the JSON Schema subset Claude's
+    # structured outputs accept. The adapter calls Bedrock through boto3.
+    "anthropic>=1.11.0",
     "anyio>=4.11.0",
     # Same floor as atif-embed, which reaches the same Bedrock runtime. Two
     # floors for one client meant the union a single distribution declares had

@@ -19,6 +19,7 @@ from analytics_fixtures import (
     write_session,
 )
 
+from atif_analytics.application.prompts import CONFLICTS_REQUEST, FRICTION_REQUEST
 from atif_analytics.application.use_cases._shared import RunBudget
 from atif_analytics.application.use_cases.classify import classify_sessions
 from atif_analytics.application.use_cases.conflicts import detect_conflicts
@@ -240,8 +241,11 @@ def test_classify_dry_run_plan_math(settings: AnalyticsSettings, reader: CorpusR
     assert plan["candidates"] == 2
     assert plan["capped_candidates"] == 2
     assert plan["llm_calls"] == 2
-    # Input tokens are MEASURED from the rendered transcripts (chars/4).
-    expected_in = sum(len(reader.session_text(sid)) // 4 for sid in SESSION_IDS)
+    # Input tokens are MEASURED from the rendered transcripts at the model's
+    # chars-per-token ratio.
+    expected_in = sum(
+        int(len(reader.session_text(sid)) / SPEC.chars_per_token) for sid in SESSION_IDS
+    )
     assert plan["estimated_input_tokens"] == expected_in
     # Unpriced aliases carry ``None``, which would make the cost arithmetic below
     # meaningless rather than merely wrong.
@@ -262,13 +266,13 @@ def test_classify_dry_run_estimate_tracks_rendered_length(
     """The fixture session's estimate is within 2x of its real rendered length.
 
     The old static 8K prior understated a 60K-char tool-result transcript
-    ~20x; measured chars/4 must stay within a factor of two of reality.
+    ~20x; the measured length must stay within a factor of two of reality.
     """
     plan = classify_sessions(
         settings, dry_run=True, reader=reader, provider=FakeProvider(), spec=SPEC
     )
     assert isinstance(plan, dict)
-    real_tokens = sum(len(reader.session_text(sid)) for sid in SESSION_IDS) / 4
+    real_tokens = sum(len(reader.session_text(sid)) for sid in SESSION_IDS) / SPEC.chars_per_token
     assert real_tokens > 0
     assert real_tokens / 2 <= plan["estimated_input_tokens"] <= real_tokens * 2
     # Session one carries a 60K-char tool result — the estimate must reflect
@@ -424,6 +428,9 @@ def test_conflicts_writes_valid_pairs_and_drops_invalid_uuids(
     # The conflicts prompt carried uuid headers.
     conflict_prompts = [p for name, p in provider.calls if name == "ConflictsResult"]
     assert all("[uuid=" in p for p in conflict_prompts)
+    # The transcript arrives fenced, before the request line.
+    assert all(p.startswith("<transcript id=") for p in conflict_prompts)
+    assert all(p.rstrip().endswith(CONFLICTS_REQUEST) for p in conflict_prompts)
 
 
 def test_conflicts_refusal_writes_audit_sidecar_row(
@@ -521,9 +528,11 @@ def test_friction_tiers_and_llm_rows(
     for machine in S1_MACHINE_UUIDS:
         assert machine not in by_uuid
     assert set(by_uuid) == {"u-01", "u-04", "u-05", "u-06", "v-01", "v-03"}
-    # LLM prompts wrap the message in the template.
+    # LLM prompts fence the message and end with the request.
     friction_prompts = [p for name, p in provider.calls if name == "UserFrictionSignal"]
-    assert all("SHORT USER MESSAGE" in p for p in friction_prompts)
+    assert friction_prompts
+    assert all(p.startswith("<message id=") for p in friction_prompts)
+    assert all(p.rstrip().endswith(FRICTION_REQUEST) for p in friction_prompts)
 
 
 def test_friction_refusal_row_and_retry_enqueue(

@@ -4,7 +4,7 @@
 
 Owns CONTRACT-V2.md §Model registry and §Client contract — size aliases
 (small/medium/large) resolve to concrete Bedrock GLOBAL inference-profile
-ids per family (openai default, anthropic escape hatch), and the
+ids per family (openai by default, anthropic on request), and the
 ``LlmStructuredProvider`` port turns (system, prompt, pydantic schema)
 into a validated schema instance. NO other atif-sql package hardcodes a
 model id. Hexagonal: ``domain`` (registry, port, schema transform, usage

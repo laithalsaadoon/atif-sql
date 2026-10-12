@@ -2,7 +2,8 @@
 
 """Infrastructure layer for atif-models.
 
-bedrock-runtime adapters (OpenAI chat-completions default, Anthropic
-``output_config`` experimental stub) and the ``ATIF_SQL_``-prefixed env
-settings. Everything here imports DOWN into ``domain`` only.
+bedrock-runtime adapters (OpenAI chat-completions, the default family, and
+Anthropic Messages with ``output_config.format``), the factory that picks one
+per model spec, and the ``ATIF_SQL_``-prefixed env settings. Everything here
+imports DOWN into ``domain`` only.
 """

@@ -4,8 +4,9 @@
 
 Runs classify + friction + conflicts + perceived with ``--no-dry-run
 --limit 3`` against the real materialized corpus at ``/tmp/atif-e2e``
-(luna for classify and friction, sol for conflicts, terra for perceived —
-the size assignments through the atif-models registry).
+(small for classify and friction, large for conflicts, medium for
+perceived, in the family ``ATIF_SQL_LLM_FAMILY`` selects — the size
+assignments through the atif-models registry).
 
 Costs real money (a few dollars at most for three sessions) and needs
 ambient AWS creds with bedrock-runtime access in us-east-1. State +
@@ -34,6 +35,7 @@ from atif_analytics.infrastructure.corpus_reader import CorpusReader
 from atif_analytics.infrastructure.parquet_cache import ParquetCache
 from atif_analytics.infrastructure.settings import AnalyticsSettings
 from atif_models.domain.registry import estimate_cost
+from atif_models.infrastructure.anthropic_bedrock import AnthropicBedrockProvider
 from atif_models.infrastructure.openai_bedrock import OpenAiBedrockProvider
 
 LIMIT = 3
@@ -63,17 +65,16 @@ def main() -> None:
     llm = settings.llm()
 
     for name, fn, cache_dir in pipelines:
-        # Constructed here rather than through `build_provider`, which returns the
-        # `LlmStructuredProvider` PORT: the port carries no `usage`, so reading the
-        # accumulator through it is unsound. This smoke exists to compare the plan's
-        # estimate against the real token counts, so it needs the concrete adapter that
-        # owns them. The construction is the same one build_provider performs — the size
-        # per pipeline still resolves through the atif-models registry, never a model id
-        # written down here.
+        # Constructed here rather than through `build_structured_provider`, which
+        # returns the `LlmStructuredProvider` PORT: the port carries no `usage`, so
+        # reading the accumulator through it is unsound. This smoke exists to compare
+        # the plan's estimate against the real token counts, so it needs the concrete
+        # adapter that owns them. The construction is the same one the factory
+        # performs — the size per pipeline still resolves through the atif-models
+        # registry, never a model id written down here.
         spec = llm.spec_for(name)
-        provider = OpenAiBedrockProvider(
-            spec, region=llm.llm_region, concurrency=llm.llm_concurrency
-        )
+        adapter = AnthropicBedrockProvider if spec.family == "anthropic" else OpenAiBedrockProvider
+        provider = adapter(spec, region=llm.llm_region, concurrency=llm.llm_concurrency)
 
         # Dry-run FIRST: the measured estimation + budget ceilings must show
         # up in the plan, and the estimate gets compared against actuals.
