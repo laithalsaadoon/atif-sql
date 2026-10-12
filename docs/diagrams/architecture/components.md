@@ -44,6 +44,7 @@ classDiagram
         +resolve(size, family)
         +spec_for(pipeline)
         +estimate_cost(spec)
+        +build_structured_provider(spec)
         +classify_structured()
     }
     AtifCliApp --> AtifConverter : converts
@@ -59,7 +60,7 @@ classDiagram
 ### Classes
 
 Each node is one uv workspace member, the unit the import-linter contracts
-at `pyproject.toml:462-523` constrain. Every use case and registration entry point
+at `pyproject.toml:550-611` constrain. Every use case and registration entry point
 is a module-level function, so the `+` entries are functions rather than methods.
 `AtifCliApp`'s entries each carry an `@app.command` decorator on the line
 above; `app` is the `cyclopts.App` at `packages/atif-cli/src/atif_cli/app.py:52`
@@ -91,13 +92,14 @@ console script declared at `packages/atif-cli/pyproject.toml:42`.
 | `EmbedBackfill` | atif-embed | `embed_query` | `packages/atif-embed/src/atif_embed/application/embed.py:265` |
 | `EmbedBackfill` | atif-embed | `discover_unembedded` | `packages/atif-embed/src/atif_embed/application/embed.py:43` |
 | `AnalyticsPipelines` | atif-analytics | `run_analyze` | `packages/atif-analytics/src/atif_analytics/application/analyze.py:36` |
-| `AnalyticsPipelines` | atif-analytics | `classify_sessions` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:368` |
-| `AnalyticsPipelines` | atif-analytics | `detect_conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:350` |
+| `AnalyticsPipelines` | atif-analytics | `classify_sessions` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:374` |
+| `AnalyticsPipelines` | atif-analytics | `detect_conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:354` |
 | `AnalyticsPipelines` | atif-analytics | `build_provider` | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36` |
-| `ModelRegistry` | atif-models | `resolve` | `packages/atif-models/src/atif_models/domain/registry.py:109` |
-| `ModelRegistry` | atif-models | `spec_for` | `packages/atif-models/src/atif_models/infrastructure/settings.py:79` |
-| `ModelRegistry` | atif-models | `estimate_cost` | `packages/atif-models/src/atif_models/domain/registry.py:125` |
-| `ModelRegistry` | atif-models | `classify_structured` | `packages/atif-models/src/atif_models/domain/ports.py:123`, the sole method of the `LlmStructuredProvider` Protocol at `packages/atif-models/src/atif_models/domain/ports.py:116`, implemented by `OpenAiBedrockProvider` at `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:217` |
+| `ModelRegistry` | atif-models | `resolve` | `packages/atif-models/src/atif_models/domain/registry.py:162` |
+| `ModelRegistry` | atif-models | `spec_for` | `packages/atif-models/src/atif_models/infrastructure/settings.py:80` |
+| `ModelRegistry` | atif-models | `estimate_cost` | `packages/atif-models/src/atif_models/domain/registry.py:180` |
+| `ModelRegistry` | atif-models | `build_structured_provider` | `packages/atif-models/src/atif_models/infrastructure/providers.py:20` |
+| `ModelRegistry` | atif-models | `classify_structured` | `packages/atif-models/src/atif_models/domain/ports.py:138`, the sole method of the `LlmStructuredProvider` Protocol at `packages/atif-models/src/atif_models/domain/ports.py:131`, implemented by `OpenAiBedrockProvider` at `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:149` and by `AnthropicBedrockProvider` at `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:185` |
 
 `register` calls the other registrars, then the analytics registrars, in
 binding order at
@@ -130,35 +132,30 @@ root. Those edges are the whole of its outbound surface: an unanchored grep for
 | `AtifCliApp -> DuckRegistry` | registers | `packages/atif-cli/src/atif_cli/app.py:615`, `packages/atif-cli/src/atif_cli/app.py:906` | `packages/atif-cli/src/atif_cli/app.py:626`, `packages/atif-cli/src/atif_cli/app.py:918` |
 | `AtifCliApp -> AnalyticsPipelines` | dispatches | `packages/atif-cli/src/atif_cli/app.py:720` | `packages/atif-cli/src/atif_cli/app.py:739` |
 | `AtifCliApp -> EmbedBackfill` | embeds | `packages/atif-cli/src/atif_cli/app.py:806` | `packages/atif-cli/src/atif_cli/app.py:826` |
-| `AnalyticsPipelines -> ModelRegistry` | resolves | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:41` | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:45` |
+| `AnalyticsPipelines -> ModelRegistry` | resolves | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:46` | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:49`, `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:50` |
 
 ### Relationships the import contracts forbid
 
-`pyproject.toml:514-517` declares an `independence` contract over
+`pyproject.toml:602-605` declares an `independence` contract over
 `atif_converter`, `atif_corpus`, `atif_duck`, `atif_models`, and `atif_embed`, so
-no edge may connect any two of them. `pyproject.toml:519-523` declares a
+no edge may connect any two of them. `pyproject.toml:607-611` declares a
 `forbidden` contract admitting exactly one analytics edge, to `atif_models`. Both
 are checked by `lint:imports`, one of the gates `mise run check`
 depends on (`mise.toml:204`, in the list at `mise.toml:199-211`).
 
 A Protocol declared in one member and implemented in another is **not** an edge
 between them: the implementation satisfies it structurally, and the composition
-root supplies the instance. Neither is a permission comment an edge:
-`pyproject.toml:509` reads "ONLY atif-cli and atif-analytics may import
-atif-models", which grants reach that atif-cli does not take.
+root supplies the instance. Neither is a permission comment an edge: the comment at
+`pyproject.toml:597-601` leaves atif-cli and atif-analytics free to import
+atif-models, a reach atif-cli doesn't take.
 
 | Absent edge | How the same work reaches across the boundary |
 | --- | --- |
 | `CorpusMaterializer -> AtifConverter` | `materialize` takes a `ConverterPort` parameter (`packages/atif-corpus/src/atif_corpus/application/materialize.py:480`), the Protocol at `packages/atif-corpus/src/atif_corpus/domain/ports.py:41`. `AtifCliApp` constructs the `RealConverter` adapter (`packages/atif-cli/src/atif_cli/converter_adapter.py:44`) and injects it at `packages/atif-cli/src/atif_cli/app.py:399`; that adapter's docstring names the independence contract as its reason to live in atif-cli (`packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`). |
-| `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:87`, over the `docs/CONTRACT.md` corpus layout (stated at `pyproject.toml:458-460`). |
-| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`. |
-| `AtifCliApp -> ModelRegistry` | `AtifCliApp` never reaches atif-models. Model selection happens inside `AnalyticsPipelines`, whose `build_provider` resolves a spec through `spec_for` (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:44`), so no model id is written down outside atif-models. |
+| `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:87`, over the `docs/CONTRACT.md` corpus layout (stated at `pyproject.toml:546-548`). |
+| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:314`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`. |
+| `AtifCliApp -> ModelRegistry` | `AtifCliApp` never reaches atif-models. Model selection happens inside `AnalyticsPipelines`, whose `build_provider` resolves a spec through `spec_for` (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:49`) and hands it to `build_structured_provider` (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:50`), so no model id is written down outside atif-models. |
 
-| Absent edge | How the same work reaches across the boundary |
-| --- | --- |
-| `CorpusMaterializer -> AtifConverter` | `materialize` takes a `ConverterPort` parameter (`packages/atif-corpus/src/atif_corpus/application/materialize.py:480`), the Protocol at `packages/atif-corpus/src/atif_corpus/domain/ports.py:41`. `AtifCliApp` constructs the `RealConverter` adapter (`packages/atif-cli/src/atif_cli/converter_adapter.py:44`) and injects it at `packages/atif-cli/src/atif_cli/app.py:399`; that adapter's docstring names the independence contract as its reason to live in atif-cli (`packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`). |
-| `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:87`, over the `docs/CONTRACT.md` corpus layout (stated at `pyproject.toml:458-460`). |
-| `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:143`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:57`. |
 
 ## See also
 

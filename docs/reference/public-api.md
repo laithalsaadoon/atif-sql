@@ -15,14 +15,15 @@ declares `[tool.importlinter]` over every root package at `pyproject.toml:462-46
 atif-models, and atif-embed from importing each other at all, and a `forbidden` contract at
 `pyproject.toml:519-523` limiting atif-analytics to atif-models alone. Every symbol below is a real
 declaration read at the cited line; none of them is a supported import path for code outside this
-workspace, and no compatibility promise attaches to any of them.
+workspace, and no compatibility promise attaches to any of them. The entries also cover the
+atif-analytics prompt builders that every LLM stage shares inside that member.
 
 These facts about the seam shape are worth carrying into every entry below. First, the boundary
 abstractions are `typing.Protocol` classes, and all of them sit under a `domain/` package:
 `ConverterPort` at `packages/atif-corpus/src/atif_corpus/domain/ports.py:41`, `EmbeddingProvider`,
 `VectorStorePort`, and `TextRowsPort` at
 `packages/atif-embed/src/atif_embed/domain/ports.py:31`, `:59`, and `:87`, and
-`LlmStructuredProvider` at `packages/atif-models/src/atif_models/domain/ports.py:116`. No
+`LlmStructuredProvider` at `packages/atif-models/src/atif_models/domain/ports.py:131`. No
 `abstractmethod` exists anywhere in the workspace, so adapters satisfy a port structurally. Second,
 the name `DomainError` is declared independently more than once (one base class per erroring package, at
 `packages/atif-converter/src/atif_converter/domain/errors.py:14`,
@@ -41,9 +42,29 @@ class AnalyticsSettings(BaseSettings):
 ```
 
 Env-driven configuration for the analytics pipelines, read under the `ATIF_SQL_` prefix with `.env`
-support, carrying the corpus root and every pipeline knob.
+support, carrying the corpus root and every pipeline knob. `transcript_caps()` projects the
+transcript caps into the frozen `TranscriptCaps` at
+`packages/atif-analytics/src/atif_analytics/domain/config.py:17-34`. With `session_text_tool_result_bodies` off, the
+default, each tool result renders as a one-line size stub and its content never reaches the model;
+`ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` sends the bodies, each clipped to
+`session_text_tool_result_max_chars`.
 
-`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:60-114`
+`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:60-116`
+
+### AnthropicBedrockProvider
+
+```py
+class AnthropicBedrockProvider:
+```
+
+The `anthropic`-family `LlmStructuredProvider` adapter. It sends an Anthropic Messages body whose
+`output_config.format` carries the schema after the Anthropic SDK's `transform_schema`, joins only
+the `text` blocks of the response (it may open with a `thinking` block), and folds a string enum
+value that differs from the schema only in letter case onto the declared member before pydantic
+validation. A `refusal` stop reason raises `RefusalError`, a `max_tokens` stop retries once at one
+effort step lower, and any other stop reason but `end_turn` raises `ProviderUnavailable`.
+
+`packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:130-288`
 
 ### build_examples
 
@@ -71,10 +92,28 @@ def build_plan(
 ) -> MaterializationPlan:
 ```
 
-Partitions scanned sessions into the plan buckets: the pure decision at the centre of
+Partitions scanned sessions into the plan buckets: the pure decision at the center of
 materialization, taking the watermark and the quiescence policy as data.
 
 `packages/atif-corpus/src/atif_corpus/domain/sessions.py:159-211`
+
+### build_structured_provider
+
+```py
+def build_structured_provider(
+    spec: ModelSpec,
+    *,
+    region: str,
+    concurrency: int = 16,
+    usage: UsageAccumulator | None = None,
+) -> LlmStructuredProvider:
+```
+
+Returns the adapter for `spec.family`, bound to `spec` at construction: `AnthropicBedrockProvider`
+for `anthropic` and `OpenAiBedrockProvider` otherwise. Each adapter module is imported only when
+its family is asked for, so building one provider never loads the other SDK.
+
+`packages/atif-models/src/atif_models/infrastructure/providers.py:20-34`
 
 ### ConversionOutput
 
@@ -183,14 +222,34 @@ Harbor produced no trajectory because the session held no convertible events.
 ### estimate_cost
 
 ```py
-def estimate_cost(spec: ModelSpec, *, input_tokens: int, output_tokens: int) -> float | None:
+def estimate_cost(
+    spec: ModelSpec,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    long_input_tokens: int = 0,
+    long_output_tokens: int = 0,
+) -> float | None:
 ```
 
 USD estimate for one call or an accumulated pipeline against the prices carried on `spec`, returning
 `None` when either price is unknown, which a caller must render as pricing unavailable, never as
-zero.
+zero. `long_input_tokens` and `long_output_tokens` are the part of the totals from calls over the
+spec's long-context threshold; they bill at the long rates, the rest at the standard rates, and a
+spec without long rates bills them at the standard rates.
 
-`packages/atif-models/src/atif_models/domain/registry.py:125-137`
+`packages/atif-models/src/atif_models/domain/registry.py:180-210`
+
+### fence_id
+
+```py
+def fence_id(text: str) -> str:
+```
+
+The id a prompt fence around `text` carries: the first 8 hex digits of its SHA-256. It's derived
+from the text, so a prompt is a pure function of its input and a body can't close its own fence.
+
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:732-739`
 
 ### InvalidSessionInput
 
@@ -209,9 +268,10 @@ class LlmSettings(BaseSettings):
 ```
 
 Env-driven model selection for the LLM analytics pipelines, and the only place a Bedrock model id is
-resolved from configuration.
+resolved from configuration. Settings load refuses an `llm_family` outside `RUNNABLE_FAMILIES`
+(`openai` and `anthropic`), the families with a wired adapter.
 
-`packages/atif-models/src/atif_models/infrastructure/settings.py:28-81`
+`packages/atif-models/src/atif_models/infrastructure/settings.py:28-82`
 
 ### LlmStructuredProvider
 
@@ -224,7 +284,7 @@ The port for one structured-output call, one adapter per backend, deliberately n
 `classify_structured` method takes system text, a prompt, and a schema type, and raises `RefusalError`
 terminally or `ProviderUnavailable` retryably.
 
-`packages/atif-models/src/atif_models/domain/ports.py:115-132`
+`packages/atif-models/src/atif_models/domain/ports.py:130-147`
 
 ### MACRO_SIGNATURES
 
@@ -301,17 +361,44 @@ per-session sum and `workers` the pool size the pass used, so with several worke
 
 `packages/atif-corpus/src/atif_corpus/application/materialize.py:148-194`
 
+### message_prompt
+
+```py
+def message_prompt(message: str) -> str:
+```
+
+The friction stage's user message: the one human message inside a `<message id="...">` fence whose
+id is `fence_id(message)`, then the `FRICTION_REQUEST` line.
+
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:753-756`
+
 ### ModelSpec
 
 ```py
 @dataclass(frozen=True, slots=True)
 class ModelSpec:
+    family: Family
+    size: Size
+    model_id: str
+    pricing_in: float | None
+    pricing_out: float | None
+    max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS
+    reasoning_effort: ReasoningEffort = DEFAULT_REASONING_EFFORT
+    supports_strict_json: bool = True
+    long_context_threshold: int | None = None
+    long_pricing_in: float | None = None
+    long_pricing_out: float | None = None
+    chars_per_token: float = 4.0
 ```
 
 One concrete model behind a `(family, size)` alias, carrying its Bedrock model id, USD-per-1M-token
 prices that may be `None`, and whether the family supports native strict-JSON structured output.
+Past `long_context_threshold` input tokens the vendor bills the whole request at `long_pricing_in`
+and `long_pricing_out`, and `None` means one rate across the window. `chars_per_token` is the
+family's measured characters per token on rendered transcripts, which the dry-run plans use to turn
+a prompt length into tokens.
 
-`packages/atif-models/src/atif_models/domain/registry.py:38-57`
+`packages/atif-models/src/atif_models/domain/registry.py:49-85`
 
 ### OpenAiBedrockProvider
 
@@ -319,10 +406,11 @@ prices that may be `None`, and whether the family supports native strict-JSON st
 class OpenAiBedrockProvider:
 ```
 
-The default `LlmStructuredProvider` adapter, satisfying the port structurally rather than by
-inheritance.
+The default `LlmStructuredProvider` adapter, for the `openai` family, satisfying the port structurally
+rather than by inheritance. It sends a chat-completions body with a strict `response_format` JSON
+schema, and a `length` finish reason retries once at one `reasoning_effort` step lower.
 
-`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:142-311`
+`packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:81-246`
 
 ### QuiescencePolicy
 
@@ -343,8 +431,8 @@ finished.
 class RefusalError(DomainError):
 ```
 
-Terminal error for a model refusal (a content filter or a refusal finish reason), as distinct from a
-retryable provider fault.
+Terminal error for a model refusal (a content filter, or a refusal `finish_reason` or `stop_reason`),
+as distinct from a retryable provider fault.
 
 `packages/atif-models/src/atif_models/domain/ports.py:43-48`
 
@@ -433,6 +521,20 @@ The converted trajectory failed harbor's `TrajectoryValidator`, and the exceptio
 validator's error list so a caller can report the exact schema violations.
 
 `packages/atif-converter/src/atif_converter/domain/errors.py:31-40`
+
+### transcript_prompt
+
+```py
+def transcript_prompt(transcript: str, *, request: str) -> str:
+```
+
+The user message for the classify, conflicts, and perceived stages: the transcript inside a
+`<transcript id="...">` fence whose id is `fence_id(transcript)`, then the one-line `request`. Each
+stage passes its own request constant, `CLASSIFY_REQUEST`, `CONFLICTS_REQUEST`, or
+`PERCEIVED_REQUEST`, declared at
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:726-728`.
+
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:742-750`
 
 ### VIEW_SCHEMA
 

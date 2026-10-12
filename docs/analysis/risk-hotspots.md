@@ -4,11 +4,11 @@ Risk here is a score over signals a command can produce, each countable and each
 line of source: `2 × T + 2 × E + 0.5 × W + 1 × C + 1 × H + U/10`. `T` counts defects a type
 checker located in the file; `E` and `W` count `error`- and `warn`-severity scanner findings from
 the scanner report tier (`mise.toml:596-611`); `C` counts complexity ratchets the ruff config
-sets at a function living in this file (`pyproject.toml:258-281`); `H` counts distinct unguarded
+sets at a function living in this file (`pyproject.toml:327-350`); `H` counts distinct unguarded
 concurrency or IO windows, where a window whose own docstring names its recovery does not count;
 and `U` is uncovered units (missed lines plus missed branches) under the branch-coverage config
-at `pyproject.toml:535`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
-`pyproject.toml:560`, so `U/10` puts a
+at `pyproject.toml:623`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
+`pyproject.toml:648`, so `U/10` puts a
 file's share of the remaining uncovered units on the same scale as one located defect.
 
 Churn is rejected as a signal. The log sits under a single bot
@@ -21,7 +21,7 @@ likewise the bot identity on every row and carries no bus-factor information. Fu
 scanner tier yields no `error`-severity findings workspace-wide, so `E` never discriminates, and
 `packages/atif-embed/src/atif_embed/domain/ports.py` is excluded from the ranking despite reading
 as uncovered, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
-(`pyproject.toml:561-568`); that is a measurement artifact, not a gap.
+(`pyproject.toml:649-656`); that is a measurement artifact, not a gap.
 
 Note (2026-09-27): the scores, LOC figures, and coverage below were measured before the trajectory
 and structural pipelines were cut. `atif_analytics.application.use_cases.trajectory`, `.community`,
@@ -44,13 +44,13 @@ describes code that's gone. The ranking hasn't been re-measured.
 | `atif_analytics.application.analyze` | ↑ rising | none | bot | `packages/atif-analytics/src/atif_analytics/application/analyze.py` |
 | `atif_cli.output` | → flat | none | bot | `packages/atif-cli/src/atif_cli/output.py` |
 
-The open findings are `B608` hardcoded-SQL sites plus a build-configuration finding against
-`[tool.uv]` at `pyproject.toml:102`, which asks for an `exclude-newer` dependency cooldown. All of them
-map to `warn`: `B608` carries `MEDIUM` severity at `LOW` or `MEDIUM` confidence with rule precision
-`low`, and the cooldown rule's default level is `warning`. The SQL sites are exactly the ones that
-ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
+The open findings are `B608` hardcoded-SQL sites, and all of them map to `warn`: `B608` carries
+`MEDIUM` severity at `LOW` or `MEDIUM` confidence with rule precision `low`. The build-configuration
+rule that asks `[tool.uv]` for a dependency cooldown (`uv-missing-dependency-cooldown`) is met:
+`pyproject.toml:125` sets a seven-day `exclude-newer` window, and the comment at `:116-124` names
+the rule. The SQL sites are exactly the ones that ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
 `--ignore-noqa` over `packages/*/src` reports those same sites), and each `# noqa: S608` names what it
-interpolates (`pyproject.toml:150-152`). The scanner tier therefore carries no unaudited exposure,
+interpolates (`pyproject.toml:212-215`). The scanner tier therefore carries no unaudited exposure,
 which is why coverage, complexity, and concurrency carry the ranking instead.
 
 ## Per-file breakdown
@@ -111,7 +111,7 @@ A reader can therefore pick up a shard polars is still writing, and the guard th
 protects only the path it is not on. `replace_sessions` compounds it by rewriting shards in place
 (`:213`) and unlinking emptied ones (`:209`). The coverage gap lands on the same functions:
 a large share of its uncovered units are in `replace_sessions` and `write_part`. It also owns the
-`max-returns = 5` ratchet through `_shard_may_hold` (`pyproject.toml:268`, `:182`; the function at
+`max-returns = 5` ratchet through `_shard_may_hold` (`pyproject.toml:342`, `:337`; the function at
 `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:145`).
 
 ### `atif_cli.app`
@@ -131,7 +131,7 @@ a bot identity.
 **Findings.** A `B608` at the `search` kNN query, whose `# noqa` records that `dim` is
 `len(vector)` while the session id, `k`, and the vector itself are `?`-bound (`:925-937`). It
 carries the `max-args = 19` ratchet through `search`, whose parameters are the CLI flags
-cyclopts binds (`pyproject.toml:264`, `:180`; the function at
+cyclopts binds (`pyproject.toml:340`, `:333-335`; the function at
 `packages/atif-cli/src/atif_cli/app.py:860`). Its uncovered units (the largest single-file gap
 in the workspace) concentrate in the commands that reach outward: `analyze`
 (`:627-725`), `convert` (`:225-291`), and `status` (`:412-488`), with a few in `search`
@@ -155,8 +155,8 @@ lands in extra and there is nothing to join on (`:15-20`).
 
 **Findings.** No scanner findings, no IO windows (this is a pure function), and both
 complexity ratchets in the workspace that a single function sets: `max-branches = 39` and
-`max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:267`, `:181`,
-`:185-190`; the function at
+`max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:341`, `:336`,
+`:345-350`; the function at
 `packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). Each branch is one named
 fidelity gap, which is why the count is a ratchet rather than a target. Its uncovered units
 sit mostly inside `enrich_trajectory` (`:198-412`) and `_visible_user_text` (`:113-146`),
@@ -169,25 +169,25 @@ pinned, since it silently narrows enrichment coverage rather than failing.
 
 **What's there.** A tiered friction detector over short user-role messages: a pre-filter, a regex
 fast path at confidence 0.9, deterministic stamp rules, and an LLM tier for everything else
-(`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:3-27`). The `source`
+(`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:3-28`). The `source`
 column is the row's provenance tier rather than the engine that computed it, and downstream atif-duck
-views bind to those literal values, so the vocabulary is a fixed contract (`:29-33`).
+views bind to those literal values, so the vocabulary is a fixed contract (`:34-38`).
 
 **Recent activity.** Commits well above the median, so `↑ rising`.
 
 **Owners.** The bot identity at 100% (every commit touching the path), a bot identity.
 
 **Findings.** No scanner findings, and the `max-statements = 119` ratchet, set at `_friction_async`
-(`pyproject.toml:269`, `:183`; the function at
-`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:240`). The coverage
+(`pyproject.toml:343`, `:338`; the function at
+`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:210`). The coverage
 gap and the complexity outlier are the same region: most of the file's uncovered units sit inside
-`_friction_async` (`:240-528`), with the rest in `detect_user_friction` (`:531-635`) and
-`deterministic_stamps` (`:178-232`). This is the file where the two signals coincide most tightly:
+`_friction_async` (`:210-498`), with the rest in `detect_user_friction` (`:501-606`) and
+`deterministic_stamps` (`:146-202`). This is the file where the two signals coincide most tightly:
 the longest function in the workspace is also the least-exercised, and it is the function that
 decides which candidate messages cross into the billable LLM tier. The budget-guard posture that
 governs that decision assumes every candidate reaches the LLM even though roughly half survive the
-fast tiers (`:583-585`), and the third-party disclosure is explicit: short user message bodies leave
-the machine on tier 4 (`:35-36`).
+fast tiers (`:554-556`), and the third-party disclosure is explicit: short user message bodies leave
+the machine on tier 4 (`:40-41`).
 
 ## See also
 

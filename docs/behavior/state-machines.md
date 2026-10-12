@@ -132,9 +132,9 @@ stateDiagram-v2
 - `exhausted` is terminal in effect and has no outgoing edge. `drain` never returns it, so the
   pipeline never dispatches it, so it never fails again and is never marked done. The guard is
   `keep -= blocked` at
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:135`, spelled
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:139`, spelled
   `already |= blocked` in
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:276`, whose unit is a
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:250`, whose unit is a
   message uuid rather than a session id. `exhausted` is a parking state rather than a deleted row:
   the module issues no `DELETE`, and raising `max_attempts` on a `drain` call re-admits it.
 - `completed --> backoff` is real, and the attempt counter survives it. `enqueue` clears
@@ -152,10 +152,10 @@ the identical call sequence (`drain`, then `blocked_units`, then `enqueue` on fa
 
 | pipeline | `drain` | `blocked_units` | `enqueue` | `mark_done` |
 | --- | --- | --- | --- | --- |
-| `classify` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:120` | `:129` | `:265` | `:290` |
-| `conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:135` | `:142` | `:264` | `:331` |
-| `user_friction` | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:262` | `:270` | `:476` | `:496` |
-| `perceived` | `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:160` | `:167` | `:287` | `:336` |
+| `classify` | `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:124` | `:133` | `:269` | `:294` |
+| `conflicts` | `packages/atif-analytics/src/atif_analytics/application/use_cases/conflicts.py:139` | `:146` | `:268` | `:335` |
+| `user_friction` | `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:236` | `:244` | `:450` | `:470` |
+| `perceived` | `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:164` | `:171` | `:291` | `:340` |
 
 Defined at: `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:12`
 

@@ -35,7 +35,7 @@ flowchart LR
 | `atif-converter` | The Harbor `ClaudeCode` and `Codex` adapter wrappers, and the per-agent fidelity policy that accounts for every known upstream conversion gap per session |
 | `atif-corpus` | Corpus materialization: source discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | The DuckDB views and macros over the materialized corpus, declared in a drift-tested static catalog |
-| `atif-models` | The model alias registry and the structured-output LLM client. No other package names a Bedrock model id |
+| `atif-models` | The model alias registry and the structured-output LLM clients for GPT-6 and Claude 5.5. No other package names a Bedrock model id |
 | `atif-analytics` | The LLM pipelines: classify, conflicts, friction, perceived |
 | `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine, a LanceDB vector store, and the embedding backfill |
 | `atif-cli` | The cyclopts CLI that composes the rest |

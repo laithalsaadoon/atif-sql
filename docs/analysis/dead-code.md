@@ -6,8 +6,9 @@ Note (2026-09-27): the trajectory and structural pipelines were removed after th
 measurement, and with them these rows below: `TRAJECTORY_DIRNAME`,
 `CLUSTERS_FILENAME`, `CLUSTER_TERMS_FILENAME`, `COMMUNITIES_FILENAME`, and
 `COMMUNITY_PROFILE_FILENAME` no longer exist in
-`packages/atif-analytics/src/atif_analytics/domain/layout.py`. The counts and line
-numbers here haven't been re-measured.
+`packages/atif-analytics/src/atif_analytics/domain/layout.py`. The rows and use sites in
+`costs.py`, `transcript.py`, and the atif-models `registry.py` and `settings.py` were re-read on
+2026-10-12; the other counts and line numbers haven't been re-measured.
 
 **Nothing in this workspace is deletable code.** Some public top-level
 definitions under `packages/*/src` have no reference
@@ -70,7 +71,7 @@ The limits of this derivation, stated because no index backs it:
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:128`.
   No `getattr` targets a module object; every site takes an instance or an
   upstream class, including
-  `packages/atif-models/src/atif_models/infrastructure/settings.py:73` and
+  `packages/atif-models/src/atif_models/infrastructure/settings.py:74` and
   `packages/atif-converter/src/atif_converter/infrastructure/harbor_adapter.py:178`.
 
 Enforced gates are why the list is short rather than thin. ruff runs
@@ -94,7 +95,7 @@ intra-module use site is named after the table.
 
 | Symbol | Path | Last modified |
 | --- | --- | --- |
-| `CHARS_PER_TOKEN` | `packages/atif-analytics/src/atif_analytics/domain/costs.py:23` | 2026-08-28 |
+| `CHARS_PER_TOKEN` | `packages/atif-analytics/src/atif_analytics/domain/costs.py:25` | 2026-10-12 |
 | `CLASSIFICATIONS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:22` | 2026-08-28 |
 | `TRAJECTORY_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:23` | 2026-08-28 |
 | `CONFLICTS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:24` | 2026-08-28 |
@@ -106,9 +107,9 @@ intra-module use site is named after the table.
 | `COMMUNITIES_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:38` | 2026-08-28 |
 | `COMMUNITY_PROFILE_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:39` | 2026-08-28 |
 | `STATE_DB_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:41` | 2026-08-28 |
-| `TOOL_INPUT_PREVIEW_CHARS` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:50` | 2026-08-28 |
-| `UUID_HEADER_ESCAPE` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:61` | 2026-08-28 |
-| `main_chain` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:132` | 2026-08-28 |
+| `TOOL_INPUT_PREVIEW_CHARS` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:68` | 2026-08-28 |
+| `UUID_HEADER_ESCAPE` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:79` | 2026-08-28 |
+| `main_chain` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:242` | 2026-08-28 |
 | `PART_GLOB` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:25` | 2026-08-28 |
 | `is_sharded_dir` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:35` | 2026-08-28 |
 | `MAX_ATTEMPTS_DEFAULT` | `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:42` | 2026-08-28 |
@@ -119,24 +120,25 @@ intra-module use site is named after the table.
 | `write_schema_version` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:159` | 2026-08-28 |
 | `migrate_pre_stamp_table` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:166` | 2026-08-28 |
 | `optimize_if_needed` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:285` | 2026-08-28 |
-| `ReasoningEffort` | `packages/atif-models/src/atif_models/domain/registry.py:31` | 2026-08-28 |
+| `ReasoningEffort` | `packages/atif-models/src/atif_models/domain/registry.py:42` | 2026-08-28 |
 
 Intra-module use sites, one per file, all opened and read. Where a symbol is used
 more than once, the citation carries the first site and the remaining line
 numbers follow it as plain numbers.
 
-- `CHARS_PER_TOKEN` is the divisor at
-  `packages/atif-analytics/src/atif_analytics/domain/costs.py:30`.
+- `CHARS_PER_TOKEN` is the default `chars_per_token` argument of `tokens_for_chars` at
+  `packages/atif-analytics/src/atif_analytics/domain/costs.py:28`; the dry-run plans pass the resolved
+  `ModelSpec.chars_per_token` instead, so the fallback applies only to a caller that omits it.
 - The `*_DIRNAME` / `*_FILENAME` constants are each joined onto
   `analytics_dir` by one property in
   `packages/atif-analytics/src/atif_analytics/domain/layout.py:58-108`, in
   declaration order.
 - `TOOL_INPUT_PREVIEW_CHARS` is a default argument at
-  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:90`;
+  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:101`;
   `UUID_HEADER_ESCAPE` is the substitution at
-  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:73`;
+  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:91`;
   `main_chain` is called at
-  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:162`.
+  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:282`.
 - `PART_GLOB` is globbed at
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:86`
   and `is_sharded_dir` is called at
@@ -161,8 +163,8 @@ numbers follow it as plain numbers.
   `optimize_if_needed` at
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:412`.
 - `ReasoningEffort` types `DEFAULT_REASONING_EFFORT` at
-  `packages/atif-models/src/atif_models/domain/registry.py:34` and a model field
-  at `packages/atif-models/src/atif_models/domain/registry.py:56`.
+  `packages/atif-models/src/atif_models/domain/registry.py:45` and a model field
+  at `packages/atif-models/src/atif_models/domain/registry.py:80`.
 
 Further public-by-naming symbols have no outside reference and are **not**
 listed, because their modules make no export claim about them. Most live in
