@@ -79,8 +79,11 @@ per corpus, parquet shard dirs under <corpus_root>/analytics/<name>/,
 checkpoint keyed (session_id, pipeline) on (last_ts, last_mtime).
 KEY PROPERTY: pipelines read the MATERIALIZED corpus
 (atif-duck views: steps/messages/edges), not raw JSONL. Transcript text for
-prompts = steps-based rendering under fixed caps (50K/tool_result,
-800K/session). conflicts needs uuid-addressable turns -> use messages(edges)
+prompts = steps-based rendering under fixed caps (800K/session). Tool
+calls render with their arguments (400 chars); each tool result renders as a
+size stub, so tool output stays on disk.
+ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true sends result bodies instead,
+clipped at 50K each. conflicts needs uuid-addressable turns -> use messages(edges)
 uuids in headers; validate returned uuids against edges.
 Schemas/enums are fixed vocabularies (autonomy tiers, work categories,
 transition_kinds, conflict kinds, friction labels): parity of meaning.

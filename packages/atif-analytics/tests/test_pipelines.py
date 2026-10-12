@@ -8,6 +8,7 @@ NO live LLM calls: every provider is the deterministic
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -24,6 +25,7 @@ from atif_analytics.application.use_cases._shared import RunBudget
 from atif_analytics.application.use_cases.classify import classify_sessions
 from atif_analytics.application.use_cases.conflicts import detect_conflicts
 from atif_analytics.application.use_cases.friction import detect_user_friction
+from atif_analytics.domain.config import TranscriptCaps
 from atif_analytics.infrastructure.corpus_reader import CorpusReader
 from atif_analytics.infrastructure.parquet_cache import ParquetCache
 from atif_analytics.infrastructure.settings import AnalyticsSettings
@@ -260,14 +262,17 @@ def test_classify_dry_run_plan_math(settings: AnalyticsSettings, reader: CorpusR
     assert plan["dry_run"] is True
 
 
+@pytest.mark.parametrize("bodies", [False, True])
 def test_classify_dry_run_estimate_tracks_rendered_length(
-    settings: AnalyticsSettings, reader: CorpusReader
+    settings: AnalyticsSettings, corpus_root: Path, bodies: bool
 ) -> None:
     """The fixture session's estimate is within 2x of its real rendered length.
 
     The old static 8K prior understated a 60K-char tool-result transcript
-    ~20x; the measured length must stay within a factor of two of reality.
+    ~20x; the measured length must stay within a factor of two of reality,
+    with tool-result bodies on or off.
     """
+    reader = CorpusReader(corpus_root, caps=TranscriptCaps(session_text_tool_result_bodies=bodies))
     plan = classify_sessions(
         settings, dry_run=True, reader=reader, provider=FakeProvider(), spec=SPEC
     )
@@ -275,9 +280,12 @@ def test_classify_dry_run_estimate_tracks_rendered_length(
     real_tokens = sum(len(reader.session_text(sid)) for sid in SESSION_IDS) / SPEC.chars_per_token
     assert real_tokens > 0
     assert real_tokens / 2 <= plan["estimated_input_tokens"] <= real_tokens * 2
-    # Session one carries a 60K-char tool result — the estimate must reflect
-    # transcript scale, not the old ~8K static prior.
-    assert plan["estimated_input_tokens"] > 10_000
+    # Session one carries a 60K-char tool result: it sets the scale only when
+    # bodies are sent.
+    if bodies:
+        assert plan["estimated_input_tokens"] > 10_000
+    else:
+        assert plan["estimated_input_tokens"] < 10_000
 
 
 def test_classify_dry_run_caps_session_count(

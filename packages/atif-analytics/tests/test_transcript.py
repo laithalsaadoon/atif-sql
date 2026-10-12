@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from analytics_fixtures import (
     IMAGE_META,
     RETRY_NUDGE,
@@ -12,6 +15,7 @@ from analytics_fixtures import (
     SESSION_IDS,
 )
 
+from atif_analytics.domain.config import TranscriptCaps
 from atif_analytics.domain.transcript import (
     NON_HUMAN_PREVIEW_CHARS,
     StepEvent,
@@ -41,12 +45,40 @@ def test_tool_use_line_shape_and_400_char_preview(reader: CorpusReader) -> None:
     assert '"file_path"' in read_line
 
 
-def test_tool_result_50k_cap_with_dropped_footer(reader: CorpusReader) -> None:
+def test_tool_result_50k_cap_with_dropped_footer(corpus_root: Path) -> None:
+    reader = CorpusReader(corpus_root, caps=TranscriptCaps(session_text_tool_result_bodies=True))
     text = reader.session_text(SESSION_IDS[0])
     result_lines_start = text.find("[tool_result toolu_01 ")
     assert result_lines_start != -1
     # The 60_000-char content clips at 50_000 with the footer.
     assert "…(truncated, 10000 chars dropped)" in text
+
+
+def test_tool_result_bodies_stay_on_disk_by_default(reader: CorpusReader) -> None:
+    """The default transcript sends each result's size, never its content."""
+    text = reader.session_text(SESSION_IDS[0])
+    result_lines = [ln for ln in text.split("\n") if ln.startswith("[tool_result ")]
+    assert result_lines
+    assert any(ln.endswith("] (60000 chars omitted)") for ln in result_lines)
+    assert "chars dropped)" not in text
+    # Tool calls keep their arguments: they carry the action.
+    assert any(ln.startswith("[tool_use:Read ") and '"file_path"' in ln for ln in text.split("\n"))
+
+
+def test_stub_notes_a_failed_result() -> None:
+    steps = [
+        StepEvent(
+            ts="t",
+            role="assistant",
+            text="",
+            has_error_result=True,
+            tool_results=[("toolu_9", "Traceback: secret-looking output")],
+        )
+    ]
+    assert render_session_text(steps) == (
+        "[tool_result toolu_9 t] (32 chars omitted, the step has a failed result)"
+    )
+    assert "Traceback" in render_session_text(steps, tool_result_bodies=True)
 
 
 def test_uuid_headers_only_when_requested(reader: CorpusReader) -> None:
@@ -153,3 +185,17 @@ def test_session_bounds_newest_first(reader: CorpusReader) -> None:
 
 def test_session_bounds_limit(reader: CorpusReader) -> None:
     assert list(reader.session_bounds(limit=1)) == [SESSION_IDS[1]]
+
+
+def test_settings_env_turns_tool_result_bodies_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from atif_analytics.infrastructure.settings import AnalyticsSettings
+
+    assert (
+        not AnalyticsSettings(corpus_root=tmp_path)
+        .transcript_caps()
+        .session_text_tool_result_bodies
+    )
+    monkeypatch.setenv("ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES", "true")
+    assert AnalyticsSettings(corpus_root=tmp_path).transcript_caps().session_text_tool_result_bodies

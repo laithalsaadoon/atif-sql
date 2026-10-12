@@ -249,6 +249,7 @@ def render_session_text(
     *,
     total_max_chars: int = 800_000,
     tool_result_max_chars: int = 50_000,
+    tool_result_bodies: bool = False,
     include_uuids: bool = False,
 ) -> str:
     """Render one session's steps as a single newline-separated transcript.
@@ -257,6 +258,12 @@ def render_session_text(
     first, then that step's ``tool_use`` lines, then its ``tool_result``
     lines. That text → tool_use → tool_result precedence is the order the
     prompts are calibrated on.
+
+    A ``tool_result`` line carries the result's content, clipped to
+    ``tool_result_max_chars``, only when ``tool_result_bodies`` is True.
+    Otherwise it is a stub with the content's length, plus a note when the
+    step holds a failed result: ``[tool_result <id> <ts>] (5120 chars
+    omitted)``.
 
     When ``include_uuids`` is True, each text line's header carries the
     step's uuid as ``[uuid=<id> role ts]`` so a classifier can copy the
@@ -296,9 +303,13 @@ def render_session_text(
         for name, args_json in step.tool_calls:
             preview = escape_uuid_headers(tool_input_preview(args_json))
             candidates.append(f"[tool_use:{name or 'tool'} {step.ts}] {preview}")
+        failed = ", the step has a failed result" if step.has_error_result else ""
         for call_id, content in step.tool_results:
-            preview = escape_uuid_headers(tool_result_preview(content, tool_result_max_chars))
-            candidates.append(f"[tool_result {call_id or '?'} {step.ts}] {preview}")
+            if tool_result_bodies:
+                body = escape_uuid_headers(tool_result_preview(content, tool_result_max_chars))
+            else:
+                body = f"({len(content)} chars omitted{failed})"
+            candidates.append(f"[tool_result {call_id or '?'} {step.ts}] {body}")
         for line in candidates:
             if running + len(line) + 1 > total_max_chars:
                 lines.append(

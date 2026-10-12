@@ -88,6 +88,10 @@ class AnalyticsSettings(BaseSettings):
     #: Transcript caps: 800K per session, 50K per tool_result.
     session_text_total_max_chars: int = 800_000
     session_text_tool_result_max_chars: int = 50_000
+    #: Send tool-result bodies to the model. Off: each result renders as a
+    #: size stub (see TranscriptCaps). Env:
+    #: ``ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES``.
+    session_text_tool_result_bodies: bool = False
 
     # ------------------------------------------------------------------
     # Derivations
@@ -108,6 +112,7 @@ class AnalyticsSettings(BaseSettings):
         return TranscriptCaps(
             session_text_total_max_chars=self.session_text_total_max_chars,
             session_text_tool_result_max_chars=self.session_text_tool_result_max_chars,
+            session_text_tool_result_bodies=self.session_text_tool_result_bodies,
         )
 
 

@@ -506,6 +506,7 @@ class CorpusReader:
             steps,
             total_max_chars=self._caps.session_text_total_max_chars,
             tool_result_max_chars=self._caps.session_text_tool_result_max_chars,
+            tool_result_bodies=self._caps.session_text_tool_result_bodies,
             include_uuids=include_uuids,
         )
 
