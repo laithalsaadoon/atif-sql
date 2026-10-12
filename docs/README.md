@@ -7,8 +7,10 @@ Prose is generated; structure is mechanical. Cross-references are deterministic.
 
 Citations come as full paths or as shorthands, and each one resolves into a
 source file. The docs site build turns each one into a link and fails on the first citation naming
-a file that does not exist at the commit it links to, or a shorthand with no resolvable antecedent,
-so a citation here resolves or the tree does not ship.
+a file that does not exist at the commit it links to, or a shorthand with no resolvable antecedent.
+`mise run docs:citations` also fails on a line outside its file and, against the base commit, on a
+citation whose cited lines a change moved or removed without editing the citation, so a citation
+here resolves to the code it names or the tree does not ship.
 
 ## Start here
 

@@ -68,13 +68,18 @@ whichever keeps the sentence's sense; `.vale.ini` says why the rule sits at erro
 
 A change under `docs/` or `site/` also needs `mise run docs:install && mise run docs:gate`, which
 `check` leaves out because it needs node and a site build. CI runs it in `.github/workflows/docs.yml`,
-and the pre-push hook runs its link crawl when a push touches either tree.
+and the pre-push hook runs its link crawl when a push touches either tree. A code change can break
+a page too: a citation such as `` `packages/atif-cli/src/atif_cli/app.py:675` `` names lines, and
+code that moves leaves the citation pointing at whatever took its place. `docs:citations` runs on
+every push and in `docs:gate`, and `mise run docs:citations:fix` re-points every citation it
+reports as moved.
 
 | Task | Command | What fails you |
 | --- | --- | --- |
 | `docs:build` | `pnpm run build` in `site/` | a relative link the build left unresolved (`starlight-links-validator` with `errorOnRelativeLinks`), a fragment naming no heading, or a citation to a path absent at the pinned commit |
 | `docs:links` | `python3 scripts/docs_links.py dist` | any internal `href` or `src` in `site/dist` (pages, head, raw `.md` twins, the `llms.txt` bundles) that GitHub Pages would answer with a 404, hidden paths included, or a fragment naming no `id`; also 0 pages, 0 internal links, or a page of the content collection with no route or twin in the build |
-| `docs:gate` | `pnpm run check && pnpm run test` in `site/`, after `docs:build` and `docs:links` | `astro check` and the `vitest` probes over `site/dist` |
+| `docs:citations` | `python3 scripts/docs_citations.py` | a citation naming a file git does not track, a line past the end of its file, or a shorthand with no antecedent; or, against the base commit, a citation on a doc line you left alone whose cited lines moved (fixable with `docs:citations:fix`) or were removed or rewritten |
+| `docs:gate` | `pnpm run check && pnpm run test` in `site/`, after `docs:citations`, `docs:build`, and `docs:links` | `astro check` and the `vitest` probes over `site/dist` |
 
 `mise run docs:links:live` runs the same crawl over the deployed site, from its sitemap. The
 `live-links` job in `docs.yml` runs it after every deploy and every Monday, and fails on any
