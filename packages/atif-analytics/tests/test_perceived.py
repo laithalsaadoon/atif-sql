@@ -322,13 +322,13 @@ def test_perceived_dry_run_plan_measures_eligible_transcripts(
     assert plan["capped_candidates"] == 1
     assert plan["llm_calls"] == 1
     # Input tokens are MEASURED from the eligible session's uuid-headed
-    # transcript at the model's chars-per-token ratio — session one carries a
-    # 60K-char tool result.
+    # transcript at the model's chars-per-token ratio. Session one's 60K-char
+    # tool result renders as a size stub, so it stays out of the estimate.
     expected_in = int(
         len(reader.session_text(SESSION_IDS[0], include_uuids=True)) / SPEC.chars_per_token
     )
     assert plan["estimated_input_tokens"] == expected_in
-    assert plan["estimated_input_tokens"] > 10_000
+    assert plan["estimated_input_tokens"] < 10_000
     # Unpriced aliases carry ``None``, which would make the cost arithmetic below
     # meaningless rather than merely wrong.
     assert SPEC.pricing_in is not None

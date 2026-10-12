@@ -11,6 +11,9 @@ The v2 analytics pipelines over the materialized ATIF corpus:
   friction=small, perceived=medium). `classify` labels `work_category` and `goal` only.
   `classify` and `conflicts` skip non-interactive sessions (`turn_audit`,
   `one_shot_job`), and `friction` and `perceived` read human turns only.
+  The transcripts carry user and agent turns and tool calls with their
+  arguments; each tool result is a size stub unless
+  `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true`.
 * **Authorship** — `atif_analytics.domain.authorship` decides who wrote a
   user step (`human`, `stop_hook`, `task_notification`, `harness`,
   `audit_prompt`). It's a twin of `atif_duck.domain.authorship`, pinned by
