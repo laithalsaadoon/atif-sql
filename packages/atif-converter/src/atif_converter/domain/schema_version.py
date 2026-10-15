@@ -79,12 +79,24 @@ History:
   carrying its content and its own ``is_error`` / ``exit_code`` (and
   ``images``: the pre-pass lifts images out of those items' MCP results too).
   The ``exec`` result's own fields are unchanged.
+* 10 — prices from litellm v1.104.2. Upstream now prices claude-opus-5-5 at the
+  rates its local override carried, so that override retired and its sessions
+  are labeled ``litellm_estimate``. The table adds 34 ids (GPT-6 Luna and Sol, and
+  Bedrock ids of Claude Opus 5.5, Mythos 5 and 5.1, and Fable 5 among them), rates
+  for ``anthropic.claude-mythos-preview``, Bedrock's EU regional rates for
+  ``eu.anthropic.claude-opus-4-5-20251101-v1:0`` and a 1h cache-write rate for
+  ``jp.anthropic.claude-opus-4-7``. It drops the priority rates of gpt-5.1-codex,
+  gpt-5.1-codex-mini, gpt-5.2-codex and gpt-5.1/5.2/5.3-chat-latest, so a priority
+  step on those bills at the standard rates. Upstream deleted the models past their
+  deprecation date (Claude 3.x, claude-opus-4-1, claude-opus-4-20250514,
+  claude-sonnet-4-20250514 and older GPT-4 ids among them), so a session on one of
+  those is unpriced.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 9
+CONVERTER_SCHEMA_VERSION: Final = 10
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

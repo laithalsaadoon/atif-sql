@@ -310,9 +310,7 @@ class TestRetry:
     def test_retries_throttle_twice_then_succeeds(self, monkeypatch: pytest.MonkeyPatch):
         # Collapse tenacity's exponential waits so the test is instant
         # (wait_exponential clamps to `min`, so both knobs must drop).
-        # tenacity's `@retry` attaches `.retry` to the wrapped function at run
-        # time and neither checker's view of a `FunctionType` describes it.
-        wait = OpenAiBedrockProvider._invoke_sync.retry.wait  # ty: ignore[unresolved-attribute] # pyright: ignore[reportFunctionMemberAccess]
+        wait = OpenAiBedrockProvider._invoke_sync.retry.wait
         monkeypatch.setattr(wait, "multiplier", 0)
         monkeypatch.setattr(wait, "min", 0)
         client = MagicMock()

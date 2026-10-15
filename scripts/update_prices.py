@@ -80,27 +80,7 @@ OVERRIDE_MARKER = "atif_sql_override"
 #: field names so the converter prices them with the same arithmetic as any entry.
 #: Only models whose rates were checked against the vendor's pricing page belong here;
 #: an unchecked model stays unpriced (NULL), never guessed.
-OVERRIDES: dict[str, dict[str, Any]] = {
-    "claude-opus-5-5": {
-        "litellm_provider": "anthropic",
-        "mode": "chat",
-        "input_cost_per_token": 4e-06,
-        "output_cost_per_token": 2e-05,
-        "cache_creation_input_token_cost": 5e-06,
-        "cache_creation_input_token_cost_above_1hr": 8e-06,
-        "cache_read_input_token_cost": 2e-07,
-        OVERRIDE_MARKER: {
-            "checked": "2026-09-27",
-            "sources": [
-                # "$4 / MTok" input, "$20 / MTok" output, "$5 / MTok" 5m cache write,
-                # "$8 / MTok" 1h cache write, "$0.20 / MTok" cache read.
-                "https://platform.claude.com/docs/en/models/opus-5-5/overview",
-                # "0.05x on Claude Opus 5.5" for a cache hit.
-                "https://platform.claude.com/docs/en/about-claude/pricing",
-            ],
-        },
-    },
-}
+OVERRIDES: dict[str, dict[str, Any]] = {}
 
 
 def _download(ref: str, path: str) -> bytes:

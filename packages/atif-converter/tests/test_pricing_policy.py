@@ -17,6 +17,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -33,8 +34,10 @@ SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "update_prices.py"
 #: priority rows, re-captured from 1.102.0 on 2026-09-28 after upstream raised those
 #: rates, and the eight gpt-5.1-codex and gpt-5.5 rows, re-captured from 1.103.2 on
 #: 2026-10-08 once litellm billed cache writes at the input rate for a model with no
-#: cache-creation rate. They hold the arithmetic still when litellm isn't installed to
-#: compare against.
+#: cache-creation rate, and the two gpt-5.1-codex priority rows, re-captured from
+#: 1.104.2 on 2026-10-15 after upstream dropped that model's priority rates, so a
+#: priority request bills at the standard rates. They hold the arithmetic still when
+#: litellm isn't installed to compare against.
 FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, float]]] = [
     ("claude-opus-5", (1234, 567, 8901, 23456), "standard", (0.06735925, 0.014175)),
     ("claude-opus-5", (238085, 12582, 214679, 238085), "standard", (1.46078625, 0.31455)),
@@ -119,7 +122,7 @@ FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, floa
         "gpt-5.1-codex",
         (1234, 567, 8901, 23456),
         "priority",
-        (0.028116500000000003, 0.011340000000000001),
+        (0.014058250000000001, 0.0056700000000000006),
     ),
     (
         "gpt-5.1-codex",
@@ -131,7 +134,7 @@ FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, floa
         "gpt-5.1-codex",
         (238085, 12582, 214679, 238085),
         "priority",
-        (0.59621875, 0.25164000000000003),
+        (0.298109375, 0.12582000000000002),
     ),
     ("gpt-5.5", (1234, 567, 8901, 23456), "standard", (0.056233000000000005, 0.01701)),
     ("gpt-5.5", (1234, 567, 8901, 23456), "priority", (0.1405825, 0.04252499999999999)),
@@ -140,6 +143,40 @@ FROZEN_PRICES: list[tuple[str, tuple[int, int, int, int], str, tuple[float, floa
 ]
 
 UNKNOWN_CLAUDE = "claude-newfamily-7"
+
+#: A model no table prices, given a local override by :func:`overridden_table`.
+OVERRIDDEN_CLAUDE = "claude-newfamily-9"
+
+
+@pytest.fixture
+def overridden_table(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[str]:
+    """The vendored table plus one local override at $4 / $20 per MTok; yields its model.
+
+    The committed table carries an override only while upstream lacks a current model,
+    so the override path is pinned against an entry shaped the way
+    ``scripts/update_prices.py`` writes one.
+    """
+    document = json.loads(pricing.TABLE_PATH.read_text(encoding="utf-8"))
+    document["models"][OVERRIDDEN_CLAUDE] = {
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "cache_creation_input_token_cost": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        pricing.OVERRIDE_MARKER: {
+            "checked": "2026-10-15",
+            "sources": ["https://platform.claude.com/docs/en/about-claude/pricing"],
+        },
+    }
+    path = tmp_path / pricing.TABLE_FILENAME
+    path.write_text(json.dumps(document), encoding="utf-8")
+    pricing.load_table.cache_clear()
+    monkeypatch.setattr(pricing, "TABLE_PATH", path)
+    try:
+        yield OVERRIDDEN_CLAUDE
+    finally:
+        pricing.load_table.cache_clear()
 
 
 def _price(model: str, shape: tuple[int, int, int, int] = (1000, 1000, 0, 0)) -> Any:
@@ -218,9 +255,9 @@ class TestStepCosts:
         assert "cost_usd" not in unpriced
         assert "cost_source" not in (unpriced.get("extra") or {})
 
-    def test_an_override_priced_step_is_labeled(self) -> None:
+    def test_an_override_priced_step_is_labeled(self, overridden_table: str) -> None:
         (metrics,) = _agent_step_metrics(
-            [_user("u1", "01"), _assistant("a1", "02", "claude-opus-5-5", msg_id="m1")]
+            [_user("u1", "01"), _assistant("a1", "02", overridden_table, msg_id="m1")]
         )
         assert metrics["cost_usd"] == pytest.approx(0.004 + 0.02)
         assert metrics["extra"]["cost_source"] == pricing.COST_SOURCE_WITH_OVERRIDES
@@ -280,7 +317,10 @@ class TestUnpricedIsNone:
 
 class TestLocalOverrides:
     def test_opus_5_5_is_priced_from_its_published_rates(self) -> None:
-        # $4 / $20 per MTok, cache read $0.20, 5m cache write $5.
+        # Upstream prices it since litellm v1.104.0, so its override retired; the
+        # published rates are unchanged: $4 / $20 per MTok, cache read $0.20, 5m cache
+        # write $5.
+        assert not pricing.is_local_override("claude-opus-5-5")
         prompt_cost, completion_cost = _price("claude-opus-5-5", (1_000_000, 1_000_000, 0, 0))
         assert prompt_cost == pytest.approx(4.0)
         assert completion_cost == pytest.approx(20.0)
@@ -298,8 +338,8 @@ class TestLocalOverrides:
         cached = _price("claude-fable-5-1", (1_000_000, 0, 0, 1_000_000))
         assert cached[0] == pytest.approx(0.25)
 
-    def test_override_priced_session_is_labeled(self) -> None:
-        final = _final([_user("u1", "01"), _assistant("a1", "02", "claude-opus-5-5", msg_id="m1")])
+    def test_override_priced_session_is_labeled(self, overridden_table: str) -> None:
+        final = _final([_user("u1", "01"), _assistant("a1", "02", overridden_table, msg_id="m1")])
         assert final["total_cost_usd"] == pytest.approx(0.004 + 0.02)
         assert final["extra"]["cost_source"] == pricing.COST_SOURCE_WITH_OVERRIDES
 
@@ -310,7 +350,7 @@ class TestLocalOverrides:
     def test_overrides_carry_every_rate_the_arithmetic_reads(self) -> None:
         table = pricing.load_table()
         assert table is not None
-        assert pricing.override_models() == {"claude-opus-5-5"}
+        assert pricing.override_models() == set(_load_script().OVERRIDES)
         for model in pricing.override_models():
             entry = table.entries[model]
             for key in (
@@ -441,13 +481,22 @@ class TestUpdateScript:
         )
 
     def test_an_override_retires_once_upstream_prices_it(
-        self, capsys: pytest.CaptureFixture[str]
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         script = _load_script()
+        override = {
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "input_cost_per_token": 4e-06,
+            script.OVERRIDE_MARKER: {"checked": "2026-10-15", "sources": []},
+        }
+        monkeypatch.setattr(
+            script, "OVERRIDES", {"claude-newfamily-8": override, OVERRIDDEN_CLAUDE: override}
+        )
         upstream = {
             "fallback_generalizations": {"rules": []},
             "sample_spec": {"litellm_provider": "openai", "mode": "chat"},
-            "claude-opus-5-5": {
+            "claude-newfamily-8": {
                 "litellm_provider": "anthropic",
                 "mode": "chat",
                 "input_cost_per_token": 1e-06,
@@ -455,11 +504,12 @@ class TestUpdateScript:
         }
         document = script.build(upstream, ref="test", digest="0" * 64, license_text="MIT License")
         models = document["models"]
-        assert models["claude-opus-5-5"] == upstream["claude-opus-5-5"]
-        for key in set(script.OVERRIDES) - {"claude-opus-5-5"}:
-            assert script.OVERRIDE_MARKER in models[key]
+        assert models["claude-newfamily-8"] == upstream["claude-newfamily-8"]
+        assert models[OVERRIDDEN_CLAUDE] == override
         assert "sample_spec" not in models
-        assert "claude-opus-5-5" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "claude-newfamily-8" in err
+        assert OVERRIDDEN_CLAUDE not in err
 
     def test_the_committed_table_is_what_the_script_builds(self) -> None:
         """Every override in the committed table is the script's current one, verbatim."""
