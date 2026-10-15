@@ -273,9 +273,7 @@ class TestUsageAccounting:
 
 class TestRetry:
     def test_throttle_is_retried_then_succeeds(self, monkeypatch: pytest.MonkeyPatch):
-        # tenacity's `@retry` attaches `.retry` to the wrapped function at run
-        # time and neither checker's view of a `FunctionType` describes it.
-        wait = AnthropicBedrockProvider._invoke_sync.retry.wait  # ty: ignore[unresolved-attribute] # pyright: ignore[reportFunctionMemberAccess]
+        wait = AnthropicBedrockProvider._invoke_sync.retry.wait
         monkeypatch.setattr(wait, "multiplier", 0)
         monkeypatch.setattr(wait, "min", 0)
         throttle = ClientError(

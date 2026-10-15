@@ -107,9 +107,7 @@ def settings(tmp_path: Path) -> EmbedSettings:
 # reference to the function exists for a checker to see.
 def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
     """Collapse tenacity's exponential waits so retry tests are instant."""
-    # tenacity's @retry attaches `.retry` to the wrapped function at run time
-    # and its annotations do not describe the attribute.
-    wait = _invoke_raw.retry.wait  # ty: ignore[unresolved-attribute]  # pyright: ignore[reportFunctionMemberAccess]
+    wait = _invoke_raw.retry.wait
     monkeypatch.setattr(wait, "multiplier", 0)
     monkeypatch.setattr(wait, "min", 0)
 

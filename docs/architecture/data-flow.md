@@ -202,7 +202,7 @@ sequenceDiagram
    reading ahead in the newest-first walk order, and every other session from its files. Without
    a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json.zst` (or the plain file on an old-layout session);
    atif-analytics declares no DuckDB dependency, and the `forbidden` import contract puts atif-duck
-   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238`, `pyproject.toml:611`).
+   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238`, `pyproject.toml:604`).
    Either way the steps sit behind the reader's bounded memos
    (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:317`), and the
    reader labels each session's kind with the same rule `session_outcomes.kind` applies, so

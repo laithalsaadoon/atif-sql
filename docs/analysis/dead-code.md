@@ -14,7 +14,7 @@ declaration with no consumer**: a name in an `__all__` that nothing imports.
 **Technique, and what it cannot see.** No code index covers this repo (there is no `.codegraph/`, no LSP index, no AST
 symbol graph), and no dead-code analyzer is wired into the project: `grep -n
 "vulture|dead|unused|deptry|knip"` over `pyproject.toml` and `mise.toml` returns
-only unrelated hits, ty's `unused-ignore-comment` rule at `pyproject.toml:460`
+only unrelated hits, ty's `unused-ignore-comment` rule at `pyproject.toml:453`
 and a comment about it on line 465. The
 finding set is therefore derived, in these passes:
 
@@ -62,7 +62,7 @@ The limits of this derivation, stated because no index backs it:
   source text and pins its constants by name, and a re-import that hands a
   name on to a third module.
 - **Import position is irrelevant to the method, deliberately.** Because
-  `PLC0415` is off (`pyproject.toml:227`) to satisfy the lean-import assertion at
+  `PLC0415` is off (`pyproject.toml:220`) to satisfy the lean-import assertion at
   `packages/atif-cli/tests/test_lean_import.py:41`, atif-cli's cross-package
   imports sit *inside* command bodies:
   `packages/atif-cli/src/atif_cli/app.py:712`,
@@ -87,13 +87,13 @@ The limits of this derivation, stated because no index backs it:
   and `packages/atif-cli/src/atif_cli/app.py:306` (`os`).
 
 Enforced gates are why the list is short rather than thin. ruff runs
-`select = ["ALL"]` (`pyproject.toml:209`) at zero, so `F401`, `F811`, `F841` and
+`select = ["ALL"]` (`pyproject.toml:202`) at zero, so `F401`, `F811`, `F841` and
 `ERA001` leave no unused import, no redefinition, no unused local, and no
-commented-out code, with two carve-outs: `pyproject.toml:287`
+commented-out code, with two carve-outs: `pyproject.toml:280`
 (`"**/__init__.py" = ["F401", "E402"]`), and the vendored harbor tree, which
-ruff doesn't lint at all (`pyproject.toml:191`). pyright runs
-`typeCheckingMode = "strict"` (`pyproject.toml:684`) over every `src/` and
-`tests/` tree plus `scripts` and `fuzz` (`pyproject.toml:685-702`) at zero errors, which enforces
+ruff doesn't lint at all (`pyproject.toml:184`). pyright runs
+`typeCheckingMode = "strict"` (`pyproject.toml:677`) over every `src/` and
+`tests/` tree plus `scripts` and `fuzz` (`pyproject.toml:678-695`) at zero errors, which enforces
 `reportUnusedFunction` / `reportUnusedClass` / `reportUnusedVariable` for every
 `_`-prefixed definition unused inside its own file. Neither gate can see a
 *public* symbol that no other module imports, and that gap is exactly what the
@@ -409,7 +409,7 @@ empty:
 ## Dead imports
 
 `__init__.py` files are the only linted files where `F401` is off
-(`pyproject.toml:287`), so outside the vendored harbor tree, which ruff skips,
+(`pyproject.toml:280`), so outside the vendored harbor tree, which ruff skips,
 they're the only place an import with no consumer survives lint (an isolated ruff run of
 `F401`, `F811`, and `F841` over the vendored tree finds none). Two members'
 `__init__.py` files re-export names. atif-converter's vendored
