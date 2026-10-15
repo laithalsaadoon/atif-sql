@@ -1,6 +1,6 @@
 [project]
 name = "atif-duck"
-version = "0.3.0"
+version = "0.4.0"
 description = "DuckDB views and macros over the materialized ATIF corpus."
 readme = "README.md"
 license = "Apache-2.0"

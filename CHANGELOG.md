@@ -1,3 +1,13 @@
+## v0.4.0 (2026-10-15)
+
+### Feat
+
+- **gates**: fail on a docs citation whose lines moved or don't exist
+
+### Fix
+
+- **site**: name Codex CLI in the description every page and llms.txt carry
+
 ## v0.3.0 (2026-10-12)
 
 ### Feat
