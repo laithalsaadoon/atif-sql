@@ -5,12 +5,12 @@ the uv workspace members declared by `[tool.uv.workspace] members = ["packages/*
 (`pyproject.toml:110-111`); external nodes are first-order distributions taken from a member's own
 `[project.dependencies]`, never from the installed transitive closure.
 
-The internal direction is enforced rather than conventional. `pyproject.toml:543` declares
-`[tool.importlinter]` over every root package (`:544`), and `mise run lint:imports`
+The internal direction is enforced rather than conventional. `pyproject.toml:547` declares
+`[tool.importlinter]` over every root package (`:548`), and `mise run lint:imports`
 (`mise.toml:172`) is one of the gates `mise run check` depends on (`mise.toml:245-265`). Some of
-those contracts fix the shape drawn here: the `independence` contract at `pyproject.toml:595-598`
+those contracts fix the shape drawn here: the `independence` contract at `pyproject.toml:599-602`
 forbids any import edge among atif_converter, atif_corpus, atif_duck, atif_models, and atif_embed, and
-the `forbidden` contract at `:600-604` allows atif_analytics to import atif_models and nothing else
+the `forbidden` contract at `:604-608` allows atif_analytics to import atif_models and nothing else
 among the members.
 
 ```mermaid
@@ -77,12 +77,12 @@ from a file under the source member's `src/`.
 
 | edge | contract that permits it |
 | --- | --- |
-| atif-cli to atif-analytics | atif-cli is the composition root; it is in neither restrictive contract's restricted set (`pyproject.toml:598`, `:603`) |
+| atif-cli to atif-analytics | atif-cli is the composition root; it is in neither restrictive contract's restricted set (`pyproject.toml:602`, `:607`) |
 | atif-cli to atif-converter | as above; declared `packages/atif-cli/pyproject.toml:33` |
 | atif-cli to atif-corpus | as above; declared `packages/atif-cli/pyproject.toml:34` |
 | atif-cli to atif-duck | as above; declared `packages/atif-cli/pyproject.toml:35` |
 | atif-cli to atif-embed | as above; declared `packages/atif-cli/pyproject.toml:36` |
-| atif-analytics to atif-models | the `forbidden` contract's single permitted edge (`pyproject.toml:600-604`); declared `packages/atif-analytics/pyproject.toml:23` |
+| atif-analytics to atif-models | the `forbidden` contract's single permitted edge (`pyproject.toml:604-608`); declared `packages/atif-analytics/pyproject.toml:23` |
 
 Absences carry meaning too. atif-cli imports atif_models in no source file even though it composes
 everything else; it reaches the model registry through atif-analytics, and its
@@ -146,7 +146,7 @@ What the drawn edge deliberately compresses:
 
 The diagram's external nodes are what a member asks for, and that is a strictly smaller set than what
 `uv sync` installs. The gap includes a web stack this system never runs: harbor, a dev-group
-dependency (`pyproject.toml:153`), lists `fastapi`, `supabase`, and `uvicorn` in its own dependency
+dependency (`pyproject.toml:157`), lists `fastapi`, `supabase`, and `uvicorn` in its own dependency
 block, and `uv sync` installs the dev group by default. No member declares any of them, and
 `grep -rnE "^[[:space:]]*(from|import) +(fastapi|uvicorn|starlette|supabase)(\.| |$)" --include='*.py' packages/`
 returns no matches across every source and test file. atif-sql exposes no HTTP surface; it is one

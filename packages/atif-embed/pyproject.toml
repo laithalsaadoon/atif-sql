@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = [
     "boto3>=1.42.91",
-    "duckdb>=1.5.2,<2",
+    "duckdb>=2.0.0,<3",
     "lancedb>=0.30,<0.40",
     "loguru>=0.7.3",
     "polars>=1.40.0",

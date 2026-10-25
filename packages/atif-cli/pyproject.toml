@@ -39,7 +39,7 @@ dependencies = [
     # parse/catalog/runtime exit-code taxonomy. Reaching it transitively through
     # atif-duck would make this package's exit codes depend on a sibling's
     # dependency choice.
-    "duckdb>=1.5.2,<2",
+    "duckdb>=2.0.0,<3",
     "loguru>=0.7.3",
 ]
 

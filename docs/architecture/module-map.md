@@ -8,12 +8,12 @@ config (`pyproject.toml:1`, `:16`, `:34`). The internal import graph is a
 star: atif-cli declares five of its six siblings as `==`-pinned dependencies
 (`packages/atif-cli/pyproject.toml:32-36`) and reaches atif-models only through atif-analytics,
 plus one further edge from atif-analytics to atif-models that a `forbidden` import-linter contract
-leaves open while it closes every other atif-analytics edge (`pyproject.toml:601`), with every pair
-among the other five members closed by an `independence` contract (`pyproject.toml:596`). Outside
+leaves open while it closes every other atif-analytics edge (`pyproject.toml:605`), with every pair
+among the other five members closed by an `independence` contract (`pyproject.toml:600`). Outside
 atif-cli's adapter modules, which `atif_cli.app` imports only inside command bodies, every
 cross-package import sits inside a function body or a `TYPE_CHECKING` block, so the CLI's fast path
 pulls in no duckdb, harbor, lancedb, boto3, or polars, which is why `PLC0415` is ignored
-workspace-wide (`pyproject.toml:220`).
+workspace-wide (`pyproject.toml:224`).
 
 ## atif-analytics
 
@@ -32,7 +32,7 @@ response schemas they bind against are pure domain models whose field descriptio
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
 wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
 table (`packages/atif-analytics/src/atif_analytics/domain/authorship.py`). Apart from atif-cli, this
-is the one member permitted to import a sibling: atif-models and nothing else (`pyproject.toml:601`).
+is the one member permitted to import a sibling: atif-models and nothing else (`pyproject.toml:605`).
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py`: the task-framing
   system prompts, public constants assembled at
@@ -75,7 +75,7 @@ macros register separately, each only when its backing parquet is populated, bec
 `atif-sql analyze` run is the default state
 (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`). It has `domain/` and
 `infrastructure/` but no `application/`, and unlike atif-models, the other member with that shape,
-it carries no layers contract (`pyproject.toml:543`).
+it carries no layers contract (`pyproject.toml:547`).
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py`: the raw readers
   (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:597`), most of the core views
@@ -346,7 +346,7 @@ table doesn't price is NULL. litellm is a dev dependency, for the identity test 
 A deliberately narrow seam: a system prompt, a user prompt, and a pydantic schema in; a validated
 instance of that schema out (`packages/atif-models/src/atif_models/domain/ports.py:131`). Its only
 in-repo consumer is atif-analytics, the single edge the `forbidden` contract leaves open
-(`pyproject.toml:601`), and the registry is the only place in the workspace where a Bedrock model id
+(`pyproject.toml:605`), and the registry is the only place in the workspace where a Bedrock model id
 is written down, so a pipeline names a family and a size alias and lets `resolve` pick the id
 (`packages/atif-models/src/atif_models/domain/registry.py:6`, `:162`). Small, medium, and large resolve
 to the GPT-6 models (`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`) in the openai family, the default,
