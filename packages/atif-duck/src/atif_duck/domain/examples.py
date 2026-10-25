@@ -86,8 +86,8 @@ ARG_EXEMPLARS: dict[str, str] = {
     "interval_text": "'7 days'",
     "query_vec": (
         "(SELECT list_transform("
-        "me.embedding, v -> (v / sqrt(list_sum("
-        "list_transform(me.embedding, x -> x::DOUBLE * x))))::FLOAT"
+        "me.embedding, lambda v: (v / sqrt(list_sum("
+        "list_transform(me.embedding, lambda x: x::DOUBLE * x))))::FLOAT"
         ") FROM message_embeddings me LIMIT 1)"
     ),
 }

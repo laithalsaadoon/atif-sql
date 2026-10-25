@@ -117,7 +117,7 @@ def step_columns(access: StepMemberAccess) -> tuple[tuple[str, str], ...]:
             (
                 f"CASE WHEN {access.type_of('message')} = 'ARRAY' "
                 f"THEN array_to_string(list_transform({message_parts}, "
-                "part -> json_extract_string(part, '$')), '\n\n') "
+                "lambda part: json_extract_string(part, '$')), '\n\n') "
                 f"ELSE {access.string('message')} END"
             ),
             "message",
