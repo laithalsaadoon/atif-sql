@@ -21,7 +21,12 @@ from embed_fixtures import (
 
 from atif_embed.domain.text_stamp import PendingText, text_hash
 from atif_embed.infrastructure import corpus_text_rows
-from atif_embed.infrastructure.corpus_text_rows import DuckDbTextRows
+from atif_embed.infrastructure.corpus_text_rows import (
+    _OBJECT_SIZE_CAP,
+    _OBJECT_SIZE_FLOOR,
+    DuckDbTextRows,
+    _object_size_bound,
+)
 
 
 class _SelectionOverrides(TypedDict, total=False):
@@ -301,6 +306,40 @@ class TestResidency:
 
         assert batched == per_file
         assert len(batched) == 30 * _RESIDENCY_STEPS_PER_SESSION
+
+    def test_a_batch_of_small_sessions_reads_under_a_4_gb_memory_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A batch's ``maximum_object_size`` is sized from its documents, not fixed at 1 GiB.
+
+        DuckDB reserves buffers of about twice the bound before it parses,
+        and 2.0 reserves more of them the more files one statement reads, so
+        under the old fixed bound these 40 one-kilobyte sessions in one
+        statement ran out of a 49 GB limit on 2.0.0 (and out of this one on
+        1.5.6 too).
+        """
+        import duckdb
+
+        sessions = 40
+        root = _write_tiny_corpus_of(tmp_path / "tiny", sessions)
+        real_connect = duckdb.connect
+
+        def capped_connect(*args: Any, **kwargs: Any) -> Any:
+            con = real_connect(*args, **kwargs)
+            con.execute("SET memory_limit='4GB'")
+            return con
+
+        monkeypatch.setattr(duckdb, "connect", capped_connect)
+        rows = list(DuckDbTextRows().iter_unembedded(root))
+
+        assert len(rows) == sessions * _RESIDENCY_STEPS_PER_SESSION
+
+    def test_the_bound_follows_the_batch_s_largest_document(self) -> None:
+        mib = 1024 * 1024
+        assert _object_size_bound([]) == _OBJECT_SIZE_FLOOR == 16 * mib
+        assert _object_size_bound([1024, 4 * mib]) == _OBJECT_SIZE_FLOOR
+        assert _object_size_bound([1024, 100 * mib]) == 100 * mib + 25 * mib + mib
+        assert _object_size_bound([2 * _OBJECT_SIZE_CAP]) == _OBJECT_SIZE_CAP == 1024 * mib
 
     def test_whole_result_fetches_are_never_used(
         self, corpus_root: Path, recording_duckdb: list[_RecordingConnection]

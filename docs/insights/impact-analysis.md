@@ -123,7 +123,7 @@ places with no import edge between them.
 | --- | --- | --- | --- |
 | `atif_corpus.application.materialize`: the writer, routed through `CorpusLayout` | direct import | yes | `packages/atif-corpus/src/atif_corpus/application/materialize.py:135-144` and `packages/atif-corpus/src/atif_corpus/application/materialize.py:1617` |
 | `atif_duck.infrastructure.registry`: builds globs under `corpus_root / "sessions"` | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:691-701` |
-| `atif_embed.infrastructure.corpus_text_rows`: its own `sessions/` walk, gated on `meta.json` | indirect | yes | `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155-173` |
+| `atif_embed.infrastructure.corpus_text_rows`: its own `sessions/` walk, gated on `meta.json` | indirect | yes | `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166-184` |
 | `atif_analytics.infrastructure.corpus_reader`: re-declares the filename constants | indirect | yes | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:72-74` and `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178-191` |
 | `atif_cli.app.convert`: writes `edges.jsonl` beside a `--trajectory-out` trajectory on the one-shot path | indirect | likely | `packages/atif-cli/src/atif_cli/app.py:740-741` |
 | `atif_cli.app.status`: reads the watermark through the producer's public `read_watermark` | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:1197` |
@@ -184,7 +184,7 @@ import-graph query reaches it.
 | `FakeConverter`: shipped in `src/` rather than `tests/`; same shape, same non-import | indirect | yes | `packages/atif-corpus/src/atif_corpus/infrastructure/fake_converter.py:21` and `packages/atif-corpus/src/atif_corpus/infrastructure/fake_converter.py:72` |
 | `ConversionOutput`: the frozen dataclass that DOES cross the boundary as an import | direct import | yes | `packages/atif-corpus/src/atif_corpus/domain/ports.py:65-66` |
 | `EmbeddingProvider` / `VectorStorePort` / `TextRowsPort` ← the one embed use case, under `if TYPE_CHECKING:` | direct import | yes | `packages/atif-embed/src/atif_embed/application/embed.py:35`, `packages/atif-embed/src/atif_embed/application/embed.py:46-47`, `packages/atif-embed/src/atif_embed/application/embed.py:65-67` |
-| The production adapters (two embedding providers, the Lance store, and the corpus text-rows reader), none importing its Protocol | indirect | yes | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:285`, `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:193`, `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:376`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:199` |
+| The production adapters (two embedding providers, the Lance store, and the corpus text-rows reader), none importing its Protocol | indirect | yes | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:285`, `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:193`, `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:376`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:229` |
 | `test_converter_adapter.py`: imports `ConverterPort` and binds `RealConverter` to it by annotation; `test_embed_ports.py` and `test_models_ports.py` do the same for the embed and model ports | test | yes | `packages/atif-cli/tests/test_converter_adapter.py:17` and `packages/atif-cli/tests/test_converter_adapter.py:92`, `packages/atif-embed/tests/test_embed_ports.py:27` |
 | `[tool.coverage.report] exclude_also`: a bare `...` line is excluded because a Protocol body is a signature | config | no | `pyproject.toml:642-645` |
 
@@ -228,7 +228,7 @@ surfaces above exist as duplicated strings and Protocols instead of imports.
 | `TextRowsPort`: exists because atif-embed may not import atif-duck | indirect | yes | `packages/atif-embed/src/atif_embed/domain/ports.py:11-15` |
 | The `embedding_guard` twins: one rule, copied into atif-duck and atif-embed | direct import | yes | `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:51` and `packages/atif-embed/src/atif_embed/domain/embedding_guard.py:38` |
 | `test_guard_twin_pin.py`: reads the atif-duck copy as SOURCE TEXT via `ast`, never importing it | test | yes | `packages/atif-embed/tests/test_guard_twin_pin.py:41` and `packages/atif-embed/tests/test_guard_twin_pin.py:55-72` |
-| The independent corpus readers | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:597`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155`, `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178` |
+| The independent corpus readers | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:597`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166`, `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178` |
 | `[tool.coverage.run] source`: the same import packages, named rather than pathed | config | likely | `pyproject.toml:618-626` |
 
 ### Blast-radius notes
