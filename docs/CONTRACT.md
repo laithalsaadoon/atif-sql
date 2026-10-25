@@ -310,7 +310,7 @@ atif-sql query 'SQL' [--format auto|table|json|csv]
                                        # (ATIF_SQL_QUERY_MEMORY_LIMIT / _THREADS
                                        # override); private mkdtemp spill dir;
                                        # refuses uid 0 unless ATIF_SQL_ALLOW_ROOT=1;
-                                       # COPY/EXPORT/ATTACH/DETACH/INSTALL/LOAD/PREPARE/EXECUTE
+                                       # COPY/EXPORT/ATTACH/DETACH/INSTALL/LOAD/PREPARE/EXECUTE/PRAGMA
                                        # exit 70 sandbox_refused before execution;
                                        # never installs an extension;
                                        # --all-corpora (lake only, exit 78 without one),

@@ -626,6 +626,19 @@ class TestQueryStatementGate:
             # DuckDB parses INSTALL and LOAD to the same statement kind.
             ("INSTALL httpfs", "LOAD"),
             ("LOAD httpfs", "LOAD"),
+            # DuckDB 2.0 no longer expands a PRAGMA while parsing, so these
+            # two reach the gate as PRAGMA rather than as what they run.
+            ("COPY FROM DATABASE memory TO memory", "PRAGMA"),
+            ("IMPORT DATABASE '{tmp}/exported'", "PRAGMA"),
+            ("PRAGMA show_tables", "PRAGMA"),
+            # A PIVOT that builds its column list first is one MULTI, and the
+            # statement around it can be a COPY.
+            (
+                "COPY (PIVOT (SELECT 1 AS a, 'x' AS b) ON b USING sum(a)) TO '{tmp}/a.csv'",
+                "MULTI",
+            ),
+            # A statement type the Python binding has no member for.
+            ("UPDATE EXTENSIONS", "UNKNOWN"),
         ],
     )
     def test_file_statement_kinds_are_refused_by_name(
@@ -663,6 +676,16 @@ class TestQueryStatementGate:
         _run_query("EXPLAIN SELECT count(*) FROM sessions", query_corpus)
         assert json.loads(capsys.readouterr().out)
 
+    def test_the_select_forms_of_pragma_and_pivot_still_run(
+        self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _run_query(
+            "SELECT count(*) > 0 AS has_columns FROM pragma_table_info('sessions')", query_corpus
+        )
+        assert json.loads(capsys.readouterr().out) == [{"has_columns": True}]
+        _run_query("PIVOT (SELECT 1 AS a, 'x' AS b) ON b IN ('x') USING sum(a)", query_corpus)
+        assert json.loads(capsys.readouterr().out) == [{"x": 1}]
+
     def test_parse_errors_still_exit_64(
         self, query_corpus: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -686,6 +709,8 @@ class TestQueryStatementGate:
             "EXTENSION",
             "PREPARE",
             "EXECUTE",
+            "PRAGMA",
+            "MULTI",
         ):
             assert refused in known
             assert refused not in app_module._QUERY_STATEMENT_KINDS
@@ -987,7 +1012,7 @@ class TestHardenedConnectionLayer:
     def test_grants_are_read_write_which_is_why_the_gate_exists(
         self, layer: Any, query_corpus: Path
     ) -> None:
-        """DuckDB 1.5.5 has no read-only grant; if one appears, this fails and the design can simplify."""
+        """DuckDB 1.5.5 and 2.0.0 have no read-only grant; if one appears, this fails and the design can simplify."""
         con, spill = layer
         con.execute(f"COPY (SELECT 1 AS x) TO '{spill}/probe.csv'")
         assert (spill / "probe.csv").is_file()

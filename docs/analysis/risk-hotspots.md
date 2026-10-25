@@ -132,17 +132,17 @@ changes.
 
 **Findings.** No `B608` site: the `search` kNN statement in `search_rows` binds the vector, the
 session id, and `k` as parameters and formats only the width `len(query_vector)` and constant
-fragments into `_SEARCH_SQL` (`:2201`, `:2218-2225`). It sets no complexity ratchet: `search` takes
+fragments into `_SEARCH_SQL` (`:2223`, `:2240-2247`). It sets no complexity ratchet: `search` takes
 seven parameters and the widest command, `analyze`, takes 13, while `max-args = 19` sits at
 `atif_corpus.application.materialize.materialize`
 (`packages/atif-corpus/src/atif_corpus/application/materialize.py:1497`). Its uncovered units
 concentrate in the commands that reach outward: `analyze`
-(`packages/atif-cli/src/atif_cli/app.py:1634-1735`), `convert` (`:675-757`), and `status`
-(`:1147-1296`), with a few in `search` (`:2018-2176`) and `main` (`:2409-2442`). `analyze` always
+(`packages/atif-cli/src/atif_cli/app.py:1656-1757`), `convert` (`:690-772`), and `status`
+(`:1162-1311`), with a few in `search` (`:2040-2198`) and `main` (`:2431-2464`). `analyze` always
 calls Bedrock, and `embed` and `search` do with the default Cohere provider, so the least-covered
 command body in the tree is also the one that spends money; the uncovered region inside `analyze`
 is the settings-override chain that applies the budget ceilings a crontab line depends on
-(`:1700-1714`).
+(`:1722-1736`).
 
 ### `atif_converter.domain.enrichment`
 

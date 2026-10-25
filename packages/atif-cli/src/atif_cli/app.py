@@ -454,6 +454,15 @@ def _refuse_root(command: str, fmt: OutputFormat) -> None:
 #: PREPARE and EXECUTE (a prepared COPY parses as PREPARE). An allowlist, so a
 #: statement kind a future DuckDB adds is refused until someone reads what it
 #: does.
+#:
+#: PRAGMA and MULTI are out because DuckDB 2.0's parser no longer says what
+#: they hold. 1.5 expanded a PRAGMA while parsing, so ``PRAGMA table_info``
+#: came back as SELECT and ``COPY FROM DATABASE`` as COPY_DATABASE; 2.0 hands
+#: back the unexpanded PRAGMA for every pragma and for ``COPY FROM DATABASE``
+#: and ``IMPORT DATABASE`` alike, and one MULTI for a PIVOT that has to build
+#: its column list first, whatever statement wraps it (``COPY (PIVOT ...) TO``
+#: is one MULTI). Their SELECT forms still run: ``pragma_table_info('t')``,
+#: ``DESCRIBE``, ``SHOW TABLES``, and PIVOT with an explicit ``IN`` list.
 _QUERY_STATEMENT_KINDS: frozenset[str] = frozenset(
     {
         "SELECT",
@@ -469,7 +478,6 @@ _QUERY_STATEMENT_KINDS: frozenset[str] = frozenset(
         "DELETE",
         "MERGE_INTO",
         "CALL",
-        "PRAGMA",
         "TRANSACTION",
         "VACUUM",
         "ANALYZE",
@@ -485,10 +493,17 @@ def _refused_statement_kinds(con: Any, sql: str) -> list[str]:
     connection so a PRAGMA that reads a file while parsing meets the same
     allowlist the query would. A parse error propagates as DuckDB's own
     ``ParserException`` (exit 64), exactly as ``execute`` would have raised it.
+
+    A statement whose type the Python binding has no member for is refused as
+    ``UNKNOWN``: DuckDB 2.0's ``StatementType`` raises ``ValueError`` there
+    (``UPDATE EXTENSIONS`` is type 29), where 1.5 answered ``???``.
     """
     refused: list[str] = []
     for statement in con.extract_statements(sql):
-        kind = str(statement.type.name)
+        try:
+            kind = str(statement.type.name)
+        except ValueError:
+            kind = "UNKNOWN"
         if kind not in _QUERY_STATEMENT_KINDS and kind not in refused:
             refused.append(kind)
     return refused
@@ -557,7 +572,7 @@ def _harden_query_connection(
       ``register`` bound this connection to). A file grant lets
       ``read_parquet`` open that exact path. Nothing else under the corpus
       is named, so ``read_text`` of a ``trajectory.json`` is refused. DuckDB
-      1.5.5 has no read-only grant (measured: a ``read_parquet`` relation
+      has no read-only grant, on 1.5.5 or 2.0.0 (measured: a ``read_parquet`` relation
       bound before ``enable_external_access=false`` is refused at query time
       without a grant, and ``duckdb_settings()`` lists no write switch), so
       each grant is read-write and ``COPY ... TO <granted parquet>
@@ -1364,7 +1379,11 @@ def query(
       parquet> (USE_TMP_FILE false)`` used to overwrite one, so every
       statement kind that names a file is refused BEFORE execution, for any
       uid, by DuckDB's own parser: COPY, EXPORT, ATTACH, DETACH, INSTALL,
-      LOAD, and PREPARE/EXECUTE (which could defer one). Exit 70, kind
+      LOAD, and PREPARE/EXECUTE (which could defer one). So are PRAGMA and
+      MULTI, which DuckDB 2.0 no longer expands while parsing (a PRAGMA can be
+      ``COPY FROM DATABASE`` or ``IMPORT DATABASE``, and a MULTI can wrap a
+      COPY): run ``pragma_table_info(...)``, ``DESCRIBE`` or ``SHOW`` instead,
+      and give a PIVOT an explicit ``IN`` list. Exit 70, kind
       ``sandbox_refused``.
     * A 0444 file mode does not bind root, so ``query`` refuses to run as
       uid 0 (exit 77) unless ``ATIF_SQL_ALLOW_ROOT=1`` is set, which logs a
@@ -1405,7 +1424,7 @@ def query(
     * 65  catalog_error unknown view/macro/column (try ``atif-sql schema``)
     * 65  embedding_mismatch the Lance store was written by another provider
     * 70  sandbox_refused a statement kind the sandbox never runs (COPY,
-      EXPORT, ATTACH, INSTALL, LOAD, PREPARE, ...)
+      EXPORT, ATTACH, INSTALL, LOAD, PREPARE, PRAGMA, ...)
     * 70  runtime_error everything else (an unmaterialized corpus, or SQL
       the sandbox refused)
     * 77  root_refused  running as uid 0 without ``ATIF_SQL_ALLOW_ROOT=1``
@@ -1507,7 +1526,10 @@ def query(
                         message=f"the query sandbox does not run {', '.join(refused)} statements",
                         hint="query runs SELECT and in-memory DDL/DML only; COPY, EXPORT, "
                         "ATTACH, DETACH, INSTALL, LOAD, PREPARE and EXECUTE are refused "
-                        "because they reach files or defer a statement past this check",
+                        "because they reach files or defer a statement past this check, and "
+                        "PRAGMA and MULTI because the parser no longer says what they hold "
+                        "(use pragma_table_info(...), DESCRIBE or SHOW for a PRAGMA, and an "
+                        "explicit IN list for a PIVOT)",
                     )
                     emit_error(err, fmt)
                     raise SystemExit(err.exit_code)

@@ -2,11 +2,11 @@
 
 The `atif-sql` console script (`pyproject.toml:75`) is the repo's public contract: one cyclopts router (`packages/atif-cli/src/atif_cli/app.py:90`) dispatches the subcommands below, and a root-level `--version` resolves the installed `atif-sql` distribution (`:99`).
 
-These conventions hold across every subcommand. `--format` takes `auto`, `table`, `json`, or `csv` from the `OutputFormat` `StrEnum` at `packages/atif-cli/src/atif_cli/output.py:61`, and `auto` resolves to `table` when stdout is a TTY and `json` otherwise (`packages/atif-cli/src/atif_cli/output.py:84`). Exit codes come from one table, `EXIT_CODES` at `packages/atif-cli/src/atif_cli/errors.py:30`: `0` ok, `2` empty-session / no-embeddings, `64` invalid input or SQL parse error, `65` catalog error / validation error / embedding mismatch / lake mismatch, `70` runtime error / sandbox refusal, `77` root refusal, `78` terminal state / suspicious scan / extension missing / lake unavailable, `127` harbor missing (kept so the table never renumbers; no code path raises it). A number in that table is a wire contract: keys may be added, never renumbered. A usage error cyclopts refuses (an unknown option or command, a missing or uncoercible value) prints cyclopts' error panel and exits `64`, never cyclopts' own `2`. And stderr carries WARNING and above only, so a piped read emits data on stdout and nothing on stderr unless something is wrong; `ATIF_SQL_LOG_LEVEL` widens it (`INFO`, `DEBUG`) and is the only way to reach the INFO surface, because the entry point replaces loguru's default handler and with it the `LOGURU_LEVEL` that would have parameterized it (`packages/atif-cli/src/atif_cli/app.py:2390-2397`).
+These conventions hold across every subcommand. `--format` takes `auto`, `table`, `json`, or `csv` from the `OutputFormat` `StrEnum` at `packages/atif-cli/src/atif_cli/output.py:61`, and `auto` resolves to `table` when stdout is a TTY and `json` otherwise (`packages/atif-cli/src/atif_cli/output.py:84`). Exit codes come from one table, `EXIT_CODES` at `packages/atif-cli/src/atif_cli/errors.py:30`: `0` ok, `2` empty-session / no-embeddings, `64` invalid input or SQL parse error, `65` catalog error / validation error / embedding mismatch / lake mismatch, `70` runtime error / sandbox refusal, `77` root refusal, `78` terminal state / suspicious scan / extension missing / lake unavailable, `127` harbor missing (kept so the table never renumbers; no code path raises it). A number in that table is a wire contract: keys may be added, never renumbered. A usage error cyclopts refuses (an unknown option or command, a missing or uncoercible value) prints cyclopts' error panel and exits `64`, never cyclopts' own `2`. And stderr carries WARNING and above only, so a piped read emits data on stdout and nothing on stderr unless something is wrong; `ATIF_SQL_LOG_LEVEL` widens it (`INFO`, `DEBUG`) and is the only way to reach the INFO surface, because the entry point replaces loguru's default handler and with it the `LOGURU_LEVEL` that would have parameterized it (`packages/atif-cli/src/atif_cli/app.py:2412-2419`).
 
 `analyze` calls Amazon Bedrock and spends money, and so do `embed` and `search` under the default `cohere` embedding provider (the `gemma` provider runs on this machine); the others make no model calls.
 
-Some subcommands take `--agent`, which selects the transcript format and, with it, the default source and corpus roots: `convert`, `materialize`, `status`, and `query`. The accepted spellings are `claude-code` (the default) and `codex`, and an unknown one exits `64` naming both (`packages/atif-cli/src/atif_cli/app.py:663-666`). `codex` moves the source root to `$CODEX_HOME` (default `~/.codex`) `/sessions` and the corpus root to `~/.atif-sql/corpus/codex`; an explicit flag or `ATIF_SQL_*` env var still wins (`packages/atif-corpus/src/atif_corpus/infrastructure/settings.py`).
+Some subcommands take `--agent`, which selects the transcript format and, with it, the default source and corpus roots: `convert`, `materialize`, `status`, and `query`. The accepted spellings are `claude-code` (the default) and `codex`, and an unknown one exits `64` naming both (`packages/atif-cli/src/atif_cli/app.py:678-681`). `codex` moves the source root to `$CODEX_HOME` (default `~/.codex`) `/sessions` and the corpus root to `~/.atif-sql/corpus/codex`; an explicit flag or `ATIF_SQL_*` env var still wins (`packages/atif-corpus/src/atif_corpus/infrastructure/settings.py`).
 
 ## convert
 
@@ -15,16 +15,16 @@ atif-sql convert [OPTIONS] SESSION-JSONL
 ```
 
 Convert one Claude Code session JSONL or one Codex CLI rollout JSONL to ATIF plus a loss report and edges.
-`packages/atif-cli/src/atif_cli/app.py:675`
+`packages/atif-cli/src/atif_cli/app.py:690`
 
 Flags:
 
-- `SESSION-JSONL` / `--session-jsonl`: required path to the transcript, `~/.claude/projects/<proj>/<session>.jsonl`, or `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl` under `--agent codex`. `:676`
-- `--agent`: `claude-code` or `codex`; picks the converter and the fidelity policy. Defaults from `ATIF_SQL_AGENT`, then to `claude-code`. `:678`
-- `--include-subagents` / `--no-subagents`: stage `<session>/subagents/**.jsonl` side-files alongside the main chain; default `True`, with the negative form named explicitly. `:679`
-- `--trajectory-out`: write the trajectory JSON here and `edges.jsonl` beside it, instead of stdout. `:680`
+- `SESSION-JSONL` / `--session-jsonl`: required path to the transcript, `~/.claude/projects/<proj>/<session>.jsonl`, or `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl` under `--agent codex`. `:691`
+- `--agent`: `claude-code` or `codex`; picks the converter and the fidelity policy. Defaults from `ATIF_SQL_AGENT`, then to `claude-code`. `:693`
+- `--include-subagents` / `--no-subagents`: stage `<session>/subagents/**.jsonl` side-files alongside the main chain; default `True`, with the negative form named explicitly. `:694`
+- `--trajectory-out`: write the trajectory JSON here and `edges.jsonl` beside it, instead of stdout. `:695`
 
-Exit codes: `0` ok, `2` empty session, `64` invalid input, `65` validation, `70` conversion. `:709-710`
+Exit codes: `0` ok, `2` empty session, `64` invalid input, `65` validation, `70` conversion. `:724-725`
 
 ## materialize
 
@@ -33,7 +33,7 @@ atif-sql materialize [OPTIONS]
 ```
 
 Sync the materialized corpus with the raw transcript corpus in one scan-plan-convert-write pass.
-`packages/atif-cli/src/atif_cli/app.py:863`
+`packages/atif-cli/src/atif_cli/app.py:878`
 
 A transcript whose session id fails the boundary in `packages/atif-corpus/src/atif_corpus/domain/session_id.py` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, at most 255 characters) is skipped with a logged reason and counted: the report carries `rejected` and `rejected_session_ids` beside `unreadable` and `unreadable_session_ids`, and the table form prints one `REJECTED` line per name on stderr. Nothing from such a session is written, and a corpus directory an older version wrote under that name is kept and never marked.
 
@@ -43,19 +43,19 @@ The convert-write stage runs across a process pool by default. Each worker build
 
 Flags:
 
-- `--agent`: `claude-code` (default) or `codex`; picks the discovery layout and the default roots. `packages/atif-cli/src/atif_cli/app.py:865`
-- `--force` / `--no-force`: re-materialize every quiescent session regardless of the watermark; default `False`. `:866`
-- `--quiesce-seconds`: source-silence threshold; defaults from settings (contract: 300). `:867`
-- `--source-root`: override the raw transcript root, otherwise `ATIF_SQL_SOURCE_ROOT` or `<CLAUDE_CONFIG_DIR>/projects` (`<CODEX_HOME>/sessions` under `--agent codex`). `:868`
-- `--corpus-root`: override the materialized corpus root, otherwise env or `~/.atif-sql/corpus/<slug>`. `:869`
-- `--sessions`: comma-separated session-id filter; only these sessions are planned this pass. `:870`
-- `--workers`: processes for the convert-write stage; default `ATIF_SQL_MATERIALIZE_WORKERS`, else `min(8, cpu_count)`. `1` is the single-process path. `:871`
-- `--lake` / `--no-lake`: after the sessions are swapped into place, replace their rows in the lake at `ATIF_SQL_LAKE_ROOT` (default), or skip the lake. It does nothing until `atif-sql lake rebuild` has created the lake, and a failed lake write leaves the sessions in `sink_pending.json` for the next pass to retry. `packages/atif-cli/src/atif_cli/app.py:872`
-- `--format`: report format. `:873`
+- `--agent`: `claude-code` (default) or `codex`; picks the discovery layout and the default roots. `packages/atif-cli/src/atif_cli/app.py:880`
+- `--force` / `--no-force`: re-materialize every quiescent session regardless of the watermark; default `False`. `:881`
+- `--quiesce-seconds`: source-silence threshold; defaults from settings (contract: 300). `:882`
+- `--source-root`: override the raw transcript root, otherwise `ATIF_SQL_SOURCE_ROOT` or `<CLAUDE_CONFIG_DIR>/projects` (`<CODEX_HOME>/sessions` under `--agent codex`). `:883`
+- `--corpus-root`: override the materialized corpus root, otherwise env or `~/.atif-sql/corpus/<slug>`. `:884`
+- `--sessions`: comma-separated session-id filter; only these sessions are planned this pass. `:885`
+- `--workers`: processes for the convert-write stage; default `ATIF_SQL_MATERIALIZE_WORKERS`, else `min(8, cpu_count)`. `1` is the single-process path. `:886`
+- `--lake` / `--no-lake`: after the sessions are swapped into place, replace their rows in the lake at `ATIF_SQL_LAKE_ROOT` (default), or skip the lake. It does nothing until `atif-sql lake rebuild` has created the lake, and a failed lake write leaves the sessions in `sink_pending.json` for the next pass to retry. `packages/atif-cli/src/atif_cli/app.py:887`
+- `--format`: report format. `:888`
 
 Each session is written as `trajectory.json.zst`, `edges.jsonl.zst` and `session_events.jsonl.zst` (zstd; decompressed, each is the plain file an earlier version wrote), a plain `loss_report.json` and `meta.json`, and the raw source archive. No per-session parquet is written, so the report's `artifact_seconds` is `0.0`. A corpus written by an earlier version keeps its plain files and parquet until `atif-sql corpus slim` converts it (see below).
 
-Exit codes: `0` ok, `64` `--workers` below `1` (`packages/atif-cli/src/atif_cli/app.py:946-956`); `78` the corpus at this root holds the other agent's sessions, refused with nothing touched; `78` suspicious scan: the source scan found zero sessions while the corpus holds materialized ones, so the pass refused to mark them source-removed and touched nothing. Check `--source-root`; a retry over the same root cannot succeed. `:998-1026`
+Exit codes: `0` ok, `64` `--workers` below `1` (`packages/atif-cli/src/atif_cli/app.py:961-971`); `78` the corpus at this root holds the other agent's sessions, refused with nothing touched; `78` suspicious scan: the source scan found zero sessions while the corpus holds materialized ones, so the pass refused to mark them source-removed and touched nothing. Check `--source-root`; a retry over the same root cannot succeed. `:1013-1041`
 
 ## status
 
@@ -64,21 +64,21 @@ atif-sql status [OPTIONS]
 ```
 
 Report corpus freshness: watermark age, counts, bytes, staleness.
-`packages/atif-cli/src/atif_cli/app.py:1147`
+`packages/atif-cli/src/atif_cli/app.py:1162`
 
 It replays the planning a default `materialize` would do, so `staleness.stale` includes sessions a converter change made stale (`staleness.generation_stale` counts those alone) and `staleness.from_archive` counts source-removed sessions the next pass would re-convert from their archive. `retained_sessions` counts sessions kept without a source and `empty_sessions` the transcripts recorded as empty. `converter_schema` is the converter version a current session must carry, and `columnar_schema` is the version a session's per-session parquet must carry for `query` to read it on the columnar path.
 
 Flags:
 
-- `--agent`: `claude-code` (default) or `codex`; the scan and the reported `agent` field follow it. `:1149`
-- `--source-root`: override the raw transcript root. `:1150`
-- `--corpus-root`: override the materialized corpus root. `:1151`
-- `--quiesce-seconds`: source-silence threshold used to replay `materialize`'s planning decision. `:1152`
-- `--format`: report format. `:1153`
+- `--agent`: `claude-code` (default) or `codex`; the scan and the reported `agent` field follow it. `:1164`
+- `--source-root`: override the raw transcript root. `:1165`
+- `--corpus-root`: override the materialized corpus root. `:1166`
+- `--quiesce-seconds`: source-silence threshold used to replay `materialize`'s planning decision. `:1167`
+- `--format`: report format. `:1168`
 
-Both roots resolve through `_corpus_settings` (`:594`), so a `--source-root` given without `--corpus-root` re-derives the corpus root from the overridden source's slug unless `ATIF_SQL_CORPUS_ROOT` is set (`:624`).
+Both roots resolve through `_corpus_settings` (`:609`), so a `--source-root` given without `--corpus-root` re-derives the corpus root from the overridden source's slug unless `ATIF_SQL_CORPUS_ROOT` is set (`:639`).
 
-The report also says how the corpus is stored and how `query` reads it without the lake. `layout` counts the complete sessions still in the old layout (plain JSON files or per-session parquet) and their bytes; the table form prints one line, and `atif-sql corpus slim` converts them. `query path` is `columnar` when every complete session still carries current parquet, `json` when none does (a corpus that materialize wrote or `corpus slim` converted), `mixed` in between, and `empty` when there's no complete session. `status` applies the same per-session predicate the registry does (`meta.columnar_schema` current and all five files present and longer than a parquet header). `packages/atif-cli/src/atif_cli/app.py:1238-1239`
+The report also says how the corpus is stored and how `query` reads it without the lake. `layout` counts the complete sessions still in the old layout (plain JSON files or per-session parquet) and their bytes; the table form prints one line, and `atif-sql corpus slim` converts them. `query path` is `columnar` when every complete session still carries current parquet, `json` when none does (a corpus that materialize wrote or `corpus slim` converted), `mixed` in between, and `empty` when there's no complete session. `status` applies the same per-session predicate the registry does (`meta.columnar_schema` current and all five files present and longer than a parquet header). `packages/atif-cli/src/atif_cli/app.py:1253-1254`
 
 ## query
 
@@ -87,31 +87,31 @@ atif-sql query [OPTIONS] [ARGS]
 ```
 
 Run one SQL statement against the atif-duck catalog and emit results.
-`packages/atif-cli/src/atif_cli/app.py:1305`
+`packages/atif-cli/src/atif_cli/app.py:1320`
 
 Flags:
 
-- `SQL`: positional-only statement; omitting it without `--examples` is a parse error. `:1306`
-- `--examples`: short-circuit to the `examples` listing, honoring `--category` and `--requires`, without opening DuckDB. `:1309`
-- `--category`: forwarded to the `examples` listing. `:1310`
-- `--requires`: forwarded to the `examples` listing. `:1311`
-- `--agent`: `claude-code` (default) or `codex`; selects which corpus the statement reads. `:1312`
-- `--corpus-root`: override the materialized corpus root. `:1313`
-- `--all-corpora`: scope every view to every corpus the lake holds; `sessions.corpus` says which one a row came from. It has no per-session fallback, so it exits `78` without a usable lake and `64` together with `--no-lake`. `:1314`
-- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files. `:1315`
-- `--format`: `table` on a TTY, a JSON array of row objects on a pipe. `:1316`
+- `SQL`: positional-only statement; omitting it without `--examples` is a parse error. `:1321`
+- `--examples`: short-circuit to the `examples` listing, honoring `--category` and `--requires`, without opening DuckDB. `:1324`
+- `--category`: forwarded to the `examples` listing. `:1325`
+- `--requires`: forwarded to the `examples` listing. `:1326`
+- `--agent`: `claude-code` (default) or `codex`; selects which corpus the statement reads. `:1327`
+- `--corpus-root`: override the materialized corpus root. `:1328`
+- `--all-corpora`: scope every view to every corpus the lake holds; `sessions.corpus` says which one a row came from. It has no per-session fallback, so it exits `78` without a usable lake and `64` together with `--no-lake`. `:1329`
+- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files. `:1330`
+- `--format`: `table` on a TTY, a JSON array of row objects on a pipe. `:1331`
 
 The statement runs against a hardened connection: reads reach the registered views and nothing else, and nothing under the corpus root is writable. Before registration the connection is sized to the host: a memory cap derived from available RAM (half of physical RAM or 8 GiB, whichever is larger, never above 80% of physical or available RAM, and never below 512 MiB) and a thread count of one per 2 GiB of that cap, capped at the CPUs the process may use. `ATIF_SQL_QUERY_MEMORY_LIMIT` (a DuckDB size such as `6GB`) and `ATIF_SQL_QUERY_THREADS` override both; a malformed value exits 64. The spill directory is a private `mkdtemp` (mode 0700) under the system temp dir, the only directory the sandbox grants, and it's removed when the process exits. Extension auto-install and auto-load are off, and the lance extension is loaded only when it's already installed, so registration never reaches the network (`packages/atif-cli/src/atif_cli/app.py`, `_configure_query_resources`).
 
-Layered guards keep caller SQL from writing the corpus. DuckDB's file grants are read-write and it has no read-only grant, so `COPY ... TO <granted parquet> (USE_TMP_FILE false)` would overwrite one; the CLI therefore refuses every statement kind that names a file before executing anything, using DuckDB's own parser: `COPY`, `EXPORT`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE` exit 70 with kind `sandbox_refused`, for any uid, and a batch containing one of them runs nothing. And because a `0444` file mode doesn't bind root, `query` refuses to run as uid 0 (exit 77, kind `root_refused`) unless `ATIF_SQL_ALLOW_ROOT=1` is set, which logs a warning. `search` and `analyze` refuse root the same way.
+Layered guards keep caller SQL from writing the corpus. DuckDB's file grants are read-write and it has no read-only grant, so `COPY ... TO <granted parquet> (USE_TMP_FILE false)` would overwrite one; the CLI therefore refuses every statement kind that names a file before executing anything, using DuckDB's own parser: `COPY`, `EXPORT`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE` exit 70 with kind `sandbox_refused`, for any uid, and a batch containing one of them runs nothing. So do `PRAGMA` and a `PIVOT` without an `IN` list: DuckDB 2.0's parser hands both back unexpanded, and a `PRAGMA` can be `COPY FROM DATABASE` or `IMPORT DATABASE` while a `PIVOT` can sit inside a `COPY`. `pragma_table_info('steps')`, `DESCRIBE`, `SHOW` and a `PIVOT ... ON col IN (...)` still run. And because a `0444` file mode doesn't bind root, `query` refuses to run as uid 0 (exit 77, kind `root_refused`) unless `ATIF_SQL_ALLOW_ROOT=1` is set, which logs a warning. `search` and `analyze` refuse root the same way.
 
 What caller SQL can still see: `duckdb_settings()` and `current_setting(...)` return the sandbox's own configuration, including the corpus root, the spill directory, the memory cap and every granted parquet path, which names every session id. DuckDB can't hide a setting from SQL and the grants have to be per file, so this is accepted: the caller is the local user, who can list the corpus and `SELECT session_id FROM sessions` anyway, and `query` isn't a privilege boundary (see SECURITY.md).
 
 The views themselves carry no corpus path as statement text. The registry hands its globs and file lists to `read_json(?)` as bound parameters and builds the parquet readers through DuckDB's relation API, so a corpus root such as `o'brien ?; --$1` and transcript content carrying SQL text both register as data (`packages/atif-duck/src/atif_duck/infrastructure/registry.py`). A session directory whose name fails the session id boundary (`packages/atif-duck/src/atif_duck/domain/session_id.py`) registers nothing and is logged once.
 
-Without the lake, an old-layout session that still carries current parquet is served from it, and every other session is parsed from its stored trajectory (`trajectory.json.zst`, decompressed by DuckDB's JSON reader) on each run. That makes the fallback slow on a large corpus, and it holds each document it reads in memory, so a full scan of `tool_calls` or `tool_results` over a large corpus can run out of query memory. That error's hint says to run `atif-sql lake rebuild` (or raise `ATIF_SQL_QUERY_MEMORY_LIMIT`), because the lake answers the same query in bounded memory. The fallback stays for a corpus the lake doesn't hold yet, a lake whose schema is stale, and small corpora. The per-session parquet files the registry bound are granted to the sandbox the same way the analytics parquets are (as individual `allowed_paths` entries, `packages/atif-cli/src/atif_cli/app.py:583-587`), and they're written read-only (`0444`), so a `COPY ... TO` at one of them fails at the filesystem even though DuckDB's grant is read-write. `atif-sql status` says which path a corpus takes.
+Without the lake, an old-layout session that still carries current parquet is served from it, and every other session is parsed from its stored trajectory (`trajectory.json.zst`, decompressed by DuckDB's JSON reader) on each run. That makes the fallback slow on a large corpus, and it holds each document it reads in memory, so a full scan of `tool_calls` or `tool_results` over a large corpus can run out of query memory. That error's hint says to run `atif-sql lake rebuild` (or raise `ATIF_SQL_QUERY_MEMORY_LIMIT`), because the lake answers the same query in bounded memory. The fallback stays for a corpus the lake doesn't hold yet, a lake whose schema is stale, and small corpora. The per-session parquet files the registry bound are granted to the sandbox the same way the analytics parquets are (as individual `allowed_paths` entries, `packages/atif-cli/src/atif_cli/app.py:598-602`), and they're written read-only (`0444`), so a `COPY ... TO` at one of them fails at the filesystem even though DuckDB's grant is read-write. `atif-sql status` says which path a corpus takes.
 
-Exit codes: `64` parse error, a malformed `ATIF_SQL_QUERY_*` override, or `--all-corpora` with `--no-lake`, `65` catalog error, `65` embedding mismatch, `70` runtime error, `70` `sandbox_refused` (a statement kind the sandbox never runs), `77` `root_refused`, `78` `lake_unavailable` (`--all-corpora` without a usable lake). `:1400-1411`
+Exit codes: `64` parse error, a malformed `ATIF_SQL_QUERY_*` override, or `--all-corpora` with `--no-lake`, `65` catalog error, `65` embedding mismatch, `70` runtime error, `70` `sandbox_refused` (a statement kind the sandbox never runs), `77` `root_refused`, `78` `lake_unavailable` (`--all-corpora` without a usable lake). `:1419-1430`
 
 ## analyze
 
@@ -120,7 +120,7 @@ atif-sql analyze [OPTIONS]
 ```
 
 Run the LLM analytics pipelines: classify, conflicts, friction, and perceived.
-`packages/atif-cli/src/atif_cli/app.py:1634`
+`packages/atif-cli/src/atif_cli/app.py:1656`
 
 The stages run on the model family `ATIF_SQL_LLM_FAMILY` names: `openai` (GPT-6, the default) or
 `anthropic` (Claude 5.5). Transcripts carry tool results as size stubs unless
@@ -128,21 +128,21 @@ The stages run on the model family `ATIF_SQL_LLM_FAMILY` names: `openai` (GPT-6,
 
 Flags:
 
-- `--since-days`: restrict the stages to sessions whose last step is within N days; default `30`. `:1636`
-- `--limit`: cap the number of sessions, newest-first, per stage. `:1637`
-- `--max-sessions`: hard per-run session ceiling per LLM pipeline; overrides `ATIF_SQL_LLM_MAX_SESSIONS_PER_RUN`, default 50. `:1638`
-- `--max-cost-usd`: hard per-run dollar ceiling across all LLM pipelines, checked against running actual usage; overrides `ATIF_SQL_LLM_MAX_COST_USD_PER_RUN`, default 25.0. `:1639`
-- `--no-dry-run`: execute the LLM stages for real, which costs money; the default is a dry run emitting plan dicts and cost estimates. `:1640`
-- `--llm-only`: accepted and ignored. Every stage is an LLM stage, and the flag exists so existing crontab lines keep parsing. `:1641`
-- `--skip-classify`: opt out of the classify stage. `:1642`
-- `--skip-conflicts`: opt out of the conflicts stage. `:1643`
-- `--skip-friction`: opt out of the friction stage. `:1644`
-- `--skip-perceived`: opt out of the perceived stage. `:1645`
-- `--corpus-root`: override the materialized corpus root. `:1646`
-- `--lake` / `--no-lake`: read session data from the lake when it holds the corpus (default), or from the per-session files. `:1647`
-- `--format`: summary format. `:1648`
+- `--since-days`: restrict the stages to sessions whose last step is within N days; default `30`. `:1658`
+- `--limit`: cap the number of sessions, newest-first, per stage. `:1659`
+- `--max-sessions`: hard per-run session ceiling per LLM pipeline; overrides `ATIF_SQL_LLM_MAX_SESSIONS_PER_RUN`, default 50. `:1660`
+- `--max-cost-usd`: hard per-run dollar ceiling across all LLM pipelines, checked against running actual usage; overrides `ATIF_SQL_LLM_MAX_COST_USD_PER_RUN`, default 25.0. `:1661`
+- `--no-dry-run`: execute the LLM stages for real, which costs money; the default is a dry run emitting plan dicts and cost estimates. `:1662`
+- `--llm-only`: accepted and ignored. Every stage is an LLM stage, and the flag exists so existing crontab lines keep parsing. `:1663`
+- `--skip-classify`: opt out of the classify stage. `:1664`
+- `--skip-conflicts`: opt out of the conflicts stage. `:1665`
+- `--skip-friction`: opt out of the friction stage. `:1666`
+- `--skip-perceived`: opt out of the perceived stage. `:1667`
+- `--corpus-root`: override the materialized corpus root. `:1668`
+- `--lake` / `--no-lake`: read session data from the lake when it holds the corpus (default), or from the per-session files. `:1669`
+- `--format`: summary format. `:1670`
 
-Session data comes from the lake when it holds the corpus; a session whose lake rows aren't its current artifacts is read from its files, and with no usable lake the command warns once and reads the files. The summary's `session_source` says which source ran (`lake` or `files`), and on the lake `sessions_read_from_files` counts the sessions the last stage read from files. If a lake read fails partway (a `lake rebuild` swapped the lake out from under the run), the command warns once, reads the files for the rest of the run, and reports `lake_read_failed: true`. The plans, the rendered transcripts and the checkpoint bounds are the same whichever source runs. Outputs land under the corpus's `analytics/` directory either way. `:1716-1734`
+Session data comes from the lake when it holds the corpus; a session whose lake rows aren't its current artifacts is read from its files, and with no usable lake the command warns once and reads the files. The summary's `session_source` says which source ran (`lake` or `files`), and on the lake `sessions_read_from_files` counts the sessions the last stage read from files. If a lake read fails partway (a `lake rebuild` swapped the lake out from under the run), the command warns once, reads the files for the rest of the run, and reports `lake_read_failed: true`. The plans, the rendered transcripts and the checkpoint bounds are the same whichever source runs. Outputs land under the corpus's `analytics/` directory either way. `:1738-1756`
 
 classify and conflicts skip non-interactive sessions (`session_outcomes.kind` of `turn_audit` or `one_shot_job`), and friction and perceived read human turns only. The deterministic authorship views (`user_steps`, `human_turns`, `session_outcomes`) are plain views, so they need no `analyze` run.
 
@@ -153,7 +153,7 @@ atif-sql embed [OPTIONS]
 ```
 
 Embed unembedded corpus steps and append them to LanceDB, with Cohere Embed v4 on Bedrock by default or with EmbeddingGemma 2 on this machine.
-`packages/atif-cli/src/atif_cli/app.py:1801`
+`packages/atif-cli/src/atif_cli/app.py:1823`
 
 `ATIF_SQL_EMBED_PROVIDER` picks the embedder:
 
@@ -164,18 +164,18 @@ Each store is stamped with the model and width that wrote it, so a store written
 
 Flags:
 
-- `--limit`: cap the number of steps embedded this run. `packages/atif-cli/src/atif_cli/app.py:1803`
-- `--all`: explicitly embed every unembedded step, a full backfill. `:1804`
-- `--dry-run`: preview only; emit the plan JSON with keys `pipeline, discovery, candidates, batches, batch_size, concurrency, provider, model, dim, store, limit, dry_run` and make no embedding calls. `:1805`
-- `--install-extension`: install the lance DuckDB extension and exit. It touches neither Bedrock nor the store. `:1806`
-- `--prune-orphans`: count the stored rows whose uuid no lake step carries, and with `--no-dry-run` delete them; it never calls Bedrock. `:1807`
-- `--lake` / `--no-lake`: discover the steps to embed from the lake when it holds the corpus (default), or from the per-session files. `:1808`
-- `--corpus-root`: override the materialized corpus root. `:1809`
-- `--format`: output format. `:1810`
+- `--limit`: cap the number of steps embedded this run. `packages/atif-cli/src/atif_cli/app.py:1825`
+- `--all`: explicitly embed every unembedded step, a full backfill. `:1826`
+- `--dry-run`: preview only; emit the plan JSON with keys `pipeline, discovery, candidates, batches, batch_size, concurrency, provider, model, dim, store, limit, dry_run` and make no embedding calls. `:1827`
+- `--install-extension`: install the lance DuckDB extension and exit. It touches neither Bedrock nor the store. `:1828`
+- `--prune-orphans`: count the stored rows whose uuid no lake step carries, and with `--no-dry-run` delete them; it never calls Bedrock. `:1829`
+- `--lake` / `--no-lake`: discover the steps to embed from the lake when it holds the corpus (default), or from the per-session files. `:1830`
+- `--corpus-root`: override the materialized corpus root. `:1831`
+- `--format`: output format. `:1832`
 
-A real run requires an explicit scope: a bare `atif-sql embed` exits `64` with a hint rather than starting an unbounded backfill. `:1908-1918`
+A real run requires an explicit scope: a bare `atif-sql embed` exits `64` with a hint rather than starting an unbounded backfill. `:1930-1940`
 
-Exit codes: `0` success, `64` missing `--limit` or `--all`, or an `ATIF_SQL_OUTPUT_DIMENSION` the provider can't emit, `70` runtime (Bedrock, local model, DuckDB, or Lance failure: transient, safe to retry), `78` terminal state, where the store or its config needs operator action and unattended lanes suppress retries. The `gemma` provider without the `local` extra exits `78` with the install command in the message. `--prune-orphans` exits `78` (`lake_unavailable`) without a usable lake, and refuses to delete while a session of the corpus is pending a lake write. `:1887-1892`
+Exit codes: `0` success, `64` missing `--limit` or `--all`, or an `ATIF_SQL_OUTPUT_DIMENSION` the provider can't emit, `70` runtime (Bedrock, local model, DuckDB, or Lance failure: transient, safe to retry), `78` terminal state, where the store or its config needs operator action and unattended lanes suppress retries. The `gemma` provider without the `local` extra exits `78` with the install command in the message. `--prune-orphans` exits `78` (`lake_unavailable`) without a usable lake, and refuses to delete while a session of the corpus is pending a lake write. `:1909-1914`
 
 ## search
 
@@ -184,21 +184,21 @@ atif-sql search [OPTIONS] QUERY_TEXT
 ```
 
 Semantic top-k nearest-neighbor search over step embeddings.
-`packages/atif-cli/src/atif_cli/app.py:2018`
+`packages/atif-cli/src/atif_cli/app.py:2040`
 
 Flags:
 
-- `QUERY_TEXT`: required positional-only text, embedded by the provider `ATIF_SQL_EMBED_PROVIDER` selects: Cohere Embed v4 in `search_query` mode, or EmbeddingGemma 2 on this machine under its `SearchQuery` prompt. The search reads that provider's store. `:2019`
-- `-k` / `--k`: top-k; default `10`. Apart from the `-h` help flag cyclopts adds, it's the CLI's only short flag. `:2022`
-- `--session-id`: confine the kNN to one session. `:2023`
-- `--corpus-root`: override the materialized corpus root. `:2024`
-- `--all-corpora`: search every corpus's embedding store and add a `corpus` column; exits `78` without a usable lake and `64` together with `--no-lake`. `:2025`
-- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files. `:2026`
-- `--format`: output format. `:2027`
+- `QUERY_TEXT`: required positional-only text, embedded by the provider `ATIF_SQL_EMBED_PROVIDER` selects: Cohere Embed v4 in `search_query` mode, or EmbeddingGemma 2 on this machine under its `SearchQuery` prompt. The search reads that provider's store. `:2041`
+- `-k` / `--k`: top-k; default `10`. Apart from the `-h` help flag cyclopts adds, it's the CLI's only short flag. `:2044`
+- `--session-id`: confine the kNN to one session. `:2045`
+- `--corpus-root`: override the materialized corpus root. `:2046`
+- `--all-corpora`: search every corpus's embedding store and add a `corpus` column; exits `78` without a usable lake and `64` together with `--no-lake`. `:2047`
+- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files. `:2048`
+- `--format`: output format. `:2049`
 
-Output columns are `uuid`, `session_id`, `snippet`, and `sim` (`:2188-2191`), plus `corpus` under `--all-corpora`, ranked by cosine distance ascending so the highest similarity comes first (`:2196`).
+Output columns are `uuid`, `session_id`, `snippet`, and `sim` (`:2210-2213`), plus `corpus` under `--all-corpora`, ranked by cosine distance ascending so the highest similarity comes first (`:2218`).
 
-Exit codes: `0` success, `2` no embeddings yet, `64` `--all-corpora` together with `--no-lake`, `65` embedding mismatch when the store was written by another provider, `70` runtime, including a failed query embedding, `77` `root_refused`, `78` a store whose lance DuckDB extension isn't installed, `--all-corpora` without a usable lake, or the `gemma` provider without the `local` extra. `:2069-2075`
+Exit codes: `0` success, `2` no embeddings yet, `64` `--all-corpora` together with `--no-lake`, `65` embedding mismatch when the store was written by another provider, `70` runtime, including a failed query embedding, `77` `root_refused`, `78` a store whose lance DuckDB extension isn't installed, `--all-corpora` without a usable lake, or the `gemma` provider without the `local` extra. `:2091-2097`
 
 ## examples
 
@@ -207,17 +207,17 @@ atif-sql examples [OPTIONS]
 ```
 
 List tested example queries for every view and macro, derived from the static atif-duck catalog.
-`packages/atif-cli/src/atif_cli/app.py:2243`
+`packages/atif-cli/src/atif_cli/app.py:2265`
 
 Flags:
 
-- `--category`: filter to one of `view`, `table-macro`, `scalar-macro`, validated against `CATEGORY_VALUES`. `:2245`
-- `--requires`: filter to one of `core`, `analytics`, `vss`, validated against `REQUIRES_VALUES`. `:2246`
-- `--format`: a TTY table grouped by `requires`, or a JSON object carrying `note` and `examples`. `:2247`
+- `--category`: filter to one of `view`, `table-macro`, `scalar-macro`, validated against `CATEGORY_VALUES`. `:2267`
+- `--requires`: filter to one of `core`, `analytics`, `vss`, validated against `REQUIRES_VALUES`. `:2268`
+- `--format`: a TTY table grouped by `requires`, or a JSON object carrying `note` and `examples`. `:2269`
 
 Both value sets are `Literal` aliases in the producer package: `Requires` at `packages/atif-duck/src/atif_duck/domain/examples.py:49` and `Category` at `:54`, exported as tuples at `:56` and `:57`.
 
-Exit codes: `0` ok, `64` unknown `--category` or `--requires` value. `packages/atif-cli/src/atif_cli/app.py:2280-2290`
+Exit codes: `0` ok, `64` unknown `--category` or `--requires` value. `packages/atif-cli/src/atif_cli/app.py:2302-2312`
 
 ## schema
 
@@ -226,13 +226,13 @@ atif-sql schema [OPTIONS]
 ```
 
 List every core and analytics view with its columns and every macro signature, each with its `requires` value.
-`packages/atif-cli/src/atif_cli/app.py:2335`
+`packages/atif-cli/src/atif_cli/app.py:2357`
 
 Flags:
 
-- `--format`: a TTY listing, or a JSON object carrying `views`, `view_requires` (view name to `requires`), `macros` (each with `name`, `params`, and `requires`), and `examples_hint`. `:2337`
+- `--format`: a TTY listing, or a JSON object carrying `views`, `view_requires` (view name to `requires`), `macros` (each with `name`, `params`, and `requires`), and `examples_hint`. `:2359`
 
-The answer comes from the static `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `requires` is `core` for an object that binds on any corpus, `analytics` for one that binds once `analyze` has written its parquet, and `vss` for one that needs the embedding store. `:2352-2361`
+The answer comes from the static `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `requires` is `core` for an object that binds on any corpus, `analytics` for one that binds once `analyze` has written its parquet, and `vss` for one that needs the embedding store. `:2374-2383`
 
 ## `lake`
 

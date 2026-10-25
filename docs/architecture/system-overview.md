@@ -86,7 +86,7 @@ The direction of those edges is enforced rather than conventional. `[tool.import
 importing each other (`:600`), and a forbidden contract limiting `atif-analytics` to `atif-models`
 alone among the members (`:605`). `atif-cli` is
 the sole composition root, and it imports its siblings lazily inside command bodies
-(`packages/atif-cli/src/atif_cli/app.py:712`, `:1697`, `:1903`) so that `atif-sql schema` pays for
+(`packages/atif-cli/src/atif_cli/app.py:727`, `:1719`, `:1925`) so that `atif-sql schema` pays for
 none of the analytics or vector stack. Failures surface as typed exceptions mapped to stable
 process exit codes at the CLI edge (`packages/atif-cli/src/atif_cli/errors.py:30`).
 
