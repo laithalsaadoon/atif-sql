@@ -84,10 +84,10 @@ console script declared at `pyproject.toml:75`.
 | `CorpusMaterializer` | atif-corpus | `read_watermark` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:424` |
 | `CorpusMaterializer` | atif-corpus | `scan_source_root` | `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:302` |
 | `CorpusMaterializer` | atif-corpus | `build_plan` | `packages/atif-corpus/src/atif_corpus/domain/sessions.py:169` |
-| `DuckRegistry` | atif-duck | `register` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2095` |
-| `DuckRegistry` | atif-duck | `register_views` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:984` |
-| `DuckRegistry` | atif-duck | `register_vss` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1601` |
-| `DuckRegistry` | atif-duck | `register_macros` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1856` |
+| `DuckRegistry` | atif-duck | `register` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129` |
+| `DuckRegistry` | atif-duck | `register_views` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1018` |
+| `DuckRegistry` | atif-duck | `register_vss` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1635` |
+| `DuckRegistry` | atif-duck | `register_macros` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1890` |
 | `DuckRegistry` | atif-duck | `register_authorship` | `packages/atif-duck/src/atif_duck/infrastructure/authorship.py:38` |
 | `DuckRegistry` | atif-duck | `build_examples` | `packages/atif-duck/src/atif_duck/domain/examples.py:191` |
 | `EmbedBackfill` | atif-embed | `run_backfill` | `packages/atif-embed/src/atif_embed/application/embed.py:61` |
@@ -105,7 +105,7 @@ console script declared at `pyproject.toml:75`.
 
 `register` calls the other registrars, then the analytics registrars, in
 binding order at
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2172-2193`;
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2206-2227`;
 `run_analyze` dispatches the LLM stages from a table at
 `packages/atif-analytics/src/atif_analytics/application/analyze.py:103-108`.
 

@@ -123,7 +123,7 @@ from atif_duck.infrastructure.projections import (
     step_columns,
     step_key_columns,
 )
-from atif_duck.infrastructure.stored_artifacts import decoded_size, stored_artifact
+from atif_duck.infrastructure.stored_artifacts import decoded_size, longest_line, stored_artifact
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -232,11 +232,17 @@ _OBJECT_SIZE_HEADROOM_BYTES: int = 1_048_576
 LANCE_EXTENSION: str = "lance"
 
 
-def _object_size_bound(paths: Iterable[Path]) -> int:
-    """``maximum_object_size`` for a ``read_json`` over ``paths``, sized from the files.
+def _bounded(largest: int) -> int:
+    """``largest`` plus headroom, floored at DuckDB's default and capped at :data:`_OBJECT_SIZE_CAP`."""
+    with_headroom = largest + largest // _OBJECT_SIZE_HEADROOM_DIVISOR + _OBJECT_SIZE_HEADROOM_BYTES
+    return max(_OBJECT_SIZE_FLOOR, min(_OBJECT_SIZE_CAP, with_headroom))
 
-    The bound is not free. DuckDB's eager JSON reader reserves about twice
-    this many bytes PER THREAD before it parses anything, so the 1 GiB
+
+def _object_size_bound(paths: Iterable[Path]) -> int:
+    """``maximum_object_size`` for a one-document ``read_json`` over ``paths``, sized from the files.
+
+    The bound is not free. DuckDB's JSON reader allocates each read buffer
+    at twice this many bytes, and holds at least one a thread, so the 1 GiB
     constant this replaced cost 2 GiB a thread: over 300 ``edges.jsonl``
     files of under 8 MB each it exhausted a 6 GB ``memory_limit`` at four
     threads and a 25 GB one at sixteen, while 16 MiB read the same rows in
@@ -244,19 +250,48 @@ def _object_size_bound(paths: Iterable[Path]) -> int:
     claimed lowering it changed nothing; that measurement held the thread
     count at one.
 
-    A newline-delimited file's objects are its lines and a one-document file
-    IS its object, so the largest file present bounds every object either
-    reader meets. That size plus headroom, floored at DuckDB's default and
-    capped at :data:`_OBJECT_SIZE_CAP`, is the bound. A compressed file is
-    measured by its decompressed size (read from its frame header), because
-    that's what the reader holds. A path that vanished between the listing
-    and the stat counts as zero.
+    A one-document file IS its object, so the largest file present bounds
+    every object the reader meets. That size plus headroom
+    (:func:`_bounded`) is the bound. A compressed file is measured by its
+    decompressed size (read from its frame header), because that's what the
+    reader holds. A path that vanished between the listing and the stat
+    counts as zero. A newline-delimited reader takes
+    :func:`_line_size_bound` instead.
     """
-    largest = 0
+    return _bounded(max((decoded_size(path) for path in paths), default=0))
+
+
+def _line_size_bound(paths: Iterable[Path]) -> int:
+    """``maximum_object_size`` for a newline-delimited ``read_json`` over ``paths``: its longest line.
+
+    A newline-delimited file's objects are its lines, so the bound follows
+    the longest line, not the largest file. Sized from the file, one large
+    file set the buffers of every file in the statement: a lake batch of 512
+    sessions holding the 120 MB ``edges.jsonl`` of the largest live session
+    read all 512 files with 302 MB buffers (twice a 151 MB bound). That read
+    alone needed 2,046 MiB at four threads on DuckDB 2.0.0 (1,342 MiB on
+    1.5.6), all but 2 MiB of the lake writer's 2 GiB cap, so ``lake
+    rebuild`` and ``lake verify`` ran out of memory (measured 2026-10-25).
+    DuckDB 2.0 scans each file of a list as its own parallel scan
+    (``read_single_json_file.cpp``) and opens files ahead of the scan, so
+    more of those buffers are live at once than on 1.5, which gave a list at
+    least as long as the thread count one buffer a thread. The longest line
+    of the 13,071 ``edges.jsonl`` files in the copied corpora (1.9 GB) is
+    960 bytes, and of their ``session_events.jsonl`` files 8,913 bytes, so in
+    practice the bound is DuckDB's default.
+
+    A file that fits under the floor with its headroom can't hold a longer
+    line, so only a larger file is read, once, to find its longest line
+    (:func:`~atif_duck.infrastructure.stored_artifacts.longest_line`). The
+    same headroom, floor and cap apply.
+    """
+    longest = 0
     for path in paths:
-        largest = max(largest, decoded_size(path))
-    with_headroom = largest + largest // _OBJECT_SIZE_HEADROOM_DIVISOR + _OBJECT_SIZE_HEADROOM_BYTES
-    return max(_OBJECT_SIZE_FLOOR, min(_OBJECT_SIZE_CAP, with_headroom))
+        size = decoded_size(path)
+        if _bounded(size) > _OBJECT_SIZE_FLOOR:
+            size = longest_line(path)
+        longest = max(longest, size)
+    return _bounded(longest)
 
 
 # Explicit projection for ``v_raw_trajectories``.
@@ -370,7 +405,7 @@ def _register_events_json(con: duckdb.DuckDBPyConnection, paths: Sequence[Path])
     the columnar producer applies, and the two sources agree byte for byte.
     The file list is the statement's one parameter.
     """
-    bound = _object_size_bound(paths)
+    bound = _line_size_bound(paths)
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE {_RAW_SESSION_EVENTS_JSON_TABLE} AS
@@ -895,7 +930,7 @@ def register_raw(
             if path is not None
         ]
         edges_source: list[str] = [str(path) for path in edge_paths]
-        edges_bound = _object_size_bound(edge_paths)
+        edges_bound = _line_size_bound(edge_paths)
         if wanted is None:
             loss_source: str | list[str] = str(sessions_dir / "*" / "loss_report.json")
         else:

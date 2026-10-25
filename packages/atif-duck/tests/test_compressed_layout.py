@@ -34,6 +34,7 @@ from atif_duck.infrastructure.registry import register, register_raw
 from atif_duck.infrastructure.stored_artifacts import (
     decoded_size,
     iter_lines,
+    longest_line,
     read_bytes,
     stored_artifact,
 )
@@ -96,6 +97,23 @@ class TestStoredArtifacts:
         path.write_bytes(b"not a zstd frame at all")
         assert decoded_size(path) == 0
         assert decoded_size(tmp_path / "gone.jsonl") == 0
+        assert longest_line(path) == 0
+        assert longest_line(tmp_path / "gone.jsonl") == 0
+
+    @pytest.mark.parametrize("compressed", [False, True], ids=["plain", "zst"])
+    def test_longest_line_spans_read_chunks(self, tmp_path: Path, compressed: bool) -> None:
+        """Lines that straddle the 1 MiB read chunks, and a last line with no newline."""
+        mib = 1024 * 1024
+        path = tmp_path / ("edges.jsonl.zst" if compressed else "edges.jsonl")
+
+        def store(data: bytes) -> Path:
+            path.write_bytes(zstandard.ZstdCompressor().compress(data) if compressed else data)
+            return path
+
+        lines = [b"a" * 10, b"b" * (3 * mib + 7), b"", b"c" * (mib - 1), b"d" * (2 * mib)]
+        assert longest_line(store(b"\n".join(lines))) == 3 * mib + 7
+        assert longest_line(store(b"x" * (5 * mib) + b"\n")) == 5 * mib
+        assert longest_line(store(b"")) == 0
 
 
 # ---------------------------------------------------------------------------

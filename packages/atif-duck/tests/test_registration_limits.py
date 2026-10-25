@@ -9,7 +9,8 @@ Two findings of the MicroVM review, pinned at the registry layer:
   2 GiB a thread, so ``SET threads=4; SET memory_limit='6GB'`` (a 4 vCPU,
   8 GiB guest) failed to register a 131 MB corpus with an out-of-memory
   error, and so did 16 threads under 25 GB. The bound is now sized from the
-  largest file the reader will open.
+  largest file a one-document reader will open, and from the longest line a
+  newline-delimited reader will meet.
 * ``register_vss`` used to ``INSTALL lance`` on every registration, a 242 MB
   download from the extension repository. It now LOADs the extension only
   when it is already installed and binds the vector surface empty otherwise.
@@ -22,6 +23,7 @@ from typing import Any
 
 import duckdb
 import pytest
+import zstandard
 from duck_fixtures import SESSION_IDS
 from loguru import logger
 from test_vss import _write_lance
@@ -30,6 +32,7 @@ from atif_duck.infrastructure import registry as registry_mod
 from atif_duck.infrastructure.registry import (
     _OBJECT_SIZE_CAP,
     _OBJECT_SIZE_FLOOR,
+    _line_size_bound,
     _object_size_bound,
     install_lance_extension,
     lance_extension_installed,
@@ -97,25 +100,92 @@ class TestObjectSizeBound:
     def test_the_bound_reaches_every_eager_reader(
         self, corpus_root: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The DDL carries the sized bound, not the old constant."""
-        seen: list[int] = []
-        real = registry_mod._object_size_bound
+        """The DDL carries the sized bound, not the old constant: by file, or by line."""
+        seen: dict[str, list[int]] = {"_object_size_bound": [], "_line_size_bound": []}
+        for name, calls in seen.items():
+            real = getattr(registry_mod, name)
 
-        def spy(paths: Any) -> int:
-            bound = real(paths)
-            seen.append(bound)
-            return bound
+            def spy(paths: Any, real: Any = real, calls: list[int] = calls) -> int:
+                bound = real(paths)
+                calls.append(bound)
+                return bound
 
-        monkeypatch.setattr(registry_mod, "_object_size_bound", spy)
+            monkeypatch.setattr(registry_mod, name, spy)
         con = duckdb.connect()
         try:
             register(con, corpus_root)
         finally:
             con.close()
-        assert len(seen) == 3, (
-            "one bound per eager JSON reader (trajectories, edges, session events)"
-        )
-        assert all(bound == _OBJECT_SIZE_FLOOR for bound in seen)
+        assert seen == {
+            # trajectory.json: one document per file
+            "_object_size_bound": [_OBJECT_SIZE_FLOOR],
+            # session_events.jsonl and edges.jsonl: one object per line
+            "_line_size_bound": [_OBJECT_SIZE_FLOOR, _OBJECT_SIZE_FLOOR],
+        }
+
+
+def _short_lines(path: Path, total_bytes: int, *, line_bytes: int = 999) -> Path:
+    """``total_bytes`` (rounded up to whole lines) of ``line_bytes``-byte lines."""
+    line = b"x" * line_bytes + b"\n"
+    path.write_bytes(line * -(-total_bytes // len(line)))
+    return path
+
+
+class TestLineSizeBound:
+    """A newline-delimited reader's objects are its lines: the bound follows the longest one."""
+
+    def test_a_large_file_of_short_lines_stays_at_the_floor(self, tmp_path: Path) -> None:
+        path = _short_lines(tmp_path / "edges.jsonl", 40 * MIB)
+        assert _object_size_bound([path]) == path.stat().st_size * 5 // 4 + MIB
+        assert _line_size_bound([path]) == _OBJECT_SIZE_FLOOR
+
+    def test_a_long_line_gets_a_quarter_plus_one_mib_of_headroom(self, tmp_path: Path) -> None:
+        path = tmp_path / "edges.jsonl"
+        path.write_bytes(b"{}\n" + b"y" * (20 * MIB) + b"\n{}\n")
+        assert _line_size_bound([path]) == 20 * MIB + 5 * MIB + MIB
+
+    def test_the_longest_line_of_any_file_wins(self, tmp_path: Path) -> None:
+        short = _short_lines(tmp_path / "a.jsonl", 60 * MIB)
+        long = tmp_path / "b.jsonl"
+        long.write_bytes(b"z" * (24 * MIB) + b"\n")
+        assert _line_size_bound([short, long]) == 24 * MIB + 6 * MIB + MIB
+
+    def test_a_compressed_file_is_measured_decompressed(self, tmp_path: Path) -> None:
+        path = tmp_path / "edges.jsonl.zst"
+        path.write_bytes(zstandard.ZstdCompressor().compress(b"{}\n" + b"y" * (20 * MIB) + b"\n"))
+        assert path.stat().st_size < MIB
+        assert _line_size_bound([path]) == 20 * MIB + 5 * MIB + MIB
+
+    def test_a_file_the_floor_already_covers_is_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        read: list[Path] = []
+        real = registry_mod.longest_line
+
+        def spy(path: Path) -> int:
+            read.append(path)
+            return real(path)
+
+        monkeypatch.setattr(registry_mod, "longest_line", spy)
+        small = _short_lines(tmp_path / "small.jsonl", 8 * MIB)
+        large = _short_lines(tmp_path / "large.jsonl", 13 * MIB)
+        assert _line_size_bound([small, large]) == _OBJECT_SIZE_FLOOR
+        assert read == [large]
+
+    def test_capped_at_one_gib(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        huge = tmp_path / "huge.jsonl"
+        with huge.open("wb") as handle:
+            handle.truncate(3 * 1024**3)  # sparse: no bytes written
+
+        def two_gib(_path: Path) -> int:
+            return 2 * 1024**3
+
+        monkeypatch.setattr(registry_mod, "longest_line", two_gib)
+        assert _line_size_bound([huge]) == _OBJECT_SIZE_CAP
+
+    def test_no_files_and_vanished_paths_give_duckdbs_default(self, tmp_path: Path) -> None:
+        assert _line_size_bound([]) == _OBJECT_SIZE_FLOOR
+        assert _line_size_bound([tmp_path / "gone.jsonl"]) == _OBJECT_SIZE_FLOOR
 
 
 class _Recording:

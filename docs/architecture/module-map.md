@@ -67,7 +67,7 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 
 `register(con, corpus_root)` binds a DuckDB connection to a contract-shaped corpus tree and exposes the
 core views and macros (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`,
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2095`). Those names are not introspected
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129`). Those names are not introspected
 at runtime: a static catalog answers `atif-sql schema` in under 50 ms with no DuckDB bind, and two
 drift tests assert it column-for-column against `DESCRIBE` and signature-for-signature against the
 DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The analytics views and
@@ -78,8 +78,8 @@ macros register separately, each only when its backing parquet is populated, bec
 it carries no layers contract (`pyproject.toml:547`).
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py`: the raw readers
-  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:597`), most of the core views
-  (`:984`) and macros (`:1856`), and the Lance attach path (`:1601`).
+  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:631`), most of the core views
+  (`:1018`) and macros (`:1890`), and the Lance attach path (`:1635`).
 - `packages/atif-duck/src/atif_duck/domain/raw_readers.py`: the raw relation names and
   column shapes the registry binds and the lake stores, so neither declares them twice.
 - `packages/atif-duck/src/atif_duck/domain/lake.py`: the lake's tables, partition specs and

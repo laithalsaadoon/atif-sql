@@ -195,7 +195,7 @@ intra-module use site is named after the table.
 | `REGISTERED_AT_SQL` | `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py:90` | 2026-09-28 |
 | `SNAPSHOT_RANGE_SQL` | `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py:95` | 2026-09-28 |
 | `StepMemberAccess` | `packages/atif-duck/src/atif_duck/infrastructure/projections.py:35` | 2026-09-12 |
-| `is_compressed` | `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py:38` | 2026-09-28 |
+| `is_compressed` | `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py:41` | 2026-09-28 |
 | `SqlFragment` | `packages/atif-embed/src/atif_embed/domain/sql_literal.py:27` | 2026-09-12 |
 | `TEXT_ONLY_CONFIG` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:60` | 2026-10-09 |
 | `INSTALL_HINT` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:68` | 2026-10-09 |
@@ -311,7 +311,7 @@ numbers follow it as plain numbers.
   `packages/atif-duck/src/atif_duck/infrastructure/projections.py:69` and
   annotates `:88`.
 - `is_compressed` is called at
-  `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py:55`.
+  `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py:58`.
 - `SqlFragment` is the return type of `sql_literal` at
   `packages/atif-embed/src/atif_embed/domain/sql_literal.py:30` and is
   constructed at `:46`. The `SqlFragment` imported across atif-duck is
