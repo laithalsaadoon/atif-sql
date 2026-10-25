@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shutil
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -524,6 +525,77 @@ class TestRebuildAndCompact:
         assert report.snapshots_after < report.snapshots_before
         assert verify_lake(layout).clean
         assert lake_status(layout).data_files == report.files_after
+
+
+# ---------------------------------------------------------------------------
+# The writer's memory cap
+# ---------------------------------------------------------------------------
+
+#: A planted ``edges.jsonl`` of short lines, as the converter writes them. The
+#: largest live one is 120 MB, of lines under 1 KB.
+_PLANTED_EDGES_BYTES = 64 * 1024**2
+
+#: The writer cap the planted corpus loads and verifies under. Measured
+#: 2026-10-25 on DuckDB 2.0.0, rebuild then verify of that corpus needs
+#: 207 MiB with the edges bound sized from the longest line, and 972 MiB with
+#: it sized from the largest file. This sits about twice away from both.
+_PLANTED_WRITER_CAP = 448 * 1024**2
+
+
+def _corpus_with_large_edges(root: Path) -> LakeCorpus:
+    """The contract corpus, six copies of its second session, and a 64 MiB ``edges.jsonl``."""
+    build_corpus(root)
+    sessions = root / "sessions"
+    for index in range(6):
+        session_id = f"33333333-3333-3333-3333-{index:012d}"
+        target = sessions / session_id
+        shutil.copytree(sessions / SESSION_IDS[1], target)
+        meta = json.loads((target / "meta.json").read_text())
+        meta["session_id"] = session_id
+        (target / "meta.json").write_text(json.dumps(meta, separators=(",", ":")))
+    edges = sessions / SESSION_IDS[0] / "edges.jsonl"
+    record = json.loads(edges.read_text().splitlines()[0])
+    template = json.dumps({**record, "uuid": "UUID", "parent_uuid": None}, separators=(",", ":"))
+    with edges.open("a") as out:
+        index = 0
+        while out.tell() < _PLANTED_EDGES_BYTES:
+            out.write(
+                "".join(
+                    template.replace('"UUID"', f'"planted-{index + n}"') + "\n"
+                    for n in range(10_000)
+                )
+            )
+            index += 10_000
+    return LakeCorpus(root=root, agent="claude-code")
+
+
+class TestWriterMemoryCap:
+    def test_a_large_edges_file_loads_and_verifies_under_a_small_cap(self, tmp_path: Path) -> None:
+        """One large ``edges.jsonl`` doesn't size the read buffers of its whole batch.
+
+        Its bound used to follow the largest file, and DuckDB allocates every
+        read buffer at twice the bound, so a batch holding the 120 MB file of
+        the largest live session needed more than the writer's 2 GiB cap on
+        DuckDB 2.0, and ``lake rebuild`` and ``lake verify`` both ran out of
+        memory. This is the same failure at a 64 MiB file and a 448 MiB cap.
+        """
+        corpus = _corpus_with_large_edges(tmp_path / "corpus")
+        layout = LakeLayout(tmp_path / "lake")
+        rebuild_lake(layout, [corpus], memory_limit_bytes=_PLANTED_WRITER_CAP)
+        report = verify_lake(layout, [corpus], memory_limit_bytes=_PLANTED_WRITER_CAP)
+        assert report.clean
+        assert report.corpora == (("corpus", 8),)
+        con = _reader(layout, corpus.root)
+        try:
+            planted = _rows(
+                con,
+                f"SELECT count(*) FROM {LAKE_ALIAS}.edges "
+                "WHERE session_id = ? AND uuid LIKE 'planted-%'",
+                [SESSION_IDS[0]],
+            )
+        finally:
+            con.close()
+        assert planted[0][0] > _PLANTED_EDGES_BYTES // 1024
 
 
 class _ThreadsAtMaintenance:

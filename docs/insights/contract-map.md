@@ -50,7 +50,7 @@ The sections below aren't ranked; "Other contracts" at the end collects the smal
 
 **Consumers:**
 
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:697-701`: builds the `meta.json`
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:731-735`: builds the `meta.json`
   glob (and, further down, each session's stored-file list) and binds it as the one parameter of
   its `read_json` readers, spelling the names from its own constants at
   `packages/atif-duck/src/atif_duck/domain/artifacts.py:28-36`.
@@ -103,7 +103,7 @@ whatever keys an `ArtifactProducer` returns into `meta.json`.
 **Assumptions consumers make:**
 
 - **`meta.json` present means the session dir is complete.** Every reader implements the same
-  torn-set gate independently: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:703-709` restricts the edges and loss readers to
+  torn-set gate independently: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:737-743` restricts the edges and loss readers to
   dirs where `v_raw_meta` has a row (the trajectory list is built from `v_raw_meta` too); `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:175-180` skips a dir with no `meta.json`;
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178-191` does the same and logs a warning. Nothing in the file layout expresses
   this: it's a write-ORDER promise made at
@@ -113,7 +113,8 @@ whatever keys an `ArtifactProducer` returns into `meta.json`.
   (`packages/atif-corpus/src/atif_corpus/application/materialize.py:656` and `:733`), and `.staging` is deliberately outside `sessions/` so a DuckDB glob
   can't reach it (`packages/atif-corpus/src/atif_corpus/domain/layout.py:89-94`). A `SIGKILL` or power loss inside the swap leaves the session missing rather than torn.
 - **`trajectory.json` is ONE JSON document, `edges.jsonl` is newline-delimited.** atif-duck encodes
-  that split in its reader choice at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:25-28`; atif-embed re-derives it at
+  that split in its reader choice at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:25-28`, and in its read bounds: the bound for a
+  document follows the largest file (`:241`), and the bound for `edges.jsonl` follows its longest line (`:264`). atif-embed re-derives the split at
   `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:99`.
 - **A single trajectory document can be enormous.** Both DuckDB readers allow a 1 GiB
   `maximum_object_size`, and their measured ceilings disagree: atif-duck caps a bound it sizes from the largest file at 1 GiB, citing 436 MB
@@ -671,9 +672,9 @@ and `packages/atif-duck/src/atif_duck/domain/catalog.py:612` (`DEFAULT_PRICING`)
 
 **Consumers:**
 
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1936-1956`: the `cost_estimate`
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1970-1990`: the `cost_estimate`
   macro, which consumes both.
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1892`: `register_macros` resolves
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1926`: `register_macros` resolves
   the pricing override against `DEFAULT_PRICING`.
 - `packages/atif-duck/src/atif_duck/domain/catalog.py:85-88`: the `steps` view schema publishes
   `prompt_tokens`, `completion_tokens`, `cached_tokens`, `cache_creation` to every SQL consumer.
@@ -704,20 +705,20 @@ DEFAULT_PRICING: dict[str, tuple[float, float]] = {
   every cache read.
 - **`cached_tokens` is the cache-READ subset of `prompt_tokens`**, not an additional quantity
   (`packages/atif-duck/src/atif_duck/infrastructure/projections.py:96-97`). `cost_estimate` therefore prices `prompt_tokens - cached_tokens` and
-  documents that identity at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1915-1918`; cache reads are charged nothing.
+  documents that identity at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1949-1952`; cache reads are charged nothing.
 - **`in_rate` / `out_rate` are USD per 1,000,000 tokens.** The unit appears in neither name: only
-  the comment at `packages/atif-duck/src/atif_duck/domain/catalog.py:602` and the `/ 1e6` at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1943` carry it.
+  the comment at `packages/atif-duck/src/atif_duck/domain/catalog.py:602` and the `/ 1e6` at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1977` carry it.
 - **`est_cost_usd` is USD and covers the PRICED steps only.** It is meaningful only when
-  `unpriced_steps = 0`, stated in each of these places: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1925-1930`, `packages/atif-duck/src/atif_duck/domain/catalog.py:557-563`, and the
-  `LEFT JOIN` shape itself at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1951`.
+  `unpriced_steps = 0`, stated in each of these places: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1959-1964`, `packages/atif-duck/src/atif_duck/domain/catalog.py:557-563`, and the
+  `LEFT JOIN` shape itself at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1985`.
 - **`unpriced_steps` counts only steps with a non-NULL `model_name`**, because user steps carry no
   model and cost nothing
-  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1932-1935`). Counting them would put every conversation
+  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1966-1969`). Counting them would put every conversation
   above zero and mask real pricing gaps.
 - **Cache write and read multipliers are NOT modelled.** `packages/atif-duck/src/atif_duck/domain/catalog.py:609-611` states that the 1.25x
   / 2x / 0.1x tiers are out of scope, so `est_cost_usd` under-reports a cache-heavy session.
 - **A step's `model_name` matches a pricing row by exact name once a trailing `-YYYYMMDD` is stripped**
-  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1952`), so `claude-haiku-4-5-20251001` prices as `claude-haiku-4-5`.
+  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1986`), so `claude-haiku-4-5-20251001` prices as `claude-haiku-4-5`.
 
 **Drift risk:** `cached_tokens` exists in two coordinate spaces under one name: atif-duck's
 per-step cache-read count (`packages/atif-duck/src/atif_duck/infrastructure/projections.py:132`) and atif-models' per-call
@@ -738,7 +739,7 @@ attribute the field by module path, and read the producer docstring
 
 - `packages/atif-embed/src/atif_embed/application/embed.py:175-183`: the WRITE path calls
   `ensure_store_matches` before appending.
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1707-1722`: the READ/bind path calls
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1741-1756`: the READ/bind path calls
   it before binding `message_embeddings` (guard-before-bind).
 - `packages/atif-cli/src/atif_cli/duck_errors.py:27-32`: puts atif-duck's copy in
   `REGISTRATION_ERRORS` and maps it to exit 65 at `packages/atif-cli/src/atif_cli/duck_errors.py:75-82`.

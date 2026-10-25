@@ -13,11 +13,14 @@ A zstd frame written by atif-sql records its decompressed size in the frame
 header, which :func:`decoded_size` reads (18 bytes, no decompression): DuckDB's
 ``maximum_object_size`` has to be sized from the document, not from the far
 smaller compressed file. A frame without that field (written by another tool)
-is measured by decompressing it once.
+is measured by decompressing it once. A newline-delimited artifact's objects
+are its lines, so :func:`longest_line` measures the longest one, decompressing
+the file once.
 """
 
 from __future__ import annotations
 
+import contextlib
 import io
 from typing import TYPE_CHECKING
 
@@ -76,6 +79,41 @@ def decoded_size(path: Path) -> int:
         return 0
 
 
+def _longest_line(path: Path) -> int:
+    import zstandard
+
+    longest = run = 0
+    with path.open("rb") as raw, contextlib.ExitStack() as stack:
+        stream = (
+            stack.enter_context(zstandard.ZstdDecompressor().stream_reader(raw))
+            if is_compressed(path)
+            else raw
+        )
+        while chunk := stream.read(_MEASURE_CHUNK_BYTES):
+            pieces = chunk.split(b"\n")
+            if len(pieces) == 1:
+                run += len(chunk)
+                continue
+            inner = max(map(len, pieces[1:-1]), default=0)
+            longest = max(longest, run + len(pieces[0]), inner)
+            run = len(pieces[-1])
+    return max(longest, run)
+
+
+def longest_line(path: Path) -> int:
+    """The artifact's longest line in bytes once decompressed, newline excluded; 0 if unreadable.
+
+    Read a chunk at a time, so a file with no newline in it costs one chunk
+    of memory rather than the whole file.
+    """
+    import zstandard
+
+    try:
+        return _longest_line(path)
+    except (OSError, zstandard.ZstdError):
+        return 0
+
+
 def read_bytes(path: Path) -> bytes:
     """The artifact's decompressed bytes."""
     if not is_compressed(path):
@@ -110,6 +148,7 @@ __all__ = [
     "decoded_size",
     "is_compressed",
     "iter_lines",
+    "longest_line",
     "read_bytes",
     "stored_artifact",
 ]

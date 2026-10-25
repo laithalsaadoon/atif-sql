@@ -122,7 +122,7 @@ places with no import edge between them.
 | Downstream | Type | Touch on change | Citation |
 | --- | --- | --- | --- |
 | `atif_corpus.application.materialize`: the writer, routed through `CorpusLayout` | direct import | yes | `packages/atif-corpus/src/atif_corpus/application/materialize.py:135-144` and `packages/atif-corpus/src/atif_corpus/application/materialize.py:1617` |
-| `atif_duck.infrastructure.registry`: builds globs under `corpus_root / "sessions"` | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:691-701` |
+| `atif_duck.infrastructure.registry`: builds globs under `corpus_root / "sessions"` | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:725-735` |
 | `atif_embed.infrastructure.corpus_text_rows`: its own `sessions/` walk, gated on `meta.json` | indirect | yes | `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166-184` |
 | `atif_analytics.infrastructure.corpus_reader`: re-declares the filename constants | indirect | yes | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:72-74` and `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178-191` |
 | `atif_cli.app.convert`: writes `edges.jsonl` beside a `--trajectory-out` trajectory on the one-shot path | indirect | likely | `packages/atif-cli/src/atif_cli/app.py:755-756` |
@@ -137,7 +137,7 @@ places with no import edge between them.
   import edge connects them, so the only signal is each package's own fixture corpus going out of
   agreement with the writer. The `meta.json`-written-last torn-set rule is re-implemented in every
   reader: evidence of the duplication cost, and one place per reader to edit if the completion marker
-  ever moves (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:639-644`,
+  ever moves (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:673-678`,
   `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:28-29`,
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:13-15`).
 - **`.staging` sits outside `sessions/` for a reader-visibility reason, not tidiness.** DuckDB's
@@ -147,7 +147,7 @@ places with no import edge between them.
 - **`LossReport.to_json()`'s keys are wire contract, not an internal shape.** atif-duck reads them
   back through `_LOSS_REPORT_COLUMNS`, so renaming a key breaks the `loss_reports` view with no type
   error anywhere (`packages/atif-converter/src/atif_converter/domain/fidelity.py:147-171`,
-  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:287`).
+  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:321`).
 
 ## The domain Protocols
 
@@ -228,7 +228,7 @@ surfaces above exist as duplicated strings and Protocols instead of imports.
 | `TextRowsPort`: exists because atif-embed may not import atif-duck | indirect | yes | `packages/atif-embed/src/atif_embed/domain/ports.py:11-15` |
 | The `embedding_guard` twins: one rule, copied into atif-duck and atif-embed | direct import | yes | `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:51` and `packages/atif-embed/src/atif_embed/domain/embedding_guard.py:38` |
 | `test_guard_twin_pin.py`: reads the atif-duck copy as SOURCE TEXT via `ast`, never importing it | test | yes | `packages/atif-embed/tests/test_guard_twin_pin.py:41` and `packages/atif-embed/tests/test_guard_twin_pin.py:55-72` |
-| The independent corpus readers | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:597`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166`, `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178` |
+| The independent corpus readers | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:631`, `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166`, `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178` |
 | `[tool.coverage.run] source`: the same import packages, named rather than pathed | config | likely | `pyproject.toml:622-630` |
 
 ### Blast-radius notes

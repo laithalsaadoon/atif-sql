@@ -64,7 +64,7 @@ which is why coverage, complexity, and concurrency carry the ranking instead.
 as `CREATE TEMP TABLE` over `read_json` under an explicit strict-projection `columns` filter
 (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:3-20`). Every registration function
 follows a register-or-fail-loud contract: log through `logger.exception` and re-raise on any DDL
-failure (`:62-63`, `:955-958`, `:1527-1530`, `:2072-2075`).
+failure (`:62-63`, `:989-992`, `:1561-1564`, `:2106-2109`).
 
 **Recent activity.** 12 commits in the 30-day window against a median of 1, so `↑ rising` under the
 mechanical rule, which here measures how often the file was edited, not whether it is
@@ -75,21 +75,21 @@ commits).
 
 **Findings.** More of the workspace's `B608` sites live here than in any other file (28 of 69), each
 carrying a per-line `# nosec B608` that names its interpolation: a module-constant reader or table
-with catalog columns (`:308`, `:361`), a glob or file list the statement binds as a parameter
-(`:728`, `:830`), the corpus name through `sql_literal` (`:975`), local regex literals (`:1345`),
-an `int()`-coerced width (`:1737`), an int-derived alias (`:1792`), and the pricing rates
-(`:1955`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
-through `sql_literal` and coerces both rates with `float()` (`:1826-1853`, specifically `:1850`),
+with catalog columns (`:342`, `:395`), a glob or file list the statement binds as a parameter
+(`:762`, `:864`), the corpus name through `sql_literal` (`:1009`), local regex literals (`:1379`),
+an `int()`-coerced width (`:1771`), an int-derived alias (`:1826`), and the pricing rates
+(`:1989`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
+through `sql_literal` and coerces both rates with `float()` (`:1860-1887`, specifically `:1884`),
 because the `pricing` parameter is reachable by an in-process embedding caller even though the CLI
-never passes one, and a `str` rate there would get past the type checkers (`:1843-1848`). Its
-uncovered units sit in `register_views` (`:984-1530`), `register_macros` (`:1856-2075`),
-`register_vss` (`:1601-1742`), `_gate_session_dirs` (`:482-533`), and `_pricing_values_clause`
+never passes one, and a `str` rate there would get past the type checkers (`:1877-1882`). Its
+uncovered units sit in `register_views` (`:1018-1564`), `register_macros` (`:1890-2109`),
+`register_vss` (`:1635-1776`), `_gate_session_dirs` (`:516-567`), and `_pricing_values_clause`
 itself, although tests drive each of those paths: 14 test files call `register`, which runs
 `register_views` and `register_macros`, seven call `register_vss`, and
 `packages/atif-duck/tests/test_duck_views.py:663` passes a hostile model name through the pricing
 clause. The `register_vss` gap is the one that matters most: the ATTACH-failure arm that degrades
 a Lance directory to an empty-store fallback and logs rather than raising
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1681-1685`) is untested silent
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1715-1719`) is untested silent
 degradation: no test calls `register_vss` on a directory that fails to ATTACH.
 
 ### `atif_analytics.infrastructure.parquet_cache`

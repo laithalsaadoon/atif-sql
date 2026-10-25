@@ -12,7 +12,7 @@ policy for what the upstream converter drops, beats re-deriving trajectory seman
 SQL view (`README.md:17-19`). Which agent a command works on is one flag, `--agent claude-code|codex`, and it
 moves the default source and corpus roots with it
 (`packages/atif-corpus/src/atif_corpus/infrastructure/settings.py`); one corpus holds one agent, and
-the `sessions` view reports which (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1040`).
+the `sessions` view reports which (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1074`).
 The reader it serves is an engineer or an agent asking how sessions
 actually went: which tools ran, where tokens went, where a session turned into friction.
 
@@ -53,7 +53,7 @@ transcript never aborts a sync (`packages/atif-corpus/src/atif_corpus/domain/por
 (`docs/CONTRACT.md:247`). Its `register` entry point registers raw readers, views, vector search,
 macros, the authorship views, and the analytics surface in that order, because views bind against
 the raw TEMP tables at CREATE time
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2095`); the per-session raw readers
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129`); the per-session raw readers
 are `CREATE TEMP TABLE` over `read_json` (`:15`), and every view and macro name is declared in a
 static catalog (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`). `atif-analytics` writes
 parquet plus one SQLite WAL `state.db` under
@@ -61,7 +61,7 @@ parquet plus one SQLite WAL `state.db` under
 `atif-embed` backfills Cohere Embed v4 vectors, or EmbeddingGemma 2 vectors computed on this
 machine, into LanceDB (`packages/atif-embed/pyproject.toml:4`), which `atif-duck` reads back through DuckDB's lance
 extension rather than by importing lancedb
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1621-1624`). `atif-models` is the single
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1655-1658`). `atif-models` is the single
 owner of model ids, so no other package hardcodes one (`packages/atif-models/pyproject.toml:4`).
 
 Every corpus is also loaded into one DuckLake, kept at `ATIF_SQL_LAKE_ROOT` beside the corpora.

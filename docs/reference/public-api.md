@@ -476,7 +476,7 @@ each session that has no current per-session parquet into TEMP tables, so the co
 per connection and a caller should reuse one connection per process. With `lake`, the raw relations
 are views over the lake's tables and nothing loads eagerly.
 
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2095-2194`
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129-2228`
 
 ### run_analyze
 

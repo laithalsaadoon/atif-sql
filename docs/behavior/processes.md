@@ -309,14 +309,14 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1320`
    `read_json` for the rest, unioned per surface),
    gating trajectory, edges, and loss on `meta.json` presence so a torn session
    directory contributes nothing to any view:
-   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:597`.
+   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:631`.
 4. Create the core views, then bind `message_embeddings` over the Lance store
    guard-before-bind: a store written by another provider raises rather than
-   returning numerically valid garbage cosine scores (`:984`, `:1601`).
+   returning numerically valid garbage cosine scores (`:1018`, `:1635`).
 5. Create the macros and the authorship views (`user_steps`, `human_turns`,
    `session_outcomes`), then the analytics views and analytics macros over the
    analytics parquets, which bind against both the parquets and the base views
-   (`:1856`, `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`).
+   (`:1890`, `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`).
 6. Harden the connection in a fixed order (the memory cap, thread count and
    private spill directory were set before step 3, since registration is what
    needs them): a directory allowlist holding only the spill area, a file
@@ -335,7 +335,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1320`
 
 ### Related
 
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2095`
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129`
 - `packages/atif-duck/src/atif_duck/domain/catalog.py:59`
 - `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:51`
 - `packages/atif-cli/src/atif_cli/output.py:206`
@@ -352,7 +352,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:2040`
    artifacts with a warning), then register the full catalog on a fresh
    in-memory connection; a registration failure or a provider mismatch leaves
    through the classified-error path (a provider mismatch exits 65):
-   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2095`,
+   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129`,
    `packages/atif-cli/src/atif_cli/duck_errors.py:67`. `--all-corpora` scopes
    the steps to every corpus the lake holds and binds `message_embeddings`
    over each corpus's store (`register_vss_stores`).
@@ -381,7 +381,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:2040`
 
 ### Related
 
-- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1601`
+- `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1635`
 - `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:51`
 - `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:414`
 - `packages/atif-cli/src/atif_cli/errors.py:30`
