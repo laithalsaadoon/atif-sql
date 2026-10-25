@@ -91,7 +91,7 @@ A corpus written by an older build keeps the plain `trajectory.json`, `edges.jso
 `session_events.jsonl`, plus five per-session parquet files, until `atif-sql corpus slim` converts
 it, and every reader accepts either spelling. The parquet files are a cache of what the views
 compute from the trajectory, never a source of truth, and materialize doesn't write them: the CLI
-passes no artifact producer (`packages/atif-cli/src/atif_cli/app.py:975-977`), and the lake loader
+passes no artifact producer (`packages/atif-cli/src/atif_cli/app.py:990-992`), and the lake loader
 runs atif-duck's `ColumnarArtifactProducer` to stage each session it loads
 (`packages/atif-duck/src/atif_duck/infrastructure/lake.py:561`). atif-duck reads a session's own
 parquet files only when `meta.columnar_schema` matches its version and all five are present and
@@ -124,7 +124,7 @@ whatever keys an `ArtifactProducer` returns into `meta.json`.
   `packages/atif-corpus/src/atif_corpus/domain/watermark.py:11-12`). atif-duck types the column
   `BIGINT` at `packages/atif-duck/src/atif_duck/domain/raw_readers.py:101`, which preserves the magnitude but drops the unit from the schema.
 - **`materialized_at` is an ISO-8601 UTC string, not a timestamp.** atif-duck projects it as
-  `VARCHAR` (`packages/atif-duck/src/atif_duck/domain/raw_readers.py:105`); the CLI supplies it (`packages/atif-cli/src/atif_cli/app.py:963`).
+  `VARCHAR` (`packages/atif-duck/src/atif_duck/domain/raw_readers.py:105`); the CLI supplies it (`packages/atif-cli/src/atif_cli/app.py:978`).
 
 **The hand-written contract and the manifests split the job.** Its CLI heading
 (`docs/CONTRACT.md:300`) names atif-cli the package that composes the others. The atif-cli
@@ -134,8 +134,8 @@ every one of them; atif-models reaches it through atif-analytics, which imports 
 `docs/CONTRACT.md:17-19` leaves VSS/`semantic_search` and the analytics pipelines to
 `docs/CONTRACT-V2.md` rather than ruling them out; both are shipped commands (the `atif-analytics`
 and `atif-embed` pins at `packages/atif-cli/pyproject.toml:32` and `:36`, plus the `analyze`,
-`embed`, and `search` commands at `packages/atif-cli/src/atif_cli/app.py:1634`, `:1801`, and
-`:2018`). Read `docs/CONTRACT.md:22-60` as authoritative for the layout (that's the part the
+`embed`, and `search` commands at `packages/atif-cli/src/atif_cli/app.py:1656`, `:1823`, and
+`:2040`). Read `docs/CONTRACT.md:22-60` as authoritative for the layout (that's the part the
 packages actually implement) and the manifests as authoritative for who imports whom.
 
 **Drift risk:** a new artifact, a renamed file, or a new `meta.json` key must be applied in every
@@ -155,12 +155,12 @@ write side. Any layout change starts there and then greps the reader modules nam
 
 **Consumers:**
 
-- `packages/atif-cli/src/atif_cli/app.py:2335-2387`: the `schema` command reads `VIEW_SCHEMA`,
+- `packages/atif-cli/src/atif_cli/app.py:2357-2409`: the `schema` command reads `VIEW_SCHEMA`,
   `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES`, tags each object
   with its `requires` value, and answers with no DuckDB connection.
 - `packages/atif-duck/src/atif_duck/domain/examples.py:35-44`: the examples generator imports every
   catalog and derives one runnable query per object.
-- `packages/atif-cli/src/atif_cli/app.py:2294`: the `examples` command calls
+- `packages/atif-cli/src/atif_cli/app.py:2316`: the `examples` command calls
   `build_examples()`.
 - `packages/atif-duck/tests/test_duck_views.py:51` and `:67`: the `DESCRIBE`-vs-`VIEW_SCHEMA` and
   DDL-vs-`MACRO_SIGNATURES` drift tests.
@@ -212,7 +212,7 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
   `SELECT * FROM name(args)` for a member and `SELECT name(args)` otherwise, so a macro whose DDL
   gains or loses `AS TABLE` breaks every derived example, pinned by the regex test at
   `packages/atif-duck/tests/test_examples.py:227`.
-- **The catalog is answerable without a corpus.** `packages/atif-cli/src/atif_cli/app.py:2344-2346` states the sub-50 ms,
+- **The catalog is answerable without a corpus.** `packages/atif-cli/src/atif_cli/app.py:2366-2368` states the sub-50 ms,
   no-DuckDB-bind guarantee the `schema` command rests on; a runtime `DESCRIBE` would violate it.
 - **The raw readers are deliberately NOT in `VIEW_NAMES`** (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:141-142`), so a
   consumer enumerating `VIEW_NAMES` does not see `v_raw_trajectories` and friends.
@@ -550,7 +550,7 @@ class TextRowsPort(Protocol):
   yielded with `replaces_existing=True` (`packages/atif-embed/src/atif_embed/domain/ports.py:112-115`), and the caller must delete before
   appending or the uuid fans out to two vectors
   (`packages/atif-embed/src/atif_embed/application/embed.py:212-219`).
-- **The CLI injects only the text-rows port.** `packages/atif-cli/src/atif_cli/app.py:1937-1943` calls
+- **The CLI injects only the text-rows port.** `packages/atif-cli/src/atif_cli/app.py:1959-1965` calls
   `run_backfill` with `corpus_root`, `settings`, `text_rows` (`DuckDbTextRows`, wrapped in
   `LakeTextRows` unless `--no-lake` is passed), `limit`, and `dry_run`; the use case constructs the
   default store and embedder itself under deferred imports (`packages/atif-embed/src/atif_embed/application/embed.py:114-117`, `packages/atif-embed/src/atif_embed/application/embed.py:166-169`),
@@ -593,7 +593,7 @@ construction from settings: `packages/atif-embed/src/atif_embed/infrastructure/c
 - `packages/atif-cli/tests/test_converter_adapter.py:17`: asserts the mapping and binds
   `RealConverter` to the port annotation at `packages/atif-cli/tests/test_converter_adapter.py:95`;
   `packages/atif-cli/tests/test_codex_cli.py:156` binds the Codex-configured adapter the same way.
-- `packages/atif-cli/src/atif_cli/app.py:961`: wires `RealConverter(agent=settings.agent)` into the
+- `packages/atif-cli/src/atif_cli/app.py:976`: wires `RealConverter(agent=settings.agent)` into the
   use case.
 
 **Shape:**
@@ -633,7 +633,7 @@ class ConverterPort(Protocol):
   `packages/atif-cli/tests/test_converter_adapter.py:95`, whose own comment
   (`packages/atif-cli/tests/test_converter_adapter.py:93-94`) states that the assignment is what ty
   verifies, and its Codex twin at `packages/atif-cli/tests/test_codex_cli.py:156`, plus the CLI's
-  call at `packages/atif-cli/src/atif_cli/app.py:961`, which hands the adapter to materialize's
+  call at `packages/atif-cli/src/atif_cli/app.py:976`, which hands the adapter to materialize's
   `converter: ConverterPort` parameter. A signature change on either side fails the typecheck gate
   at those sites, not at materialize time.
 - **The port is typed to `docs/CONTRACT.md`'s artifact shapes, not to converter internals**:
@@ -652,7 +652,7 @@ class ConverterPort(Protocol):
   (`packages/atif-cli/src/atif_cli/converter_adapter.py:32-33`), which is what makes it readable by atif-duck's
   `LOSS_REPORT_COLUMNS` projection at `packages/atif-duck/src/atif_duck/domain/raw_readers.py:77-90`.
 - **Importing the adapter loads atif-converter and its ATIF pydantic models.** `packages/atif-cli/src/atif_cli/converter_adapter.py:55-57` forbids importing it at
-  `atif_cli.app` module scope, and `packages/atif-cli/src/atif_cli/app.py:925` obeys by importing inside the command body,
+  `atif_cli.app` module scope, and `packages/atif-cli/src/atif_cli/app.py:940` obeys by importing inside the command body,
   enforced by the fresh-interpreter lean-import test named at `pyproject.toml:224`.
 
 **Drift risk:** the `dict[str, Any]` fields mean a converter that renames a trajectory key
@@ -918,7 +918,7 @@ rather than skipping a file that no longer contains the current version; the gua
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:706-731`, projected at
   `packages/atif-duck/src/atif_duck/domain/raw_readers.py:99-121`. `harbor_version` (the vendored
   models' upstream release) and `converter_version` (the `atif-sql` release) are supplied by the
-  CLI (`packages/atif-cli/src/atif_cli/app.py:966` and `:971`), so the corpus records which
+  CLI (`packages/atif-cli/src/atif_cli/app.py:981` and `:986`), so the corpus records which
   converter built it without atif-corpus importing either.
 - **The embeddings-store row shape**: the Arrow fields written at
   `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:115-121`, of which the
@@ -982,7 +982,7 @@ rather than skipping a file that no longer contains the current version; the gua
   and which the CLI's `materialize` doesn't inject, and `SessionSink`
   (`packages/atif-corpus/src/atif_corpus/domain/ports.py:155`), which atif-duck's
   `DuckLakeSessionSink` fits (`packages/atif-duck/src/atif_duck/infrastructure/lake.py:868`) and
-  the CLI wires in at `packages/atif-cli/src/atif_cli/app.py:986`; atif-embed's `LakeStepsPort` and
+  the CLI wires in at `packages/atif-cli/src/atif_cli/app.py:1001`; atif-embed's `LakeStepsPort` and
   `LakeStepSnapshot` (`packages/atif-embed/src/atif_embed/domain/ports.py:202` and `:154`), which
   atif-cli's `DuckLakeSteps` fits (`packages/atif-cli/src/atif_cli/embed_lake.py:70`); and
   atif-analytics' `SessionSource` (`packages/atif-analytics/src/atif_analytics/domain/ports.py:40`),

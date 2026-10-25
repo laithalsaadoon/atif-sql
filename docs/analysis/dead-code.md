@@ -65,9 +65,9 @@ The limits of this derivation, stated because no index backs it:
   `PLC0415` is off (`pyproject.toml:224`) to satisfy the lean-import assertion at
   `packages/atif-cli/tests/test_lean_import.py:41`, atif-cli's cross-package
   imports sit *inside* command bodies:
-  `packages/atif-cli/src/atif_cli/app.py:712`,
-  `packages/atif-cli/src/atif_cli/app.py:934`, and
-  `packages/atif-cli/src/atif_cli/app.py:1459` are all indented. The import graph
+  `packages/atif-cli/src/atif_cli/app.py:727`,
+  `packages/atif-cli/src/atif_cli/app.py:949`, and
+  `packages/atif-cli/src/atif_cli/app.py:1478` are all indented. The import graph
   uses `ast.walk`, which descends into function
   bodies, and the reference regex is unanchored, so a deferred import counts as
   an inbound edge.
@@ -377,7 +377,7 @@ modules that declare no `__all__` at all, so they're module-internal helpers:
 
 The rest sit in modules that do declare an `__all__` and are deliberately
 absent from it, which is the module saying they aren't exported:
-`packages/atif-cli/src/atif_cli/app.py:2201` (`search_rows`),
+`packages/atif-cli/src/atif_cli/app.py:2223` (`search_rows`),
 `packages/atif-cli/src/atif_cli/corpus.py:71` (`SessionLayout`) and `:158`
 (`CorpusSlimReport`),
 `packages/atif-duck/src/atif_duck/infrastructure/lake.py:117`
@@ -476,17 +476,17 @@ write, over every tracked file:
 
 Every real consumer bypasses the facade for the deep module:
 
-- `packages/atif-cli/src/atif_cli/app.py:1459` and
-  `packages/atif-cli/src/atif_cli/app.py:2086` import `register` from
+- `packages/atif-cli/src/atif_cli/app.py:1478` and
+  `packages/atif-cli/src/atif_cli/app.py:2108` import `register` from
   `atif_duck.infrastructure.registry`.
-- `packages/atif-cli/src/atif_cli/app.py:2270`:
+- `packages/atif-cli/src/atif_cli/app.py:2292`:
   `from atif_duck.domain.examples import (...)`.
-- `packages/atif-cli/src/atif_cli/app.py:2352`:
+- `packages/atif-cli/src/atif_cli/app.py:2374`:
   `from atif_duck.domain.catalog import (...)`, which takes `MACRO_SIGNATURES`
   and `VIEW_SCHEMA` with their analytics counterparts.
 - `packages/atif-cli/src/atif_cli/duck_errors.py:27`,
   `packages/atif-cli/tests/test_app.py:136`, and
-  `packages/atif-cli/tests/test_app.py:931`.
+  `packages/atif-cli/tests/test_app.py:956`.
 
 The one dynamic reference to the package,
 `packages/atif-cli/tests/test_lean_import.py:21`, names

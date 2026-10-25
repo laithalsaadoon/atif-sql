@@ -133,8 +133,8 @@ The composition root: it declares five of its six siblings as `==`-pinned depend
 (`packages/atif-cli/pyproject.toml:32-36`) and wires every cross-package seam: the `ConverterPort`
 adapter, the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:7-9`).
 The commands hang off one cyclopts `App`: `@app.command` functions from `convert`
-(`packages/atif-cli/src/atif_cli/app.py:675`) to `schema` (`:2335`), plus the `cron`, `lake`, and
-`corpus` sub-apps registered at `:104-109`, with `main` (`:2409`) exposed as the single console
+(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2357`), plus the `cron`, `lake`, and
+`corpus` sub-apps registered at `:104-109`, with `main` (`:2431`) exposed as the single console
 script named `atif-sql` (`pyproject.toml:75`). Heavy imports (duckdb, the ATIF models through
 atif-converter, pydantic through atif-corpus) are deferred into the command bodies that use them so
 `schema`, `--help`, and `--version` stay on a lean import graph that a fresh-interpreter test pins

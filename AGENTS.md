@@ -415,9 +415,12 @@ For an LLM agent driving `atif-sql`, the discovery loop is this:
 
    What the query sandbox will and won't do: `SELECT`, `EXPLAIN`, `SET
    TimeZone`, and in-memory DDL/DML run; `COPY`, `EXPORT`, `ATTACH`,
-   `DETACH`, `INSTALL`, `LOAD`, `PREPARE` and `EXECUTE` exit 70 with kind
-   `sandbox_refused` before anything executes, so emit results on stdout
-   rather than writing files. Running as uid 0 exits 77 (`root_refused`)
+   `DETACH`, `INSTALL`, `LOAD`, `PREPARE`, `EXECUTE`, `PRAGMA` and a `PIVOT`
+   without an `IN` list exit 70 with kind `sandbox_refused` before anything
+   executes, so emit results on stdout rather than writing files. DuckDB
+   2.0's parser doesn't expand a `PRAGMA` or that `PIVOT`, so the gate
+   can't see what they'd run: use `pragma_table_info(...)`, `DESCRIBE` or
+   `SHOW`, and name the pivot's columns with `IN (...)`. Running as uid 0 exits 77 (`root_refused`)
    unless `ATIF_SQL_ALLOW_ROOT=1`. The connection is sized to the host
    before registration (`ATIF_SQL_QUERY_MEMORY_LIMIT` / `ATIF_SQL_QUERY_THREADS`
    override), and no extension is ever installed at query time: `atif-sql

@@ -326,7 +326,7 @@ The console-script entry point behind the `atif-sql` command; it replaces loguru
 with WARNING-and-up (`ATIF_SQL_LOG_LEVEL` widens it) so routine reads keep stderr quiet, then hands
 off to the cyclopts app and turns a cyclopts usage error into exit `64`.
 
-`packages/atif-cli/src/atif_cli/app.py:2409-2442`
+`packages/atif-cli/src/atif_cli/app.py:2431-2464`
 
 ### materialize
 
