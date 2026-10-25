@@ -60,7 +60,7 @@ classDiagram
 ### Classes
 
 Each node is one uv workspace member, the unit the import-linter contracts
-at `pyproject.toml:543-604` constrain. Every use case and registration entry point
+at `pyproject.toml:547-608` constrain. Every use case and registration entry point
 is a module-level function, so the `+` entries are functions rather than methods, apart from two
 in `ModelRegistry`: `spec_for` is a method of `LlmSettings`, and `classify_structured` is a Protocol
 method.
@@ -140,9 +140,9 @@ root. Those edges are the whole of its outbound surface: an unanchored grep for
 
 ### Relationships the import contracts forbid
 
-`pyproject.toml:595-598` declares an `independence` contract over
+`pyproject.toml:599-602` declares an `independence` contract over
 `atif_converter`, `atif_corpus`, `atif_duck`, `atif_models`, and `atif_embed`, so
-no edge may connect any two of them. `pyproject.toml:600-604` declares a
+no edge may connect any two of them. `pyproject.toml:604-608` declares a
 `forbidden` contract admitting exactly one analytics edge, to `atif_models`. Both
 are checked by `lint:imports`, one of the gates `mise run check`
 depends on (`mise.toml:250`, in the list at `mise.toml:245-265`).
@@ -150,13 +150,13 @@ depends on (`mise.toml:250`, in the list at `mise.toml:245-265`).
 A Protocol declared in one member and implemented in another is **not** an edge
 between them: the implementation satisfies it structurally, and the composition
 root supplies the instance. Neither is a permission comment an edge: the comment at
-`pyproject.toml:590-594` leaves atif-cli and atif-analytics free to import
+`pyproject.toml:594-598` leaves atif-cli and atif-analytics free to import
 atif-models, a reach atif-cli doesn't take.
 
 | Absent edge | How the same work reaches across the boundary |
 | --- | --- |
 | `CorpusMaterializer -> AtifConverter` | `materialize` takes a `ConverterPort` parameter (`packages/atif-corpus/src/atif_corpus/application/materialize.py:1501`), the Protocol at `packages/atif-corpus/src/atif_corpus/domain/ports.py:101`. `AtifCliApp` constructs the `RealConverter` adapter (`packages/atif-cli/src/atif_cli/converter_adapter.py:80`) and injects it at `packages/atif-cli/src/atif_cli/app.py:961`; that adapter's docstring names the independence contract as its reason to live in atif-cli (`packages/atif-cli/src/atif_cli/converter_adapter.py:5-9`). |
-| `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:229`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:93`, over the `docs/CONTRACT.md` corpus layout (stated at `pyproject.toml:539-541`). With the lake on, the default, `AtifCliApp` wraps that adapter in `LakeTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:89`), which reads the lake through the `LakeStepsPort` Protocol (`packages/atif-embed/src/atif_embed/domain/ports.py:202`) that atif-cli implements over atif-duck (`packages/atif-cli/src/atif_cli/embed_lake.py:70`). |
+| `EmbedBackfill -> DuckRegistry` | `EmbedBackfill` reads the corpus through its own DuckDB `TextRowsPort` adapter, `DuckDbTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:229`) against the Protocol at `packages/atif-embed/src/atif_embed/domain/ports.py:93`, over the `docs/CONTRACT.md` corpus layout (stated at `pyproject.toml:543-545`). With the lake on, the default, `AtifCliApp` wraps that adapter in `LakeTextRows` (`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:89`), which reads the lake through the `LakeStepsPort` Protocol (`packages/atif-embed/src/atif_embed/domain/ports.py:202`) that atif-cli implements over atif-duck (`packages/atif-cli/src/atif_cli/embed_lake.py:70`). |
 | `AnalyticsPipelines -> CorpusMaterializer` | `AnalyticsPipelines` reads the materialized corpus directly through its own `CorpusReader` (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:314`), constructed once per run at `packages/atif-analytics/src/atif_analytics/application/analyze.py:62`. With the lake on, the default, `AtifCliApp` hands that reader a `SessionSource` over the lake, `LakeSessionSource` (`packages/atif-cli/src/atif_cli/lake_sessions.py:92`), which atif-cli adapts from atif-duck's lake reader. |
 | `AtifCliApp -> ModelRegistry` | `AtifCliApp` never reaches atif-models. Model selection happens inside `AnalyticsPipelines`, whose `build_provider` resolves a spec through `spec_for` (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:49`) and hands it to `build_structured_provider` (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:50`), so no model id is written down outside atif-models. |
 

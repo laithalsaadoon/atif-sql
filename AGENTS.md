@@ -253,6 +253,14 @@ copy of the queryable rows:
   The catalog is a DuckDB file, not SQLite, on purpose: a reader with the
   sqlite extension loaded can `sqlite_scan` any SQLite file on the host
   whatever `enable_external_access` says, so the query path never loads it.
+  The first write from DuckDB 2.0 (a materialize sync or `lake compact`)
+  rewrites that file in storage version 69, and `lake rebuild` on 2.0 writes
+  a new one; DuckDB 1.5 can't open either, no attach option prevents it, and
+  reads leave the file as it is. An atif-sql on DuckDB 1.5 then reads the
+  per-session files instead and its lake writes fail, so every process that
+  opens the lake moves to 2.0 before a 2.0 writer runs. A lake made by 1.5
+  stays a DuckLake 1.0 catalog (nothing passes `AUTOMATIC_MIGRATION`), and a
+  lake rebuilt on 2.0 is a 1.1 catalog.
 - Tables: one per artifact kind (`sessions`, `steps`, `tool_calls`,
   `tool_results`, `session_events`, `edges`, `loss_reports`, `session_meta`),
   each the registry's raw reader shape (`atif_duck.domain.raw_readers`, which

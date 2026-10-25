@@ -81,10 +81,10 @@ views over the lake, falling back to the per-session artifacts when the lake is 
 doesn't hold the corpus (`packages/atif-duck/src/atif_duck/infrastructure/lake.py`).
 
 The direction of those edges is enforced rather than conventional. `[tool.importlinter]`
-(`pyproject.toml:543`) declares a layers contract for every member except `atif-cli` and
+(`pyproject.toml:547`) declares a layers contract for every member except `atif-cli` and
 `atif-duck`, an independence contract forbidding converter / corpus / duck / models / embed from
-importing each other (`:596`), and a forbidden contract limiting `atif-analytics` to `atif-models`
-alone among the members (`:601`). `atif-cli` is
+importing each other (`:600`), and a forbidden contract limiting `atif-analytics` to `atif-models`
+alone among the members (`:605`). `atif-cli` is
 the sole composition root, and it imports its siblings lazily inside command bodies
 (`packages/atif-cli/src/atif_cli/app.py:712`, `:1697`, `:1903`) so that `atif-sql schema` pays for
 none of the analytics or vector stack. Failures surface as typed exceptions mapped to stable
@@ -99,7 +99,7 @@ process exit codes at the CLI edge (`packages/atif-cli/src/atif_cli/errors.py:30
 | Packaging | uv workspace, `members = ["packages/*"]` | `pyproject.toml:111` |
 | Build backend | `hatchling>=1.28.0` for the published wheel, `uv_build>=0.11.14,<0.13` for the member manifests | `pyproject.toml:90`, `packages/atif-cli/pyproject.toml:53` |
 | CLI framework | `cyclopts>=5.1.1` | `packages/atif-cli/pyproject.toml:37` |
-| Query engine | `duckdb>=1.5.2,<2` | `packages/atif-duck/pyproject.toml:20` |
+| Query engine | `duckdb>=2.0.0,<3` | `packages/atif-duck/pyproject.toml:20` |
 | Lake | DuckLake, through DuckDB's `ducklake` extension, with a DuckDB-file catalog | `packages/atif-duck/src/atif_duck/infrastructure/lake.py` |
 | Trajectory models | vendored from harbor 0.24.0 (`pydantic>=2.13.2`) | `packages/atif-converter/src/atif_converter/domain/atif/__init__.py` |
 | Vector store | `lancedb>=0.30,<0.40` | `packages/atif-embed/pyproject.toml:22` |
@@ -107,9 +107,9 @@ process exit codes at the CLI edge (`packages/atif-cli/src/atif_cli/errors.py:30
 | Dataframes | `polars>=1.40.0` | `packages/atif-embed/pyproject.toml:24` |
 | Validation | `pydantic>=2.13.2` | `packages/atif-converter/pyproject.toml:23` |
 | Logging | `loguru>=0.7.3` | `packages/atif-corpus/pyproject.toml:19` |
-| Lint and format | ruff, `select = ["ALL"]` | `pyproject.toml:202` |
-| Architecture gate | import-linter contracts | `pyproject.toml:543` |
-| Tests | pytest, `testpaths = ["packages/*/tests", "fuzz"]` | `pyproject.toml:470` |
+| Lint and format | ruff, `select = ["ALL"]` | `pyproject.toml:206` |
+| Architecture gate | import-linter contracts | `pyproject.toml:547` |
+| Tests | pytest, `testpaths = ["packages/*/tests", "fuzz"]` | `pyproject.toml:474` |
 | Definition of done | `mise run check` | `mise.toml:243` |
 
 ## Module map

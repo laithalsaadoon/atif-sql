@@ -17,7 +17,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "duckdb>=1.5.2,<2",
+    "duckdb>=2.0.0,<3",
     "loguru>=0.7.3",
     # LakeSettings (atif_duck.infrastructure.lake_settings): the lake root and
     # its batch sizes come from ATIF_SQL_* env vars like every other setting.
