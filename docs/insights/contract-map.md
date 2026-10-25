@@ -54,7 +54,7 @@ The sections below aren't ranked; "Other contracts" at the end collects the smal
   glob (and, further down, each session's stored-file list) and binds it as the one parameter of
   its `read_json` readers, spelling the names from its own constants at
   `packages/atif-duck/src/atif_duck/domain/artifacts.py:28-36`.
-- `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:155-173`: gates on
+- `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166-184`: gates on
   `meta.json` and opens each stored trajectory with its own DuckDB connection.
 - `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:72-74`: declares
   `TRAJECTORY_FILENAME` / `EDGES_FILENAME` / `META_FILENAME` again as its own constants.
@@ -104,7 +104,7 @@ whatever keys an `ArtifactProducer` returns into `meta.json`.
 
 - **`meta.json` present means the session dir is complete.** Every reader implements the same
   torn-set gate independently: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:703-709` restricts the edges and loss readers to
-  dirs where `v_raw_meta` has a row (the trajectory list is built from `v_raw_meta` too); `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:164-169` skips a dir with no `meta.json`;
+  dirs where `v_raw_meta` has a row (the trajectory list is built from `v_raw_meta` too); `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:175-180` skips a dir with no `meta.json`;
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178-191` does the same and logs a warning. Nothing in the file layout expresses
   this: it's a write-ORDER promise made at
   `packages/atif-corpus/src/atif_corpus/application/materialize.py:635-638`.
@@ -114,10 +114,10 @@ whatever keys an `ArtifactProducer` returns into `meta.json`.
   can't reach it (`packages/atif-corpus/src/atif_corpus/domain/layout.py:89-94`). A `SIGKILL` or power loss inside the swap leaves the session missing rather than torn.
 - **`trajectory.json` is ONE JSON document, `edges.jsonl` is newline-delimited.** atif-duck encodes
   that split in its reader choice at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:25-28`; atif-embed re-derives it at
-  `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:88`.
+  `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:99`.
 - **A single trajectory document can be enormous.** Both DuckDB readers allow a 1 GiB
   `maximum_object_size`, and their measured ceilings disagree: atif-duck caps a bound it sizes from the largest file at 1 GiB, citing 436 MB
-  observed (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:217-220`), while atif-embed sets 1 GiB flat, citing 85 MB (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:56-58`). Same ceiling, two independent
+  observed (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:217-220`), while atif-embed sizes each batch's bound from its largest document under the same 1 GiB cap, citing 85 MB (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:56-59`). Same ceiling, two independent
   justifications.
 - **`source_mtime_ns` and every `watermark.json` value are epoch NANOSECONDS** from
   `os.stat().st_mtime_ns` (unit stated in the identifier and again at
@@ -489,7 +489,7 @@ editing `packages/atif-duck/src/atif_duck/domain/raw_readers.py:62-72` in the sa
   picks between them.
 - `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:376`: the `VectorStorePort`
   adapter.
-- `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:199`: the `TextRowsPort`
+- `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:229`: the `TextRowsPort`
   adapter over the corpus files; `packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:89`
   wraps it with a lake-backed reader and a watermark.
 - `packages/atif-embed/tests/embed_fixtures.py:170`: the deterministic `EmbeddingProvider` double.
@@ -544,7 +544,7 @@ class TextRowsPort(Protocol):
   list is rejected by Lance for indexing.
 - **`iter_unembedded`'s laziness bounds only the CALLER's residency.** The port says so explicitly
   at `packages/atif-embed/src/atif_embed/domain/ports.py:117-120`: peak resident text inside an implementation is each adapter's own
-  problem, and `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:71-77` establishes it by batching on BYTES (4 MiB) rather than
+  problem, and `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:81-87` establishes it by batching on BYTES (4 MiB) rather than
   on file count.
 - **Staleness is decided by hash, not by uuid presence.** A uuid under a different `text_hash` is
   yielded with `replaces_existing=True` (`packages/atif-embed/src/atif_embed/domain/ports.py:112-115`), and the caller must delete before

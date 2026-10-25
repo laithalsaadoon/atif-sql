@@ -203,7 +203,7 @@ per-session reader otherwise.
   `embed_query` the search command calls (`:280`).
 - `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py`: reads the
   contract corpus layout with its own DuckDB connection, since importing atif-duck is forbidden
-  (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:199`).
+  (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:229`).
 - `packages/atif-embed/src/atif_embed/domain/ports.py`: the port Protocols:
   `EmbeddingProvider` (`packages/atif-embed/src/atif_embed/domain/ports.py:37`), `VectorStorePort`
   (`:65`), `TextRowsPort` (`:93`), and `LakeStepsPort` (`:202`).

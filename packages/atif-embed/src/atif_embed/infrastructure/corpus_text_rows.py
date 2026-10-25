@@ -45,7 +45,7 @@ from loguru import logger
 from atif_embed.domain.discovery import PendingSelection
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterable, Iterator
     from pathlib import Path
 
     from atif_embed.domain.text_stamp import PendingText
@@ -53,9 +53,19 @@ if TYPE_CHECKING:
 #: Minimum characters for a step text to be worth embedding.
 MIN_TEXT_CHARS = 32
 
-#: ``read_json`` upper bound — live trajectory.json files reach 85 MB
-#: (harbor inlines subagent sidechains); 1 GiB gives ~10x headroom.
-_MAX_OBJECT_SIZE = 1_073_741_824
+#: Ceiling for a batch's ``read_json`` ``maximum_object_size``. Live
+#: trajectory.json files reach 85 MB (harbor inlines subagent sidechains);
+#: 1 GiB gives ~10x headroom.
+_OBJECT_SIZE_CAP = 1_073_741_824
+
+#: Floor for the same bound: DuckDB's own default.
+_OBJECT_SIZE_FLOOR = 16_777_216
+
+#: Headroom over a batch's largest document: a quarter of it plus one MiB, so
+#: a file that grows a little between the stat and the read still parses.
+#: The same rule as atif-duck's registry, which this package may not import.
+_OBJECT_SIZE_HEADROOM_DIVISOR = 4
+_OBJECT_SIZE_HEADROOM_BYTES = 1_048_576
 
 #: The trajectory's name, and the suffix it carries when stored compressed
 #: (twins of atif-corpus's, pinned in atif-cli's tests).
@@ -77,13 +87,14 @@ _FETCH_PAGE_ROWS = 512
 _BATCH_MAX_BYTES = 4 * 1024 * 1024
 
 
-def _step_texts_sql() -> str:
+def _step_texts_sql(max_object_size: int) -> str:
     """SQL selecting ``(uuid, text_content)`` from ONE BATCH of trajectories.
 
     The batch's paths are NOT in this text: ``read_json(?)`` takes them as one
     bound list parameter at execute time, so a path is data to DuckDB and
-    never part of the statement. The only interpolations are the two integer
-    constants below.
+    never part of the statement. The only interpolations are integers: the
+    batch's ``maximum_object_size`` (:func:`_object_size_bound`) and the text
+    floor.
 
     One trajectory document per file -> ``format='auto'`` (NOT NDJSON). The
     explicit ``columns`` projection is a strict filter AND it skips JSON
@@ -118,7 +129,7 @@ def _step_texts_sql() -> str:
                      format='auto',
                      filename=true,
                      columns={{steps: 'JSON[]'}},
-                     maximum_object_size={_MAX_OBJECT_SIZE}
+                     maximum_object_size={int(max_object_size)}
                  ) t,
                  UNNEST(t.steps) AS s(step)
         )
@@ -128,7 +139,7 @@ def _step_texts_sql() -> str:
           AND text_content IS NOT NULL
           AND length(text_content) >= {MIN_TEXT_CHARS}
         ORDER BY filename, step_id
-        """  # noqa: S608  # nosec B608 - paths are a bound parameter; both limits are int constants
+        """  # noqa: S608  # nosec B608 - paths are a bound parameter; both limits are ints
 
 
 def _decoded_size(path: Path) -> int:
@@ -173,7 +184,26 @@ def _complete_trajectory_paths(corpus_root: Path) -> list[tuple[str, int]]:
     return paths
 
 
-def _batch_by_bytes(paths: list[tuple[str, int]], *, max_bytes: int) -> list[list[str]]:
+def _object_size_bound(sizes: Iterable[int]) -> int:
+    """``maximum_object_size`` for one batch: its largest document plus headroom.
+
+    Floored at DuckDB's default and capped at :data:`_OBJECT_SIZE_CAP`. The
+    bound is not free: DuckDB's JSON reader reserves buffers of about twice
+    it before it parses anything, and on DuckDB 2.0 the number of those
+    reservations grows with the files in one statement (to about 50), at any
+    thread count. Measured 2026-10-25 over 40 one-kilobyte trajectories in
+    one statement at one thread, under the fixed 1 GiB bound this replaced:
+    2.0.0 ran out of a 49 GB ``memory_limit`` (44 GiB already reserved, 2 GiB
+    at a time), where 1.5.6 finished under 8 GB. A batch is a few MiB of
+    documents, so its bound is the floor, and a session above the batch
+    budget holds a statement alone with a bound sized to it.
+    """
+    largest = max(sizes, default=0)
+    with_headroom = largest + largest // _OBJECT_SIZE_HEADROOM_DIVISOR + _OBJECT_SIZE_HEADROOM_BYTES
+    return max(_OBJECT_SIZE_FLOOR, min(_OBJECT_SIZE_CAP, with_headroom))
+
+
+def _batch_by_bytes(paths: list[tuple[str, int]], *, max_bytes: int) -> list[list[tuple[str, int]]]:
     """Group ``(path, size)`` pairs into batches of at most ``max_bytes``.
 
     Order is preserved, so batching cannot reorder rows. A file at or above
@@ -181,15 +211,15 @@ def _batch_by_bytes(paths: list[tuple[str, int]], *, max_bytes: int) -> list[lis
     budget is a target, and the true residency floor is the largest single
     session, which no grouping can lower.
     """
-    batches: list[list[str]] = []
-    current: list[str] = []
+    batches: list[list[tuple[str, int]]] = []
+    current: list[tuple[str, int]] = []
     current_bytes = 0
     for path, size in paths:
         if current and current_bytes + size > max_bytes:
             batches.append(current)
             current = []
             current_bytes = 0
-        current.append(path)
+        current.append((path, size))
         current_bytes += size
     if current:
         batches.append(current)
@@ -262,7 +292,8 @@ def _step_rows(paths: list[tuple[str, int]]) -> Iterator[tuple[str, str]]:
     con = duckdb.connect(":memory:")
     try:
         for batch in _batch_by_bytes(paths, max_bytes=_BATCH_MAX_BYTES):
-            result = con.execute(_step_texts_sql(), [batch])
+            bound = _object_size_bound(size for _, size in batch)
+            result = con.execute(_step_texts_sql(bound), [[path for path, _ in batch]])
             while page := result.fetchmany(_FETCH_PAGE_ROWS):
                 for row in page:
                     yield str(row[0]), str(row[1])
