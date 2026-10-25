@@ -143,7 +143,7 @@ def test_query_vec_exemplar_is_unit_norm(full_con: duckdb.DuckDBPyConnection) ->
     correct macro from a broken one.
     """
     row = full_con.execute(
-        f"SELECT sqrt(list_sum(list_transform({ARG_EXEMPLARS['query_vec']}, x -> x::DOUBLE * x)))"
+        f"SELECT sqrt(list_sum(list_transform({ARG_EXEMPLARS['query_vec']}, lambda x: x::DOUBLE * x)))"
     ).fetchone()
     assert row is not None
     assert float(row[0]) == pytest.approx(1.0, abs=1e-6)

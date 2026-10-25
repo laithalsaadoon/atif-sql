@@ -107,7 +107,7 @@ def _step_texts_sql() -> str:
                      THEN array_to_string(
                               list_transform(
                                   json_extract(step, '$.message[*].text'),
-                                  part -> json_extract_string(part, '$')
+                                  lambda part: json_extract_string(part, '$')
                               ),
                               '\n\n'
                           )

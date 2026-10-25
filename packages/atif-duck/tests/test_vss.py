@@ -222,8 +222,8 @@ class TestSemanticSearch:
             SELECT uuid, sim FROM semantic_search(
                 (SELECT list_transform(
                      me.embedding,
-                     v -> (v / sqrt(list_sum(
-                         list_transform(me.embedding, x -> x::DOUBLE * x)
+                     lambda v: (v / sqrt(list_sum(
+                         list_transform(me.embedding, lambda x: x::DOUBLE * x)
                      )))::FLOAT
                  )
                  FROM message_embeddings me WHERE me.uuid = 'a-3'),
