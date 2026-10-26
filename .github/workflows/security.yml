@@ -68,7 +68,7 @@ jobs:
       # The SARIF verification in `mise run security` caught it, which is the whole point of
       # failing on a missing report rather than on findings. Paying a cold install per run is
       # cheaper than a tier that can report success for a scan that never executed.
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
@@ -84,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       # One upload for the whole directory — each SARIF names its own tool, so code scanning
       # separates them without a step per scanner.
-      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         if: always()
         with:
           sarif_file: .sarif
@@ -93,7 +93,7 @@ jobs:
       # (what a downstream consumer's tooling is more likely to ingest). 90 days matches the
       # advisory-response window this exists to serve: when a CVE drops, "did we ship that?"
       # is answered from here without a rebuild.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: sbom

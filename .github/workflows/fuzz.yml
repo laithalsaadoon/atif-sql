@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       # `cache: false`, for the reason security.yml gives: a cached tool directory is a tool
       # nobody verified, and a cached pipx shebang can point at an interpreter the cache lacks.
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
@@ -64,7 +64,7 @@ jobs:
           UV_LOCKED: "1"
       # Only on failure: the inputs that crashed, timed out or ran out of memory, and each
       # target's whole libFuzzer log, so a finding reproduces from the run that found it.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: fuzz-findings
