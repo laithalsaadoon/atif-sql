@@ -89,7 +89,7 @@ jobs:
       # pull-request run write one the default branch can read, so a release build that
       # restored a cache would let a fork's run choose bytes that get signed and published.
       # This job pays the full cold-resolve instead, once per release.
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
@@ -253,7 +253,7 @@ jobs:
           fi
           "$bin/atif-sql" schema > /dev/null
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -270,7 +270,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: RELEASE_VERSION="${RELEASE_TAG#v}" mise run release:assets
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: release/
@@ -293,7 +293,7 @@ jobs:
       id-token: write # request the Sigstore signing certificate for this workflow's identity
       attestations: write # store the attestations in the repository's attestation API
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: release
@@ -324,7 +324,7 @@ jobs:
           jq -c . "$PROVENANCE" "$SBOM" > "attestations/atif_sql-$VERSION.intoto.jsonl"
           wc -l "attestations/atif_sql-$VERSION.intoto.jsonl"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: attestations
           path: attestations/
@@ -348,11 +348,11 @@ jobs:
     permissions:
       contents: write # upload assets to the existing release
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: release
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: attestations
           path: release
@@ -467,7 +467,7 @@ jobs:
           mkdir dist
           cp "release/atif_sql-$version-py3-none-any.whl" "release/atif_sql-$version.tar.gz" dist/
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -537,7 +537,7 @@ jobs:
       # publish and the attestation are tied to one identity.
       id-token: write # exchanged with PyPI for a 15-minute publishing macaroon, and signs the attestations
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist

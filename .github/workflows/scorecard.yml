@@ -61,7 +61,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
         with:
           results_file: results.sarif
           results_format: sarif
@@ -71,7 +71,7 @@ jobs:
       # normalises them; this is the document Scorecard actually emitted, which is what a
       # score dispute is settled from. Short retention because the next weekly run supersedes
       # it — unlike the 90-day SBOM in security.yml, nothing answers a CVE question from here.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: scorecard-sarif
@@ -85,7 +85,7 @@ jobs:
       # `category: scorecard` keeps these alerts in their own analysis set. Without it this
       # upload and security.yml's would overwrite each other's results for the same ref,
       # because code scanning keys an analysis on (ref, category).
-      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: results.sarif
           category: scorecard
