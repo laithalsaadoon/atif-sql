@@ -1,3 +1,12 @@
+## v0.5.0 (2026-10-28)
+
+### Fix
+
+- **duck**: size the newline-delimited read bounds from the longest line
+- **cli**: refuse PRAGMA, MULTI and unnamed statement kinds in the query sandbox
+- **embed**: size each batch's read_json bound from its own documents
+- **duck,embed**: write SQL lambdas with the lambda keyword
+
 ## v0.4.0 (2026-10-15)
 
 ### Feat
