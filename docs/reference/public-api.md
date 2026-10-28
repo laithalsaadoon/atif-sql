@@ -10,10 +10,10 @@ actually calls.
 
 What follows documents the **internal seam**: the highest-traffic symbols that one workspace member
 imports from another. That seam is enforced rather than conventional: the root `pyproject.toml`
-declares `[tool.importlinter]` over every root package at `pyproject.toml:547-548`, with an
-`independence` contract at `pyproject.toml:599-602` forbidding atif-converter, atif-corpus, atif-duck,
+declares `[tool.importlinter]` over every root package at `pyproject.toml:543-544`, with an
+`independence` contract at `pyproject.toml:595-598` forbidding atif-converter, atif-corpus, atif-duck,
 atif-models, and atif-embed from importing each other at all, and a `forbidden` contract at
-`pyproject.toml:604-608` limiting atif-analytics to atif-models alone. Every symbol below is a real
+`pyproject.toml:600-604` limiting atif-analytics to atif-models alone. Every symbol below is a real
 declaration read at the cited line; none of them is a supported import path for code outside this
 workspace, and no compatibility promise attaches to any of them. The entries also cover the
 atif-analytics prompt builders that every LLM stage shares inside that member.

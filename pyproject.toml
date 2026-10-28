@@ -123,10 +123,6 @@ resolution = "highest"
 # No square bracket may appear in this comment: the Semgrep rule reads the table as
 # everything up to the next one.
 exclude-newer = "7 days"
-# duckdb 2.0.0's files were uploaded from 2026-10-21T12:50:38Z to 12:51:14Z, the sdist last,
-# and are admitted here from then on. Delete this exemption in the next `uv lock --upgrade`
-# after 2026-10-28T12:52Z, when the global window reaches it.
-exclude-newer-package = { duckdb = "2026-10-21T12:52:00Z" }
 python-preference = "only-managed"
 python-downloads = "automatic"
 compile-bytecode = true

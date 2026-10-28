@@ -4,11 +4,11 @@ Risk here is a score over signals a command can produce, each countable and each
 line of source: `2 × T + 2 × E + 0.5 × W + 1 × C + 1 × H + U/10`. `T` counts defects a type
 checker located in the file; `E` and `W` count `error`- and `warn`-severity scanner findings from
 the scanner report tier (`mise.toml:675`); `C` counts complexity ratchets the ruff config
-sets at a function living in this file (`pyproject.toml:324-347`); `H` counts distinct unguarded
+sets at a function living in this file (`pyproject.toml:320-343`); `H` counts distinct unguarded
 concurrency or IO windows, where a window whose own docstring names its recovery does not count;
 and `U` is uncovered units (missed lines plus missed branches) under the branch-coverage config
-at `pyproject.toml:620`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
-`pyproject.toml:645`, so `U/10` puts a
+at `pyproject.toml:616`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
+`pyproject.toml:641`, so `U/10` puts a
 file's share of the remaining uncovered units on the same scale as one located defect.
 
 Churn is rejected as a signal. One author wrote 88 of the 93 commits (the other five are three
@@ -28,7 +28,7 @@ workspace-wide is `LOW` severity, so `E` and `W` never discriminate either, and 
 it's the one input here that a reading of the code, git, and the linters can't re-derive.
 `packages/atif-embed/src/atif_embed/domain/ports.py` is excluded from the ranking despite reading
 as uncovered, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
-(`pyproject.toml:646-653`); that is a measurement artifact, not a gap.
+(`pyproject.toml:642-649`); that is a measurement artifact, not a gap.
 
 | File | Trend | Open findings | Top owner | Citation |
 | --- | --- | --- | --- | --- |
@@ -52,7 +52,7 @@ rule that asks `[tool.uv]` for a dependency cooldown (`uv-missing-dependency-coo
 the rule. The SQL sites are the ones that ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
 `--ignore-noqa` over `packages/*/src` reports 70 sites against bandit's 69, the two sets differing
 by three statements the tools parse differently), and each `# noqa: S608` names what it
-interpolates (`pyproject.toml:209-212`). The scanner tier therefore carries no unaudited exposure,
+interpolates (`pyproject.toml:205-208`). The scanner tier therefore carries no unaudited exposure,
 which is why coverage, complexity, and concurrency carry the ranking instead.
 
 ## Per-file breakdown
@@ -160,8 +160,8 @@ lands in extra and there is nothing to join on (`:15-20`).
 
 **Findings.** No scanner findings, no IO windows (this is a pure function), and two of the
 workspace's complexity ratchets set by one function: `max-branches = 39` and
-`max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:338`, `:333`,
-`:342-347`; the function at
+`max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:334`, `:329`,
+`:338-343`; the function at
 `packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). Each branch is one named
 fidelity gap, which is why the count is a ratchet rather than a target. Its uncovered units
 sit mostly inside `enrich_trajectory` (`:198-412`) and `_visible_user_text` (`:113-146`),
@@ -183,7 +183,7 @@ views bind to those literal values, so the vocabulary is a fixed contract (`:34-
 **Owners.** The sole author at 100% (all three commits touching the path).
 
 **Findings.** No scanner findings, and the `max-statements = 119` ratchet, set at `_friction_async`
-(`pyproject.toml:340`, `:335`; the function at
+(`pyproject.toml:336`, `:331`; the function at
 `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:210`). The coverage
 gap and the complexity outlier are the same region: most of the file's uncovered units sit inside
 `_friction_async` (`:210-498`), with the rest in `detect_user_friction` (`:501-606`) and
