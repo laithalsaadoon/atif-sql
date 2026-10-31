@@ -91,12 +91,22 @@ History:
   deprecation date (Claude 3.x, claude-opus-4-1, claude-opus-4-20250514,
   claude-sonnet-4-20250514 and older GPT-4 ids among them), so a session on one of
   those is unpriced.
+* 11 — prices from litellm v1.106.3, with its threshold scan ported. The table adds
+  28 ids: Claude Haiku 5.5 and Sonnet 5.5 (direct and every Bedrock region), GPT-6.1
+  Sol, and a few OpenAI preview ids, so sessions of the new Claude and GPT-6.1 models
+  that were unpriced now carry a cost. GPT-6 Astra gains its ultrafast rates, the
+  four Bedrock gpt-oss ids gain flex and priority rates, and claude-sonnet-4-5 and
+  the two Bedrock claude-3-5-sonnet ids lose their above-200k rates, so a long
+  prompt on those bills at the base rate. The scan now reads a threshold from any
+  of the four rate families and from the request's own tier variant, and applies
+  every exceeded threshold lowest first, so a key the highest one leaves out keeps
+  the lower threshold's rate. The new ``balanced`` tier reads its own keys.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 10
+CONVERTER_SCHEMA_VERSION: Final = 11
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]

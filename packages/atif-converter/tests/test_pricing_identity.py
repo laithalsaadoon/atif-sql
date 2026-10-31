@@ -22,8 +22,10 @@ corpora on 2026-09-12.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -84,6 +86,7 @@ SERVICE_TIERS: list[str | None] = [
     None,
     "standard",
     "flex",
+    "balanced",
     "priority",
     "fast",
     "ultrafast",
@@ -284,3 +287,91 @@ class TestIdentityGrid:
             service_tier="standard",
         )
         assert priced is None
+
+
+#: The real key the synthetic entries stand in for. Both sides already resolve it as an
+#: Anthropic model, so swapping its entry changes the rates and nothing about the lookup.
+SYNTHETIC_KEY = "claude-haiku-5-5"
+
+_SYNTHETIC_BASE: dict[str, Any] = {
+    "litellm_provider": "anthropic",
+    "mode": "chat",
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 5e-06,
+    "cache_creation_input_token_cost": 1.25e-06,
+    "cache_read_input_token_cost": 1e-07,
+}
+
+#: Threshold shapes the vendored table doesn't carry yet, one per rule of litellm
+#: 1.106's threshold scan, so the grid above can't be the only witness to each.
+SYNTHETIC_ENTRIES: dict[str, dict[str, Any]] = {
+    # A threshold named only by an output and a cache key still applies.
+    "output-key-threshold": {
+        **_SYNTHETIC_BASE,
+        "output_cost_per_token_above_128k_tokens": 7e-06,
+        "cache_read_input_token_cost_above_128k_tokens": 2e-07,
+    },
+    # Two exceeded thresholds apply lowest first: the 272k rates win where 272k sets
+    # them, and the cache-read rate only 128k sets carries through.
+    "chained-thresholds": {
+        **_SYNTHETIC_BASE,
+        "input_cost_per_token_above_128k_tokens": 2e-06,
+        "output_cost_per_token_above_128k_tokens": 8e-06,
+        "cache_read_input_token_cost_above_128k_tokens": 3e-07,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "output_cost_per_token_above_272k_tokens": 1.6e-05,
+    },
+    # A threshold only the request's tier names counts for that tier alone, and the
+    # balanced tier reads its own keys.
+    "tier-only-threshold": {
+        **_SYNTHETIC_BASE,
+        "input_cost_per_token_priority": 2e-06,
+        "output_cost_per_token_priority": 1e-05,
+        "input_cost_per_token_above_200k_tokens_priority": 4e-06,
+        "output_cost_per_token_above_200k_tokens_priority": 2e-05,
+        "input_cost_per_token_balanced": 1.5e-06,
+        "output_cost_per_token_balanced": 7.5e-06,
+    },
+}
+
+
+def _invalidate_litellm_model_cost() -> None:
+    """Drop litellm's caches over ``model_cost``, as its own mutators do."""
+    litellm.utils._invalidate_model_cost_lowercase_map()
+
+
+@pytest.fixture(params=sorted(SYNTHETIC_ENTRIES))
+def synthetic_entry(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[str]:
+    """One synthetic entry under :data:`SYNTHETIC_KEY` in both litellm's table and ours."""
+    name = cast("str", request.param)
+    entry = SYNTHETIC_ENTRIES[name]
+    document = json.loads(pricing.TABLE_PATH.read_text(encoding="utf-8"))
+    document["models"][SYNTHETIC_KEY] = entry
+    path = tmp_path / pricing.TABLE_FILENAME
+    path.write_text(json.dumps(document), encoding="utf-8")
+    pricing.load_table.cache_clear()
+    monkeypatch.setattr(pricing, "TABLE_PATH", path)
+    monkeypatch.setitem(litellm.model_cost, SYNTHETIC_KEY, dict(entry))
+    _invalidate_litellm_model_cost()
+    try:
+        yield name
+    finally:
+        pricing.load_table.cache_clear()
+        monkeypatch.undo()
+        _invalidate_litellm_model_cost()
+
+
+class TestSyntheticThresholds:
+    def test_every_shape_and_tier_prices_identically(self, synthetic_entry: str) -> None:
+        mismatches: list[str] = []
+        for shape in TOKEN_SHAPES:
+            for tier in SERVICE_TIERS:
+                ours = _fast_cost(SYNTHETIC_KEY, shape, tier)
+                theirs = _litellm_cost(SYNTHETIC_KEY, shape, tier)
+                assert isinstance(ours, tuple), (synthetic_entry, shape, tier, ours)
+                assert isinstance(theirs, tuple), (synthetic_entry, shape, tier, theirs)
+                if not _identical(ours, theirs):
+                    mismatches.append(f"{shape} {tier}: ours={ours!r} litellm={theirs!r}")
+        assert mismatches == [], f"{synthetic_entry}:\n" + "\n".join(mismatches)

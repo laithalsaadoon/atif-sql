@@ -45,7 +45,7 @@ dependencies = [
     "cyclopts>=5.1.1",
     "duckdb>=2.0.0,<3",
     "imagesize>=2.0",
-    "lancedb>=0.30,<0.40",
+    "lancedb>=0.30,<0.41",
     "loguru>=0.7.3",
     "polars>=1.40.0",
     "pyarrow>=23.0.1",
@@ -127,6 +127,12 @@ python-preference = "only-managed"
 python-downloads = "automatic"
 compile-bytecode = true
 link-mode = "clone"
+# litellm caps filelock below 4 (`filelock<4.0` in every release through 1.106.6), and
+# filelock's CVE fixes ship only in 4.2.1. litellm is a dev-only test oracle, and a fresh
+# install of the published package already resolves filelock 4 through huggingface-hub and
+# torch, so the override makes the lock match what users get. Delete it once a litellm
+# release in the cooldown window lifts the cap.
+override-dependencies = ["filelock>=4.2.1"]
 
 # torch and torchvision on Linux come from PyTorch's CPU-only index, so uv.lock carries
 # no CUDA build and none of the nvidia-* and cuda-* wheels PyPI's Linux torch requires
@@ -439,6 +445,11 @@ output-format = "concise"
 
 [tool.ty.rules]
 all = "error"
+# ty 0.0.85 added this rule, and it reports 55 sites across six members on the first
+# version that had it. Every one is an `if value:` that treats None and an empty value
+# alike, which is what this tree means by "absent", and the converter's truthiness tests
+# mirror harbor's. Turning a site on is a None-versus-empty decision made at that site.
+truthiness-test-of-none-union = "ignore"
 
 [[tool.ty.overrides]]
 include = ["packages/*/tests/**"]
