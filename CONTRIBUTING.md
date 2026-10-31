@@ -260,7 +260,7 @@ models our transcripts name, plus local overrides for models litellm doesn't pri
 yet. Refresh it by hand, never by editing the JSON:
 
 ```bash
-uv run scripts/update_prices.py --ref v1.104.2   # a litellm tag, branch, or commit
+uv run scripts/update_prices.py --ref v1.106.3   # a litellm tag, branch, or commit
 ```
 
 The script drops an override once upstream prices the same key and says so; delete
