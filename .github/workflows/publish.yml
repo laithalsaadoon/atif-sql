@@ -560,7 +560,7 @@ jobs:
       # `packages-dir: dist` because the build job produced exactly one sdist and one wheel and
       # the preflight proved it. There is no staging step to keep one project's files apart from
       # another's; there is one project.
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist
           attestations: true
