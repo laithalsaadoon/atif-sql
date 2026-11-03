@@ -703,7 +703,7 @@ for pair in "2.5 0.5" "2.6 0.5" "0.5 0.5" "2.7 0.5" "2.8 0.5" "0.4 0.5"; do
   seed_probe_line "$run_a" primary "$a"
   seed_probe_line "$run_a" extra1 "$b"
 done
-echo "2026-11-01T03:41:01+00:00 vector-probe extra1: TRIP median_7=9.9 (exact scan over 2.0 s; see PLAN.md Phase 6)" >> "$run_a/atif-sql-refresh.log"
+echo "2026-11-01T03:41:01+00:00 vector-probe extra1: TRIP median_7=9.9 (exact scan over 2.0 s; route search through a vector index)" >> "$run_a/atif-sql-refresh.log"
 echo "2026-11-01T03:41:02+00:00 WARN: vector-probe primary: probe failed (exit 70, see above); the lane's exit is unchanged" >> "$run_a/atif-sql-refresh.log"
 probe_answer claude-a 150659 2.9 0
 probe_answer claude-b 1200 0.6 0
@@ -717,7 +717,7 @@ if [ "$probe_rc" = 0 ] \
 else
   fail "vector probe: per-corpus lines or calls missing (exit=$probe_rc): $(tr '\n' ';' < "$run_a/appended.log")"
 fi
-if grep -q 'vector-probe primary: TRIP median_7=2.6 (exact scan over 2.0 s; see PLAN.md Phase 6)$' "$run_a/appended.log" \
+if grep -q 'vector-probe primary: TRIP median_7=2.6 (exact scan over 2.0 s; route search through a vector index)$' "$run_a/appended.log" \
    && ! grep -q 'vector-probe extra1: TRIP' "$run_a/appended.log"; then
   ok "vector probe: TRIPs on the median of the corpus's own last 7 lines (primary 2.6), not on extra1's"
 else
