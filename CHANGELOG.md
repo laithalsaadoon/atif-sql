@@ -1,3 +1,21 @@
+## v0.6.0 (2026-11-03)
+
+### Feat
+
+- **cron**: the compact lane logs a nightly vector probe and its 7-night tripwire
+- **cli**: status --vector-probe times search's exact kNN over the store
+- **embed**: write vectors through DuckDB's lance extension
+
+### Fix
+
+- **cron**: clear the embed terminal marker on any change inside the store
+- **cron**: read every help probe whole, so a long --help can't hide a flag
+- **embed**: VACUUM the store even when OPTIMIZE fails
+- **cli**: the probe reads its query vector in one statement
+- **embed**: a store the lance extension can't open is terminal, not empty
+- **cli**: mark the probe's constant-name SQL for Bandit the way the store code does
+- **cron**: say what the tripwire means instead of pointing at a plan outside the repo
+
 ## v0.5.0 (2026-10-28)
 
 ### Fix
