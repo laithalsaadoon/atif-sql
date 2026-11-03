@@ -12,9 +12,11 @@ The probe runs :data:`PROBE_SQL`, which ranks the store's rows the way
 ``search`` ranks them (the same ``qv`` CTE, cosine similarity, and ``ORDER BY
 array_cosine_distance ... ASC`` with a ``LIMIT``), minus ``search``'s join back
 to ``steps``. Its query vector is the stored embedding of the smallest uuid,
-so a store gives the same statement every night and nothing is embedded.
-Only the scan is timed. Attaching the store, counting its rows and reading
-the probe vector all happen before the clock starts.
+read in the same single statement that picks it, so a store gives the same
+statement every night and nothing is embedded. Only the scan is timed.
+Attaching the store, counting its rows and reading the probe vector all
+happen before the clock starts. Reading the probe vector reads every vector
+once, so the timed scan always runs on a warm page cache.
 
 The connection is the store's own, from
 :func:`atif_embed.infrastructure.lance_store.connect_db`: 1 GiB of DuckDB
@@ -109,11 +111,16 @@ def probe_store(store: Path, *, corpus: str, k: int = PROBE_K) -> VectorProbe | 
         vector_rows = int(con.execute(f"SELECT count(*) FROM {table}").fetchall()[0][0])  # noqa: S608  # nosec B608 - table is the store's constant name
         if vector_rows == 0:
             return None
-        smallest = con.execute(f"SELECT min(uuid) FROM {table}").fetchall()[0][0]  # noqa: S608  # nosec B608 - table is the store's constant name
-        vector = con.execute(
-            f"SELECT embedding FROM {table} WHERE uuid = ? LIMIT 1",  # noqa: S608  # nosec B608 - table is the store's constant name
-            [smallest],
-        ).fetchall()[0][0]
+        # One statement, so a delete landing between "which uuid" and "its
+        # vector" can't leave nothing to read. It's one scan that reads every
+        # vector, which also leaves them in the page cache: the timed scan
+        # below runs warm every night, so nights compare like with like.
+        first = con.execute(
+            f"SELECT uuid, embedding FROM {table} ORDER BY uuid LIMIT 1"  # noqa: S608  # nosec B608 - table is the store's constant name
+        ).fetchall()
+        if not first:
+            return None
+        vector = first[0][1]
         sql = probe_sql(dim=len(vector), table=table)
         started = time.perf_counter()
         rows = con.execute(sql, [list(vector), int(k)]).fetchall()
