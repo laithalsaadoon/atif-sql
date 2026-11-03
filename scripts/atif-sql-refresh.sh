@@ -46,6 +46,17 @@
 # (scripts/atif-sql-refresh-selftest.sh) pins this guard by actually running
 # this script against a shimmed CLI with and without `analyze`.
 #
+# EVERY HELP PROBE READS THE WHOLE HELP. The absence guards (analyze, embed,
+# lake, Codex's --agent twice, the probe's --vector-probe) ask the CLI's
+# --help whether a command or flag exists. Piped straight into `grep -q`
+# under pipefail, grep exits at the first match, the CLI's next write meets a
+# closed pipe, the CLI exits nonzero, and the guard reads "absent" with the
+# thing right there. `status --help | grep -q -- --agent` did that 20 times
+# in 20 against the real CLI (2026-11-03), so the llm lane's Codex status dump
+# skipped every night. Each guard captures the help into a variable and greps
+# a here-string instead, and the selftest's shims print help long enough to
+# fail the piped shape.
+#
 # ONE LOCK PER MODE — load-bearing. The lock file name carries $MODE, so a slow
 # materialize run can never starve the nightly llm tick. Two runs of the SAME
 # mode must not overlap (two writers to one corpus/watermark is corruption),
@@ -319,7 +330,9 @@ echo $$ > "$PIDFILE"
 # before the per-corpus loop. fd 8 holds the materialize lane's lock for the
 # whole run; every CLI call closes it (`8>&-`) like fd 9.
 run_compact() {
-  if ! "$ATIF_SQL" --help 2>/dev/null 8>&- 9>&- | grep -qw lake; then
+  local top_help
+  top_help="$("$ATIF_SQL" --help 2>/dev/null 8>&- 9>&-)"
+  if ! grep -qw lake <<< "$top_help"; then
     log "[compact] lake not yet installed, skipping"
     return 0
   fi
@@ -354,12 +367,7 @@ vector_probe_median() {
 
 run_vector_probes() {
   # Never fails: every outcome is a log line, and the caller ignores the status.
-  #
-  # The help is read whole before grep sees it. Piped straight into `grep -q`
-  # under pipefail, grep exits at the first match, the CLI's next write meets
-  # a closed pipe and exits nonzero, and the guard reads that as "no flag":
-  # `status --help` runs on long after `--vector-probe` (caught 2026-11-03 by a
-  # lane run against the real CLI, which skipped with the flag present).
+  # The help is read whole first (see EVERY HELP PROBE READS THE WHOLE HELP).
   local status_help
   status_help="$("$ATIF_SQL" status --help 2>/dev/null 8>&- 9>&-)"
   if ! grep -q -- '--vector-probe' <<< "$status_help"; then
@@ -404,7 +412,8 @@ fi
 # THE ANALYTICS GUARD (see header). Probed once — the subcommand's existence
 # does not vary per corpus.
 if [ "$MODE" != materialize ]; then
-  if ! "$ATIF_SQL" --help 2>/dev/null 9>&- | grep -qw analyze; then
+  top_help="$("$ATIF_SQL" --help 2>/dev/null 9>&-)"
+  if ! grep -qw analyze <<< "$top_help"; then
     log "[$MODE] analytics not yet installed, skipping"
     exit 0
   fi
@@ -500,7 +509,9 @@ run_materialize() {
 
   # Embed piggyback (see header). Guarded like analyze: an atif-sql without
   # `embed` skips quietly. Terminal-exit handling lives in run_embed_piggyback.
-  if "$ATIF_SQL" --help 2>/dev/null 9>&- | grep -qw embed; then
+  local top_help
+  top_help="$("$ATIF_SQL" --help 2>/dev/null 9>&-)"
+  if grep -qw embed <<< "$top_help"; then
     run_embed_piggyback "$name"
   else
     log "$name: embed not yet installed, skipping"
@@ -542,7 +553,9 @@ run_codex_materialize() {
     log "$name: $codex_sessions absent — skip"
     return 0
   fi
-  if ! "$ATIF_SQL" materialize --help 2>/dev/null 9>&- | grep -q -- '--agent'; then
+  local materialize_help
+  materialize_help="$("$ATIF_SQL" materialize --help 2>/dev/null 9>&-)"
+  if ! grep -q -- '--agent' <<< "$materialize_help"; then
     log "$name: codex not yet supported by $ATIF_SQL, skipping"
     return 0
   fi
@@ -606,8 +619,11 @@ if [ "$MODE" != materialize ]; then
   # The Codex corpus too, or the log's answer to "is it fresh?" silently
   # excludes the one corpus that has no lane of its own to report it. Same
   # guards as the pass, and the same unexported roots.
-  if [ -d "${CODEX_HOME:-$HOME/.codex}/sessions" ] \
-     && "$ATIF_SQL" status --help 2>/dev/null 9>&- | grep -q -- '--agent'; then
+  codex_status_help=""
+  if [ -d "${CODEX_HOME:-$HOME/.codex}/sessions" ]; then
+    codex_status_help="$("$ATIF_SQL" status --help 2>/dev/null 9>&-)"
+  fi
+  if grep -q -- '--agent' <<< "$codex_status_help"; then
     log "--- corpus status: codex ---"
     (
       unset ATIF_SQL_SOURCE_ROOT CLAUDE_CONFIG_DIR
