@@ -215,6 +215,16 @@ shim_root="$(mktemp -d)"
 trap 'rm -rf "$shim_root"' EXIT
 export ATIF_SQL_BEDROCK_TOKEN_FILE="$shim_root/no-token"
 
+# EVERY SHIM'S --help RUNS LONG. Each shim's --help (top level, `materialize`,
+# `status`) prints this after its commands and flags, as the real CLI's help
+# runs on past them. 3,000 lines is past a pipe buffer, so a guard that pipes
+# the help into `grep -q` under pipefail leaves the shim a closed pipe when
+# grep stops at the match, and reads "absent" with the thing present, the way
+# the real CLI made it do (see the refresh script's header). Every guard below
+# runs against help this long. Spliced into each unquoted heredoc as text.
+# shellcheck disable=SC2016  # deliberate: the loop is shim code, expanded when the shim runs
+LONG_HELP='for _ in $(seq 1 3000); do echo "  more of a long --help, after every command and flag"; done'
+
 make_shim() {
   # $1 = shim dir, $2 = "with" | "without" (analyze in --help)
   local dir="$1" mode="$2"
@@ -225,6 +235,7 @@ case "\${1:-}" in
   --help)
     echo "Usage: atif-sql COMMAND"
     echo "  materialize  status  query  schema$([ "$mode" = with ] && echo '  analyze')"
+    $LONG_HELP
     ;;
   analyze) echo "analyze \$*" >> "$dir/calls.log" ;;
   *) exit 0 ;;
@@ -308,6 +319,7 @@ case "\${1:-}" in
     echo "Usage: atif-sql COMMAND"
     echo "  materialize  status  query  schema  embed"
     echo "  --limit --format"
+    $LONG_HELP
     ;;
   materialize) echo '{"materialize": "ok"}' ;;
   status) echo "{\"corpus_root\": \"$term_dir/corpus\"}" ;;
@@ -384,11 +396,13 @@ case "\${1:-}" in
   --help)
     echo "Usage: atif-sql COMMAND"
     echo "  materialize  status  query  schema  analyze"
+    $LONG_HELP
     ;;
   materialize)
     if [ "\${2:-}" = --help ]; then
       echo "Usage: atif-sql materialize [OPTIONS]"
       echo "  --force --quiesce-seconds --source-root --corpus-root --sessions --format$([ "$mode" = with ] && echo ' --agent')"
+      $LONG_HELP
     else
       echo "materialize \$*" >> "$dir/calls.log"
       echo '{"materialize": "ok"}'
@@ -398,6 +412,7 @@ case "\${1:-}" in
     if [ "\${2:-}" = --help ]; then
       echo "Usage: atif-sql status [OPTIONS]"
       echo "  --source-root --corpus-root --quiesce-seconds --format$([ "$mode" = with ] && echo ' --agent')"
+      $LONG_HELP
     else
       echo "status \$*" >> "$dir/calls.log"
       echo '{"status": "ok"}'
@@ -475,7 +490,7 @@ mkdir -p "$cap_dir"
 cat > "$cap_dir/atif-sql" <<SHIM
 #!/usr/bin/env bash
 case "\${1:-}" in
-  --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  analyze" ;;
+  --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  analyze"; $LONG_HELP ;;
   analyze)
     cg="\$(sed -n 's/^0:://p' /proc/self/cgroup)"
     echo "\$cg \$(cat "/sys/fs/cgroup\$cg/memory.max") \$(cat "/sys/fs/cgroup\$cg/memory.swap.max")" >> "$cap_dir/calls.log"
@@ -545,15 +560,12 @@ make_compact_shim() {
   cat > "$dir/atif-sql" <<SHIM
 #!/usr/bin/env bash
 case "\${1:-}" in
-  --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  embed$([ "$mode" = with ] && echo '  lake')" ;;
+  --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  embed$([ "$mode" = with ] && echo '  lake')"; $LONG_HELP ;;
   status)
     if [ "\${2:-}" = --help ]; then
       echo "Usage: atif-sql status [OPTIONS]"
       echo "  --agent --source-root --corpus-root --format$([ "$probe" = with ] && echo ' --vector-probe')"
-      # The real help runs on for dozens of lines after the flag. Past a pipe
-      # buffer of it, a reader that stops at the first match (\`grep -q\`)
-      # leaves this writer a closed pipe, as the real CLI gets.
-      for _ in \$(seq 1 3000); do echo "  more of a long status --help, after every flag"; done
+      $LONG_HELP
       exit 0
     fi
     corpus="\$(basename "\${CLAUDE_CONFIG_DIR:-none}")"
