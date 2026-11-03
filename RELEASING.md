@@ -269,6 +269,12 @@ after a rollback. Each step prints one JSON line, and the first names the DuckDB
 extension build it checked: when it passes on a new build, record that build here. When it
 fails, a release on that build can't be rolled back to 0.5.0 without re-embedding.
 
+The task covers a fresh store at storage version 2.2 and lancedb 0.39.0 only. The fleet's
+stores are older: they're at 2.1 and carry an IVF_HNSW_SQ index that lancedb built. So when the
+build moves, also copy each fleet store to a scratch directory, write to the copy through the
+extension, and open, search, append to and compact it with lancedb 0.39.0. 0.39.0 is the
+version a rollback installs, because atif-sql 0.5.0 pins `lancedb>=0.30,<0.40`.
+
 ## The normal path
 
 1. Land Conventional Commits on `main`. `feat:` moves the minor, `fix:` the patch, and a `!`
