@@ -533,6 +533,47 @@ class TestSchemaVersionSidecar:
         assert lance_store.read_schema_version(uri) == lance_store.SCHEMA_VERSION
 
 
+class _RefusingCon:
+    """A DuckDB connection that records statements and refuses those starting with a prefix."""
+
+    def __init__(self, con: Any, statements: list[str], refuse: str) -> None:
+        self._con = con
+        self._statements = statements
+        self._refuse = refuse
+
+    def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        self._statements.append(sql)
+        if sql.startswith(self._refuse):
+            problem = "Lance error: Retryable commit conflict for version 7"
+            raise duckdb.TransactionException(problem)
+        return self._con.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._con, name)
+
+
+class TestOptimize:
+    def test_vacuum_still_runs_when_optimize_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A conflict that costs OPTIMIZE its commit mustn't also cost the cleanup."""
+        monkeypatch.setattr(lance_store, "VERSION_RETENTION_SECONDS", 0)
+        uri = tmp_path / "lance"
+        store = LanceVectorStore(uri, dim=DIM)
+        for name in ("a", "b", "c", "d"):
+            store.add_chunk(_chunk([name]))
+        store.close()
+        versions = uri / lance_store.DATASET_DIR / "_versions"
+        before = len(list(versions.glob("*.manifest")))
+        statements: list[str] = []
+        with lance_store.connect_db(uri) as conn:
+            conn._con = _RefusingCon(conn._con, statements, "OPTIMIZE")  # pyright: ignore[reportAttributeAccessIssue]
+            lance_store.optimize_if_needed(conn)
+        assert [sql.split()[0] for sql in statements] == ["OPTIMIZE", "VACUUM"]
+        assert len(list(versions.glob("*.manifest"))) < before
+        assert lance_store.count_rows(uri) == 4
+
+
 class TestUnreadableStore:
     """A dataset on disk that the extension can't open is an error, never an empty store."""
 
