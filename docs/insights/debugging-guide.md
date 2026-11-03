@@ -183,8 +183,10 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
    `packages/atif-cli/src/atif_cli/cron.py:228-253`
 7. **Look for a terminal marker file** beside the refresh log. Its presence is
    why an embed stopped being attempted; it holds the store path, the mtime it
-   was keyed on, and the reason. Any operator touch that changes the store
-   directory's mtime clears it on the next tick.
+   was keyed on, and the reason. The mtime is the newest one of anything under
+   the store directory, so any change inside the store clears it on the next
+   tick, an in-place repair of a manifest under `embeddings.lance/_versions`
+   included.
    `scripts/atif-sql-refresh.sh:471-481`
 8. **Query `state.db` directly** at `<corpus_root>/analytics/state.db`. There
    is no CLI or SQL surface over it. `retry_queue` rows with `attempts >= 5`

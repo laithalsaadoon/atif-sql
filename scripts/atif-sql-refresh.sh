@@ -454,9 +454,15 @@ embed_store_dir() {
 }
 
 store_mtime() {
-  # Epoch mtime of the store dir, or "absent" — which is a VALID state that
-  # differs from any recorded number, so deleting the store clears the marker.
-  stat -c %Y "$1" 2>/dev/null || echo absent
+  # Newest mtime of anything under the store (the dir itself included), or
+  # "absent", which is a VALID state that differs from any recorded number, so
+  # deleting the store clears the marker. It has to look inside: an operator who
+  # repairs a store in place (a manifest copied back from a backup into
+  # embeddings.lance/_versions) changes only nested files, and the store dir's
+  # own mtime moves only when an entry directly under it is added or removed.
+  local newest
+  newest="$(find "$1" -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1)"
+  printf '%s\n' "${newest:-absent}"
 }
 
 run_embed_piggyback() {

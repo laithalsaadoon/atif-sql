@@ -306,7 +306,11 @@ done
 #               corpus and drops a marker;
 #       tick 2: embed is NOT re-attempted (suppressed) — no new TERMINAL line;
 #       tick 3 (after the store dir's mtime changes): the marker clears and
-#               embed is attempted again.
+#               embed is attempted again;
+#       tick 4: suppressed again;
+#       tick 5 (after only a NESTED file changes, as when an operator copies a
+#               manifest back into embeddings.lance/_versions): the marker
+#               clears, because the store dir's own mtime never moves for that.
 #     A suppression that was never seen firing — or never seen CLEARING — is
 #     hope, not a guard.
 # ---------------------------------------------------------------------------
@@ -366,7 +370,8 @@ fi
 
 # Tick 3: clearance — the store dir's mtime changes (the operator acted), so
 # the marker clears and embed is attempted again.
-mkdir -p "$term_dir/corpus/embeddings_lance"
+mkdir -p "$term_dir/corpus/embeddings_lance/embeddings.lance/_versions"
+echo damaged > "$term_dir/corpus/embeddings_lance/embeddings.lance/_versions/1.manifest"
 run_materialize_tick
 calls_after_3="$(grep -c '^embed' "$term_dir/calls.log" 2>/dev/null)" || calls_after_3=0
 if [ "$calls_after_3" -gt "$calls_after_2" ] \
@@ -374,6 +379,32 @@ if [ "$calls_after_3" -gt "$calls_after_2" ] \
   ok "clearance works: store mtime change lifts the suppression and embed retries"
 else
   fail "store mtime change did not lift the suppression (calls $calls_after_2 -> $calls_after_3)"
+fi
+
+# Tick 4: the shim's embed failed again on tick 3, so the marker is back and
+# this tick is suppressed.
+run_materialize_tick
+calls_after_4="$(grep -c '^embed' "$term_dir/calls.log" 2>/dev/null)" || calls_after_4=0
+if [ "$calls_after_4" = "$calls_after_3" ]; then
+  ok "suppression returns after a second terminal exit"
+else
+  fail "a second terminal exit was not suppressed (calls $calls_after_3 -> $calls_after_4)"
+fi
+
+# Tick 5: an in-place repair changes only a nested file. The store dir's own
+# mtime must stay put (or this case would not test the nested path), and the
+# marker must still clear.
+store_dir_before="$(stat -c %Y "$term_dir/corpus/embeddings_lance")"
+manifest="$term_dir/corpus/embeddings_lance/embeddings.lance/_versions/1.manifest"
+echo repaired > "$manifest"
+touch -d "@$(( $(date +%s) + 5 ))" "$manifest"
+store_dir_after="$(stat -c %Y "$term_dir/corpus/embeddings_lance")"
+run_materialize_tick
+calls_after_5="$(grep -c '^embed' "$term_dir/calls.log" 2>/dev/null)" || calls_after_5=0
+if [ "$store_dir_before" = "$store_dir_after" ] && [ "$calls_after_5" -gt "$calls_after_4" ]; then
+  ok "clearance works for an in-place repair: a nested file change lifts the suppression"
+else
+  fail "an in-place repair did not lift the suppression (store dir mtime $store_dir_before -> $store_dir_after, calls $calls_after_4 -> $calls_after_5)"
 fi
 
 # ---------------------------------------------------------------------------
