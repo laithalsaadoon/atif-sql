@@ -567,7 +567,7 @@ class TestOptimize:
         before = len(list(versions.glob("*.manifest")))
         statements: list[str] = []
         with lance_store.connect_db(uri) as conn:
-            conn._con = _RefusingCon(conn._con, statements, "OPTIMIZE")  # pyright: ignore[reportAttributeAccessIssue]
+            monkeypatch.setattr(conn, "_con", _RefusingCon(conn._con, statements, "OPTIMIZE"))
             lance_store.optimize_if_needed(conn)
         assert [sql.split()[0] for sql in statements] == ["OPTIMIZE", "VACUUM"]
         assert len(list(versions.glob("*.manifest"))) < before
