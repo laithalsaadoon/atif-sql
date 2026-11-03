@@ -67,7 +67,7 @@ The limits of this derivation, stated because no index backs it:
   imports sit *inside* command bodies:
   `packages/atif-cli/src/atif_cli/app.py:727`,
   `packages/atif-cli/src/atif_cli/app.py:949`, and
-  `packages/atif-cli/src/atif_cli/app.py:1540` are all indented. The import graph
+  `packages/atif-cli/src/atif_cli/app.py:1547` are all indented. The import graph
   uses `ast.walk`, which descends into function
   bodies, and the reference regex is unanchored, so a deferred import counts as
   an inbound edge.
@@ -202,10 +202,10 @@ intra-module use site is named after the table.
 | `pick_device` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:121` | 2026-10-09 |
 | `pick_dtype` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:133` | 2026-10-09 |
 | `watermark_position` | `packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:79` | 2026-09-28 |
-| `write_schema_version` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:322` | 2026-08-28 |
-| `migrate_pre_stamp_table` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:329` | 2026-11-03 |
-| `add_chunk` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:432` | 2026-11-03 |
-| `optimize_if_needed` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:450` | 2026-11-03 |
+| `write_schema_version` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:358` | 2026-08-28 |
+| `migrate_pre_stamp_table` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:365` | 2026-11-03 |
+| `add_chunk` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:468` | 2026-11-03 |
+| `optimize_if_needed` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:486` | 2026-11-03 |
 | `PROVIDER_DIMENSIONS` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:30` | 2026-10-09 |
 | `DEFAULT_DIMENSION` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:36` | 2026-10-09 |
 | `STORE_DIRNAME` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:40` | 2026-10-09 |
@@ -321,11 +321,11 @@ numbers follow it as plain numbers.
 - `watermark_position` is called at
   `packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:149`.
 - `write_schema_version` is called at
-  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:358` and
+  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:394` and
   again on lines 398 and 401; `migrate_pre_stamp_table` at
-  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:394`; the module
+  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:430`; the module
   functions `add_chunk` and `optimize_if_needed` are what the
-  `LanceVectorStore` methods of the same names call, at `:626` and `:630`.
+  `LanceVectorStore` methods of the same names call, at `:665` and `:669`.
 - `PROVIDER_DIMENSIONS` is read at
   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:99`,
   `DEFAULT_DIMENSION` at `:104` and again on line 113, and `STORE_DIRNAME` at
@@ -374,7 +374,7 @@ modules that declare no `__all__` at all, so they're module-internal helpers:
 
 The rest sit in modules that do declare an `__all__` and are deliberately
 absent from it, which is the module saying they aren't exported:
-`packages/atif-cli/src/atif_cli/app.py:2231` (`search_rows`),
+`packages/atif-cli/src/atif_cli/app.py:2330` (`search_rows`),
 `packages/atif-cli/src/atif_cli/corpus.py:71` (`SessionLayout`) and `:158`
 (`CorpusSlimReport`), and
 `packages/atif-duck/src/atif_duck/infrastructure/lake.py:117`
@@ -471,12 +471,12 @@ write, over every tracked file:
 
 Every real consumer bypasses the facade for the deep module:
 
-- `packages/atif-cli/src/atif_cli/app.py:1540` and
-  `packages/atif-cli/src/atif_cli/app.py:2114` import `register` from
+- `packages/atif-cli/src/atif_cli/app.py:1547` and
+  `packages/atif-cli/src/atif_cli/app.py:2192-2196` import `register` from
   `atif_duck.infrastructure.registry`.
-- `packages/atif-cli/src/atif_cli/app.py:2300`:
+- `packages/atif-cli/src/atif_cli/app.py:2399`:
   `from atif_duck.domain.examples import (...)`.
-- `packages/atif-cli/src/atif_cli/app.py:2382`:
+- `packages/atif-cli/src/atif_cli/app.py:2481`:
   `from atif_duck.domain.catalog import (...)`, which takes `MACRO_SIGNATURES`
   and `VIEW_SCHEMA` with their analytics counterparts.
 - `packages/atif-cli/src/atif_cli/duck_errors.py:27`,

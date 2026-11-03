@@ -67,7 +67,7 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 
 `register(con, corpus_root)` binds a DuckDB connection to a contract-shaped corpus tree and exposes the
 core views and macros (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`,
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2130`). Those names are not introspected
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2185`). Those names are not introspected
 at runtime: a static catalog answers `atif-sql schema` in under 50 ms with no DuckDB bind, and two
 drift tests assert it column-for-column against `DESCRIBE` and signature-for-signature against the
 DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The analytics views and
@@ -78,8 +78,8 @@ macros register separately, each only when its backing parquet is populated, bec
 it carries no layers contract (`pyproject.toml:553`).
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py`: the raw readers
-  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:631`), most of the core views
-  (`:1018`) and macros (`:1891`), and the Lance attach path (`:1636`).
+  (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:637`), most of the core views
+  (`:1024`) and macros (`:1946`), and the Lance attach path (`:1642`).
 - `packages/atif-duck/src/atif_duck/domain/raw_readers.py`: the raw relation names and
   column shapes the registry binds and the lake stores, so neither declares them twice.
 - `packages/atif-duck/src/atif_duck/domain/lake.py`: the lake's tables, partition specs and
@@ -133,8 +133,8 @@ The composition root: it declares five of its six siblings as `==`-pinned depend
 (`packages/atif-cli/pyproject.toml:32-36`) and wires every cross-package seam: the `ConverterPort`
 adapter, the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:7-9`).
 The commands hang off one cyclopts `App`: `@app.command` functions from `convert`
-(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2365`), plus the `cron`, `lake`, and
-`corpus` sub-apps registered at `:104-109`, with `main` (`:2439`) exposed as the single console
+(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2464`), plus the `cron`, `lake`, and
+`corpus` sub-apps registered at `:104-109`, with `main` (`:2538`) exposed as the single console
 script named `atif-sql` (`pyproject.toml:74`). Heavy imports (duckdb, the ATIF models through
 atif-converter, pydantic through atif-corpus) are deferred into the command bodies that use them so
 `schema`, `--help`, and `--version` stay on a lean import graph that a fresh-interpreter test pins
@@ -186,8 +186,8 @@ provider switch fails loud instead of corrupting kNN
 a row was built from, so a re-conversion under a stable uuid reads as stale
 (`packages/atif-embed/src/atif_embed/domain/text_stamp.py:3`). Additive schema columns migrate online
 through `ALTER TABLE ... ADD COLUMN ... DEFAULT` when a column is missing
-(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:329`), and the store records its
-`SCHEMA_VERSION` in a sidecar file (`:85`). Discovery reads the lake's
+(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:365`), and the store records its
+`SCHEMA_VERSION` in a sidecar file (`:89`). Discovery reads the lake's
 `steps` through `LakeStepsPort` when a lake holds the corpus, only the rows changed since a watermark
 kept in the store directory
 (`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py`), and falls back to the
@@ -195,9 +195,9 @@ per-session reader otherwise.
 
 - `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py`: a bounded DuckDB
   connection with the lance extension loaded and the store directory attached
-  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:228`), then open or
+  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:240`), then open or
   create, online-migrate, delete by uuid, append, and compact plus vacuum, all as SQL
-  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:558`).
+  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:597`).
 - `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py`: the `invoke_model`
   adapter under a tenacity retry with botocore retries off, and the document-`int8` / query-`float`
   asymmetry (`packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:285`).

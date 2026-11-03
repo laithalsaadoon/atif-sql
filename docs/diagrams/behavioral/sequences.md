@@ -77,24 +77,24 @@ sequenceDiagram
 
 Sources, in dispatch order:
 
-- CLI query: `packages/atif-cli/src/atif_cli/app.py:1382`; `duckdb.connect()` at `:1557`, the lake
-  attached at `:1563` when it holds the corpus, `register` called at `:1567`,
-  `_harden_query_connection` at `:537` called from `:1576`, caller SQL executed at `:1598`, emit at
-  `:1604`.
-- atif_duck register: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2130`, whose
-  documented order is fixed at `:2151-2159`: `register_raw` `:631` (`register_lake_raw` instead when
-  the lake is attached), `register_views` `:1018`, `register_vss` `:1636`, `register_macros` `:1891`,
+- CLI query: `packages/atif-cli/src/atif_cli/app.py:1389`; `duckdb.connect()` at `:1564`, the lake
+  attached at `:1570` when it holds the corpus, `register` called at `:1574`,
+  `_harden_query_connection` at `:537` called from `:1583`, caller SQL executed at `:1605`, emit at
+  `:1611`.
+- atif_duck register: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2185`, whose
+  documented order is fixed at `:2205-2213`: `register_raw` `:637` (`register_lake_raw` instead when
+  the lake is attached), `register_views` `:1024`, `register_vss` `:1642`, `register_macros` `:1946`,
   then the authorship surface and the analytics pair.
 - DuckDB in-process: the connection opened by the CLI; the sandbox settings and
   `lock_configuration` are issued against it at `packages/atif-cli/src/atif_cli/app.py:597-606`.
 - corpus artifacts: on the per-session path, session globs read through `read_json` at
-  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:749-764`; the analytics parquets bind
+  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:754-769`; the analytics parquets bind
   through `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`, with the analytics
   macros at `:236`.
 - Lance store: written by atif-embed and read here, both through DuckDB's lance extension;
-  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1698-1715` loads it and ATTACHes the
-  store (installing it is `install_lance_extension` at `:1620`, behind `atif-sql embed`); the
-  stamped `(model, dim)` identity is read at `:1747` and checked by
+  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1703-1722` loads it and ATTACHes the
+  store (installing it is `install_lance_extension` at `:1626`, behind `atif-sql embed`); the
+  stamped `(model, dim)` identity is read at `:1767` and checked by
   `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:51`.
 - stdout emitter: `packages/atif-cli/src/atif_cli/output.py:158`; a registration failure routes
   through `packages/atif-cli/src/atif_cli/duck_errors.py:67` instead.
@@ -125,8 +125,8 @@ sequenceDiagram
 
 Sources, in dispatch order:
 
-- CLI analyze: `packages/atif-cli/src/atif_cli/app.py:1718`; settings resolved at `:1784-1791`,
-  `run_analyze` called at `:1802`.
+- CLI analyze: `packages/atif-cli/src/atif_cli/app.py:1725`; settings resolved at `:1791-1798`,
+  `run_analyze` called at `:1809`.
 - run_analyze: `packages/atif-analytics/src/atif_analytics/application/analyze.py:37`; the
   `stages` list at `:103-108`, each stage invoked at `:129`.
 - CorpusReader: `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:314`,

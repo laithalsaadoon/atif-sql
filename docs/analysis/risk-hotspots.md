@@ -64,7 +64,7 @@ which is why coverage, complexity, and concurrency carry the ranking instead.
 as `CREATE TEMP TABLE` over `read_json` under an explicit strict-projection `columns` filter
 (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:3-20`). Every registration function
 follows a register-or-fail-loud contract: log through `logger.exception` and re-raise on any DDL
-failure (`:62-63`, `:989-992`, `:1561-1564`, `:2107-2110`).
+failure (`:62-63`, `:994-997`, `:1566-1569`, `:2161-2164`).
 
 **Recent activity.** 12 commits in the 30-day window against a median of 1, so `↑ rising` under the
 mechanical rule, which here measures how often the file was edited, not whether it is
@@ -75,21 +75,21 @@ commits).
 
 **Findings.** More of the workspace's `B608` sites live here than in any other file (28 of 69), each
 carrying a per-line `# nosec B608` that names its interpolation: a module-constant reader or table
-with catalog columns (`:342`, `:395`), a glob or file list the statement binds as a parameter
-(`:762`, `:864`), the corpus name through `sql_literal` (`:1009`), local regex literals (`:1379`),
-an `int()`-coerced width (`:1772`), an int-derived alias (`:1827`), and the pricing rates
-(`:1990`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
-through `sql_literal` and coerces both rates with `float()` (`:1861-1888`, specifically `:1885`),
+with catalog columns (`:347`, `:400`), a glob or file list the statement binds as a parameter
+(`:767`, `:869`), the corpus name through `sql_literal` (`:1014`), local regex literals (`:1384`),
+an `int()`-coerced width (`:1792`), an int-derived alias (`:1881`), and the pricing rates
+(`:2044`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
+through `sql_literal` and coerces both rates with `float()` (`:1915-1942`, specifically `:1939`),
 because the `pricing` parameter is reachable by an in-process embedding caller even though the CLI
-never passes one, and a `str` rate there would get past the type checkers (`:1878-1883`). Its
-uncovered units sit in `register_views` (`:1018-1564`), `register_macros` (`:1891-2110`),
-`register_vss` (`:1637-1778`), `_gate_session_dirs` (`:516-567`), and `_pricing_values_clause`
+never passes one, and a `str` rate there would get past the type checkers (`:1932-1937`). Its
+uncovered units sit in `register_views` (`:1023-1569`), `register_macros` (`:1945-2164`),
+`register_vss` (`:1642-1798`), `_gate_session_dirs` (`:521-572`), and `_pricing_values_clause`
 itself, although tests drive each of those paths: 14 test files call `register`, which runs
 `register_views` and `register_macros`, seven call `register_vss`, and
 `packages/atif-duck/tests/test_duck_views.py:663` passes a hostile model name through the pricing
 clause. The `register_vss` gap is the one that matters most: the ATTACH-failure arm that degrades
 a Lance directory to an empty-store fallback and logs rather than raising
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1716-1720`) is untested silent
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1723-1727`) is untested silent
 degradation: no test calls `register_vss` on a directory that fails to ATTACH.
 
 ### `atif_analytics.infrastructure.parquet_cache`
@@ -132,17 +132,17 @@ changes.
 
 **Findings.** No `B608` site: the `search` kNN statement in `search_rows` binds the vector, the
 session id, and `k` as parameters and formats only the width `len(query_vector)` and constant
-fragments into `_SEARCH_SQL` (`:2231`, `:2248-2255`). It sets no complexity ratchet: `search` takes
+fragments into `_SEARCH_SQL` (`:2330`, `:2347-2354`). It sets no complexity ratchet: `search` takes
 seven parameters and the widest command, `analyze`, takes 13, while `max-args = 19` sits at
 `atif_corpus.application.materialize.materialize`
 (`packages/atif-corpus/src/atif_corpus/application/materialize.py:1497`). Its uncovered units
 concentrate in the commands that reach outward: `analyze`
-(`packages/atif-cli/src/atif_cli/app.py:1718-1819`), `convert` (`:690-772`), and `status`
-(`:1162-1311`), with a few in `search` (`:2046-2204`) and `main` (`:2439-2472`). `analyze` always
+(`packages/atif-cli/src/atif_cli/app.py:1725-1826`), `convert` (`:690-772`), and `status`
+(`:1211-1380`), with a few in `search` (`:2123-2303`) and `main` (`:2538-2571`). `analyze` always
 calls Bedrock, and `embed` and `search` do with the default Cohere provider, so the least-covered
 command body in the tree is also the one that spends money; the uncovered region inside `analyze`
 is the settings-override chain that applies the budget ceilings a crontab line depends on
-(`:1784-1798`).
+(`:1791-1805`).
 
 ### `atif_converter.domain.enrichment`
 

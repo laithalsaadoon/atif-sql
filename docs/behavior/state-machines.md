@@ -91,8 +91,8 @@ Defined at: `packages/atif-corpus/src/atif_corpus/application/materialize.py:149
 The vector store's state is a schema generation recorded in a `schema_version.json` sidecar next to
 the Lance table, written on create and checked on open. A sidecar rather than a table column, because
 the version describes the schema and reading it must not require the schema to be readable
-(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:81-85`). `SCHEMA_VERSION` is `2`
-(`:79`).
+(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:85-89`). `SCHEMA_VERSION` is `2`
+(`:83`).
 
 ```mermaid
 stateDiagram-v2
@@ -105,20 +105,20 @@ stateDiagram-v2
 - `v1` and `unrecorded` have no incoming edge on purpose. This code never writes either state; it
   discriminates a store it finds on disk. `v1` is the five-column shape lacking `text_hash` and
   `truncated`; `unrecorded` is a store whose columns are already current but whose sidecar is absent,
-  which `read_schema_version` reports as `None` (`:306-319`).
+  which `read_schema_version` reports as `None` (`:342-355`).
 - `v1 --> v2` is online and leaves the vectors alone. `migrate_pre_stamp_table` adds the two
   columns with `ALTER TABLE ... ADD COLUMN ... DEFAULT` and a literal default, then marks each NOT
-  NULL: no rows dropped, no vectors re-embedded, and readers keep working throughout (`:329-365`). `text_hash` backfills to `_PRE_STAMP_SENTINEL`, the
-  literal `<pre-stamp>` (`:118`), whose angle brackets make it impossible to equal a real blake2b
+  NULL: no rows dropped, no vectors re-embedded, and readers keep working throughout (`:365-401`). `text_hash` backfills to `_PRE_STAMP_SENTINEL`, the
+  literal `<pre-stamp>` (`:130`), whose angle brackets make it impossible to equal a real blake2b
   digest; every migrated row therefore mismatches its corpus hash in the discovery anti-join and
-  re-embeds incrementally through the ordinary staleness path (`:114-117`).
+  re-embeds incrementally through the ordinary staleness path (`:126-129`).
 - `v2 --> v2: has_table` is idempotent reopening. `migrate_pre_stamp_table` returns early when
-  nothing is missing (`:356-357`) and the sidecar stamp is left alone.
+  nothing is missing (`:392-393`) and the sidecar stamp is left alone.
 - The machine has no terminal state in source. `v2` is absorbing; the store is never dropped here.
   A breaking change (a provider or dimension switch) is refused rather than migrated, and stays
   fail-loud through `embedding_guard` (`:33-35`).
 
-Defined at: `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:385`
+Defined at: `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:421`
 
 ## Retry-queue row
 

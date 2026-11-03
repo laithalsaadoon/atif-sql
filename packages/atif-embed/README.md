@@ -162,14 +162,17 @@ directory as a Lance namespace:
   DELETE` against an Arrow table of uuids (the extension refuses a `DELETE`
   whose `IN` list DuckDB plans as a join, which happens past four values);
 - compaction is `OPTIMIZE`, then `VACUUM LANCE` with a one-hour
-  `older_than_seconds`, so old versions don't pile up;
+  `older_than_seconds`, so old versions don't pile up; VACUUM ages a version
+  by when it was created, and runs even when OPTIMIZE fails;
 - a new store is created at Lance data storage version 2.2, the version
   lancedb 0.39 and 0.40 create, so atif-sql 0.5.0 can still open it.
 
 A real run installs the extension when it's absent. A dry run never
 downloads it: over an existing store without the extension it stops with
 `LanceExtensionMissing` (exit 78) and names `atif-sql embed
---install-extension`. Embed builds no vector index: `atif-sql search` ranks
+--install-extension`. A store whose Lance dataset the extension can't
+open, such as one with a cut-short newest manifest, stops every run with
+`EmbeddingStoreUnreadable` (exit 78) before any text reaches the embedder. Embed builds no vector index: `atif-sql search` ranks
 by an exact cosine scan.
 
 `text_hash` is what makes re-conversion safe. A step's uuid survives a
