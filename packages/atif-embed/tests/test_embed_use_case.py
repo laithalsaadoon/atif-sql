@@ -14,10 +14,11 @@ from embed_fixtures import (
     LONG_USER_TEXT,
     FakeEmbedder,
     rewrite_step_text,
+    truncate_newest_manifest,
 )
 
 from atif_embed.application.embed import discover_unembedded, run_backfill
-from atif_embed.domain.errors import EmbeddingProviderMismatch
+from atif_embed.domain.errors import EmbeddingProviderMismatch, EmbeddingStoreUnreadable
 from atif_embed.domain.text_stamp import MAX_EMBEDDABLE_CHARS, PendingText, text_hash
 from atif_embed.infrastructure import lance_store
 from atif_embed.infrastructure.corpus_text_rows import DuckDbTextRows
@@ -173,6 +174,56 @@ class TestRunBackfill:
                     settings=settings,
                     embedder=FakeEmbedder(model_id="other-model:2", dim=DIM),
                     store=store,
+                )
+            )
+
+
+class TestUnreadableStore:
+    """A store the extension can't open stops the run before the embedder sees one text."""
+
+    def _damage(self, corpus_root: Path, settings: EmbedSettings, store: LanceVectorStore) -> Path:
+        asyncio.run(
+            run_backfill(
+                corpus_root=corpus_root,
+                settings=settings,
+                embedder=FakeEmbedder(dim=DIM),
+                store=store,
+                limit=2,
+            )
+        )
+        store.close()
+        uri = settings.resolve_lance_uri(corpus_root)
+        truncate_newest_manifest(uri)
+        return uri
+
+    def test_a_real_run_raises_terminal_before_any_embedding(
+        self, corpus_root: Path, store: LanceVectorStore, settings: EmbedSettings
+    ) -> None:
+        uri = self._damage(corpus_root, settings, store)
+        embedder = FakeEmbedder(dim=DIM)
+        with pytest.raises(EmbeddingStoreUnreadable) as info:
+            asyncio.run(
+                run_backfill(
+                    corpus_root=corpus_root,
+                    settings=settings,
+                    embedder=embedder,
+                    store=LanceVectorStore(uri, dim=DIM),
+                )
+            )
+        assert info.value.terminal is True
+        assert embedder.document_calls == []
+
+    def test_a_dry_run_raises_too(
+        self, corpus_root: Path, store: LanceVectorStore, settings: EmbedSettings
+    ) -> None:
+        uri = self._damage(corpus_root, settings, store)
+        with pytest.raises(EmbeddingStoreUnreadable):
+            asyncio.run(
+                run_backfill(
+                    corpus_root=corpus_root,
+                    settings=settings,
+                    store=LanceVectorStore(uri, dim=DIM),
+                    dry_run=True,
                 )
             )
 

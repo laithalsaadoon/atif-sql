@@ -19,6 +19,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from cli_fixtures import truncate_newest_manifest
 from duckdb import connect as _unpatched_duckdb_connect
 
 from atif_cli.app import _SEARCH_SQL, status
@@ -143,6 +144,19 @@ class TestStatusVectorProbe:
             status(corpus_root=corpus, vector_probe=True, fmt=OutputFormat.JSON)
         assert excinfo.value.code == EXIT_CODES["no_embeddings"]
         capsys.readouterr()
+
+    def test_a_store_the_extension_cant_open_exits_78_not_2(
+        self, corpus: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A damaged store is no "no embeddings": the probe says what's wrong."""
+        store = _write_store(corpus / "embeddings_lance", _vectors())
+        truncate_newest_manifest(store)
+        with pytest.raises(SystemExit) as excinfo:
+            status(corpus_root=corpus, vector_probe=True, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["terminal_state"] == 78
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "terminal_state"
+        assert "can't open" in err["message"]
 
     def test_a_missing_extension_exits_78_and_downloads_nothing(
         self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

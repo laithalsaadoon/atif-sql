@@ -35,6 +35,21 @@ _STALE_OFFSET_NS = 3_600 * 1_000_000_000
 # An autouse fixture reaches its tests through pytest's registration, never
 # through a reference a checker can see, so `reportUnusedFunction` is suppressed
 # here rather than answered by a rename — the name IS the fixture's identity.
+def truncate_newest_manifest(store: Path) -> Path:
+    """Cut the newest ``_versions/*.manifest`` of the store's dataset to 40 bytes; return it.
+
+    Stands in for a manifest a crash left half written. Lance's V2 manifest
+    names count down from 2**64 - 1, so the newest version has the smallest
+    name; the assert pins that naming.
+    """
+    manifests = list((store / "embeddings.lance" / "_versions").glob("*.manifest"))
+    assert manifests
+    assert all(int(path.stem) > 2**63 for path in manifests)
+    newest = min(manifests, key=lambda path: int(path.stem))
+    newest.write_bytes(newest.read_bytes()[:40])
+    return newest
+
+
 @pytest.fixture(autouse=True)
 def _quiet_loguru() -> None:  # pyright: ignore[reportUnusedFunction]
     """Drop loguru's default DEBUG stderr sink for every atif-cli test.

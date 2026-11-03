@@ -21,10 +21,12 @@ from typing import Any
 import duckdb
 import polars as pl
 import pytest
+from embed_fixtures import truncate_newest_manifest
 
 from atif_embed.domain.embedding_guard import RECOVERY_HINT, ensure_store_matches
 from atif_embed.domain.errors import (
     EmbeddingProviderMismatch,
+    EmbeddingStoreUnreadable,
     LanceExtensionInstallFailed,
     LanceExtensionMissing,
 )
@@ -529,6 +531,53 @@ class TestSchemaVersionSidecar:
         with lance_store.connect_db(uri) as conn:
             lance_store.open_or_create_table(conn, dim=DIM)
         assert lance_store.read_schema_version(uri) == lance_store.SCHEMA_VERSION
+
+
+class TestUnreadableStore:
+    """A dataset on disk that the extension can't open is an error, never an empty store."""
+
+    def _damaged(self, tmp_path: Path) -> Path:
+        uri = tmp_path / "lance"
+        store = LanceVectorStore(uri, dim=DIM)
+        for name in ("a", "b", "c"):
+            store.add_chunk(_chunk([name]))
+        store.close()
+        truncate_newest_manifest(uri)
+        return uri
+
+    def test_has_table_raises_instead_of_reading_as_empty(self, tmp_path: Path) -> None:
+        uri = self._damaged(tmp_path)
+        with lance_store.connect_db(uri) as conn, pytest.raises(EmbeddingStoreUnreadable) as info:
+            lance_store.has_table(conn)
+        assert info.value.terminal is True
+        assert str(uri / lance_store.DATASET_DIR) in str(info.value)
+
+    def test_every_reader_raises(self, tmp_path: Path) -> None:
+        uri = self._damaged(tmp_path)
+        for read in (
+            lance_store.count_rows,
+            lance_store.table_identity,
+            lance_store.get_embedded_hashes,
+        ):
+            with pytest.raises(EmbeddingStoreUnreadable):
+                read(uri)
+
+    def test_the_writer_raises_before_any_write(self, tmp_path: Path) -> None:
+        uri = self._damaged(tmp_path)
+        store = LanceVectorStore(uri, dim=DIM)
+        with pytest.raises(EmbeddingStoreUnreadable):
+            store.add_chunk(_chunk(["d"]))
+        store.close()
+
+    def test_a_store_holding_only_its_sidecars_still_reads_as_empty(self, tmp_path: Path) -> None:
+        """No dataset directory, so nothing is damaged: the first write creates the table."""
+        uri = tmp_path / "lance"
+        uri.mkdir()
+        (uri / lance_store.SCHEMA_VERSION_FILE).write_text('{"schema_version": 2}')
+        (uri / "lake_watermark.json").write_text("{}")
+        assert lance_store.count_rows(uri) == 0
+        assert lance_store.table_identity(uri) is None
+        assert lance_store.get_embedded_hashes(uri) == {}
 
 
 class _RecordingConnection:

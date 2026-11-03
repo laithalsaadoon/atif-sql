@@ -161,6 +161,22 @@ def rewrite_step_text(corpus_root: Path, uuid: str, new_text: str) -> None:
     raise AssertionError(msg)
 
 
+def truncate_newest_manifest(store: Path) -> Path:
+    """Cut the newest ``_versions/*.manifest`` of the store's dataset to 40 bytes; return it.
+
+    Stands in for a manifest a crash left half written. Lance's V2 manifest
+    names count down from 2**64 - 1, so the newest version has the smallest
+    name; the assert pins that naming, so a change to it fails here rather
+    than truncating an old version the store no longer reads.
+    """
+    manifests = list((store / "embeddings.lance" / "_versions").glob("*.manifest"))
+    assert manifests
+    assert all(int(path.stem) > 2**63 for path in manifests)
+    newest = min(manifests, key=lambda path: int(path.stem))
+    newest.write_bytes(newest.read_bytes()[:40])
+    return newest
+
+
 @pytest.fixture
 def corpus_root(tmp_path: Path) -> Path:
     """Contract-shaped corpus with one torn session dir."""

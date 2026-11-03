@@ -1157,7 +1157,7 @@ def _emit_vector_probe(corpus_root: Path, fmt: OutputFormat) -> None:
 
     from atif_cli.duck_errors import classify_duckdb_error
     from atif_cli.vector_probe import PROBE_K, probe_store
-    from atif_embed.domain.errors import LanceExtensionMissing
+    from atif_embed.domain.errors import DomainError, LanceExtensionMissing
 
     store = _embed_settings(fmt).resolve_lance_uri(corpus_root)
     try:
@@ -1170,6 +1170,12 @@ def _emit_vector_probe(corpus_root: Path, fmt: OutputFormat) -> None:
             f"store at {store} cannot be read",
             hint="run: atif-sql embed --install-extension (a one-time download)",
         )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code) from exc
+    except DomainError as exc:
+        # A store the extension can't open is terminal, as it is for embed.
+        kind = "terminal_state" if exc.terminal else "runtime_error"
+        err = ClassifiedError(kind=kind, exit_code=EXIT_CODES[kind], message=str(exc))
         emit_error(err, fmt)
         raise SystemExit(err.exit_code) from exc
     except duckdb.Error as exc:
@@ -1257,10 +1263,11 @@ def status(
     ``{corpus, store, vector_rows, scan_s}``. It reads every stored vector,
     so it costs what a ``search`` costs, and a plain ``status`` never runs
     it. The nightly compact lane logs it per corpus to tell when ``search``
-    needs a vector index. Exit codes: 0, 2 no_embeddings (no store, or an
-    empty one), 78 extension_missing (the lance extension isn't installed;
-    the probe never downloads it), and a DuckDB error exits the way
-    ``query``'s do (70 when the store couldn't be read).
+    needs a vector index. Exit codes: 0, 2 no_embeddings (no store, or one
+    with no rows), 78 extension_missing (the lance extension isn't
+    installed; the probe never downloads it) or terminal_state (the store
+    holds a Lance dataset the extension can't open), and a DuckDB error
+    during the scan exits the way ``query``'s do (70 for a runtime error).
     """
     if vector_probe:
         settings = _corpus_settings(source_root, corpus_root, agent)
@@ -2057,6 +2064,7 @@ def _prune_orphans(corpus_root: Path | None, *, dry_run: bool, fmt: OutputFormat
     from atif_corpus.application.materialize import read_sink_pending
     from atif_corpus.domain.layout import CorpusLayout
     from atif_embed.application.prune import prune_orphans
+    from atif_embed.domain.errors import DomainError
     from atif_embed.infrastructure.lance_store import LanceVectorStore
 
     settings = _corpus_settings(None, corpus_root)
@@ -2075,14 +2083,21 @@ def _prune_orphans(corpus_root: Path | None, *, dry_run: bool, fmt: OutputFormat
             fmt,
         )
         raise SystemExit(EXIT_CODES["lake_unavailable"])
-    report = prune_orphans(
-        settings.corpus_root,
-        lake=lake_steps_port(),
-        store=LanceVectorStore(
-            lance_uri, dim=embed_settings.embedding_dim, install_extension=not dry_run
-        ),
-        dry_run=dry_run,
-    )
+    try:
+        report = prune_orphans(
+            settings.corpus_root,
+            lake=lake_steps_port(),
+            store=LanceVectorStore(
+                lance_uri, dim=embed_settings.embedding_dim, install_extension=not dry_run
+            ),
+            dry_run=dry_run,
+        )
+    except DomainError as exc:
+        # The store's own errors (a missing extension on a dry prune, a store
+        # the extension can't open) get the same envelope as embed's.
+        kind = "terminal_state" if exc.terminal else "runtime_error"
+        emit_error(ClassifiedError(kind=kind, exit_code=EXIT_CODES[kind], message=str(exc)), fmt)
+        raise SystemExit(EXIT_CODES[kind]) from exc
     if report is None:
         emit_error(
             ClassifiedError(
@@ -2162,7 +2177,8 @@ def search(
     extension_missing (a store exists but the lance DuckDB extension is not
     installed; run ``atif-sql embed --install-extension``), lake_unavailable
     (``--all-corpora`` without a usable lake) or terminal_state (the gemma
-    provider is selected and the ``local`` extra is not installed).
+    provider is selected and the ``local`` extra is not installed, or the store
+    holds a Lance dataset the extension can't open).
     """
     _refuse_root("search", fmt)
 
@@ -2173,7 +2189,11 @@ def search(
         classify_duckdb_error,
         classify_registration_error,
     )
-    from atif_duck.infrastructure.registry import lance_extension_installed, register
+    from atif_duck.infrastructure.registry import (
+        lance_extension_installed,
+        lance_store_unreadable,
+        register,
+    )
     from atif_embed.application.embed import embed_query
     from atif_embed.domain.errors import DomainError
 
@@ -2234,6 +2254,23 @@ def search(
 
         row = con.execute("SELECT count(*) FROM message_embeddings").fetchone()
         if not row or int(row[0]) == 0:
+            # No rows can also mean a store the extension can't open, which
+            # binds as an empty one; embedding into it can't fix that.
+            unreadable = [uri for uri in stores or [lance_uri] if lance_store_unreadable(con, uri)]
+            if unreadable:
+                emit_error(
+                    ClassifiedError(
+                        kind="terminal_state",
+                        exit_code=EXIT_CODES["terminal_state"],
+                        message=f"the embeddings store at {unreadable[0]} holds a Lance dataset "
+                        "the lance extension can't open; its newest manifest may be damaged "
+                        "or partly written",
+                        hint="restore the store from a backup, or move it aside and re-embed "
+                        "with `atif-sql embed --all --no-dry-run`",
+                    ),
+                    fmt,
+                )
+                raise SystemExit(EXIT_CODES["terminal_state"])
             emit_error(
                 ClassifiedError(
                     kind="no_embeddings",
