@@ -68,7 +68,7 @@ jobs:
       # The SARIF verification in `mise run security` caught it, which is the whole point of
       # failing on a missing report rather than on findings. Paying a cold install per run is
       # cheaper than a tier that can report success for a scan that never executed.
-      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
@@ -84,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       # One upload for the whole directory — each SARIF names its own tool, so code scanning
       # separates them without a step per scanner.
-      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         if: always()
         with:
           sarif_file: .sarif
