@@ -134,8 +134,9 @@
 #     lane still holds the materialize lock, so no embed tick appends to the
 #     store mid-scan.
 #   * When the median scan_s of the corpus's last 7 probe lines in this log
-#     passes 2.0 s, the lane also logs a TRIP line. 2.0 s is where PLAN.md
-#     Phase 5 moves `search` onto a vector index (Phase 6). It's the median of
+#     passes 2.0 s, the lane also logs a TRIP line. At 2.0 s the scan becomes
+#     the largest part of a `search`, so that's the point where routing search
+#     through a Lance vector index (lance_vector_search) pays off. It's the median of
 #     7 so one cold-cache or contended night can't trip it, and with fewer
 #     than 7 lines there's no median yet. The lines are matched by corpus
 #     name, so renumbering ATIF_SQL_EXTRA_CONFIG_DIRS mixes two stores' history.
@@ -386,7 +387,7 @@ run_vector_probes() {
     log "vector-probe $name: rows=$rows scan_s=$scan_s"
     median="$(vector_probe_median "$name")"
     if [ -n "$median" ] && awk -v m="$median" -v t="$VECTOR_PROBE_TRIP_S" 'BEGIN { exit !(m > t) }'; then
-      log "vector-probe $name: TRIP median_${VECTOR_PROBE_NIGHTS}=$median (exact scan over ${VECTOR_PROBE_TRIP_S} s; see PLAN.md Phase 6)"
+      log "vector-probe $name: TRIP median_${VECTOR_PROBE_NIGHTS}=$median (exact scan over ${VECTOR_PROBE_TRIP_S} s; route search through a vector index)"
     fi
   done
   return 0
