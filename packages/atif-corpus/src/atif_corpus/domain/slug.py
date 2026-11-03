@@ -9,7 +9,7 @@ part of every installed user's filesystem layout.
 Changing the algorithm therefore ORPHANS existing corpora rather than
 migrating them. ``materialize`` starts writing a fresh tree, ``status``
 reports an empty corpus, ``query`` binds zero sessions, and the watermarks
-and LanceDB embedding store at the no-longer-computed path are stranded,
+and Lance embedding store at the no-longer-computed path are stranded,
 re-earned only by a full re-materialize and re-embed. ``tests/test_slug.py``
 freezes concrete outputs so such a change fails a test, not a user's install.
 

@@ -22,7 +22,7 @@ atif-sql examples                      # tested example queries per view/macro
                                        #   (alias: atif-sql query --examples)
 atif-sql analyze                       # v2 analytics pipelines; dry-run by
                                        #   default, spends only with --no-dry-run
-atif-sql embed --all --no-dry-run      # embed corpus steps into LanceDB
+atif-sql embed --all --no-dry-run      # embed corpus steps into the Lance store
                                        #   (a real run needs --all or --limit N)
 atif-sql search '<text>'               # embed the text, then semantic kNN
 atif-sql cron install | status         # print the refresh crontab block, or

@@ -12,7 +12,7 @@ this guide is organized around them:
 2. **The classified error envelope on stderr**: one readable line on a TTY,
    one JSON object on a pipe (`packages/atif-cli/src/atif_cli/output.py:278-285`).
 3. **The loguru sink.** Exactly one, added in `main()`, stderr, WARNING and up unless
-   `ATIF_SQL_LOG_LEVEL` sets another level (`packages/atif-cli/src/atif_cli/app.py:2449-2452`).
+   `ATIF_SQL_LOG_LEVEL` sets another level (`packages/atif-cli/src/atif_cli/app.py:2457-2460`).
 4. **The cron refresh log and its marker files**, for anything that failed
    unattended (`scripts/atif-sql-refresh.sh:151-153`).
 
@@ -54,11 +54,11 @@ On a pipe the envelope is the last line on stderr, in this shape:
 | Symptom | Likely surface | First check | Citation |
 | --- | --- | --- | --- |
 | `query` exits 64, kind `parse_error` | `duckdb.ParserException`, or no SQL argument at all | Run `atif-sql schema --format json` for the real view and column names; a bare `atif-sql query` also exits 64 | `packages/atif-cli/src/atif_cli/duck_errors.py:38-44`, `packages/atif-cli/src/atif_cli/app.py:1448-1459` |
-| `query` exits 65, kind `catalog_error` | `duckdb.CatalogException`: the view, macro, or column does not exist | `atif-sql schema` answers from the static catalog with no DuckDB bind, so it works even on an unmaterialized corpus | `packages/atif-cli/src/atif_cli/duck_errors.py:45-51`, `packages/atif-cli/src/atif_cli/app.py:2357` |
+| `query` exits 65, kind `catalog_error` | `duckdb.CatalogException`: the view, macro, or column does not exist | `atif-sql schema` answers from the static catalog with no DuckDB bind, so it works even on an unmaterialized corpus | `packages/atif-cli/src/atif_cli/duck_errors.py:45-51`, `packages/atif-cli/src/atif_cli/app.py:2365` |
 | `query` exits 70 with `IO Error: No files found that match the pattern .../sessions/*/meta.json` | The corpus is not materialized; `register_raw`'s glob matches nothing | `atif-sql status`; a `watermark: never materialized` line means run `atif-sql materialize` | `packages/atif-cli/src/atif_cli/duck_errors.py:52-58`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:732` |
 | `query` or `search` exits 65, kind `embedding_mismatch` | The Lance store's stamped `(model, dim)` differs from the active embedder | The message names both sides; either point `ATIF_SQL_EMBED_MODEL_ID` at the model that wrote the store, or delete the store | `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:78-85`, `packages/atif-cli/src/atif_cli/duck_errors.py:75-82` |
-| `search` exits 2, kind `no_embeddings` | The store is empty or absent, so `register_vss` bound an empty fallback table | `atif-sql query 'SELECT count(*) FROM message_embeddings'`; a count of 0 confirms it | `packages/atif-cli/src/atif_cli/app.py:2167-2178`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1721-1739` |
-| A bare `atif-sql embed` exits 64 | The scope guard, which runs before any Bedrock client is built | Pass `--limit N`, `--all`, or `--dry-run`; this is the accidental-full-backfill guard, not a fault | `packages/atif-cli/src/atif_cli/app.py:1930-1940` |
+| `search` exits 2, kind `no_embeddings` | The store is empty or absent, so `register_vss` bound an empty fallback table | `atif-sql query 'SELECT count(*) FROM message_embeddings'`; a count of 0 confirms it | `packages/atif-cli/src/atif_cli/app.py:2173-2184`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1722-1740` |
+| A bare `atif-sql embed` exits 64 | The scope guard, which runs before any Bedrock client is built | Pass `--limit N`, `--all`, or `--dry-run`; this is the accidental-full-backfill guard, not a fault | `packages/atif-cli/src/atif_cli/app.py:1934-1944` |
 | `embed` exits 78 and the cron lane stops trying | A `DomainError` with `terminal = True`; the store or its config needs an operator | Read the terminal marker file the refresh lane drops: three lines, store path, mtime, reason | `packages/atif-embed/src/atif_embed/domain/errors.py:14-26`, `scripts/atif-sql-refresh.sh:398-403` |
 | A session directory exists under `sessions/` but no view returns its rows | Torn artifact set: the dir has no `meta.json`, so the meta gate excludes it from every reader | Grep the WARNING; `meta.json` is written last and completes the set | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:562-566`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:706-707` |
 | `atif-sql status` and `SELECT count(*) FROM sessions` disagree | `status` counts directories with no meta check; on the per-session path the view applies the meta gate and the session id boundary, and skips a dir with no readable trajectory | Run the count with `--no-lake`: the difference is the number of excluded dirs, and each one logs a WARNING | `packages/atif-cli/src/atif_cli/app.py:1239-1243`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:743` |
@@ -92,16 +92,16 @@ shell-side refresh log.
 
 | Surface | Where it emits | What to grep for | Citation |
 | --- | --- | --- | --- |
-| The one loguru sink | stderr, WARNING and above unless `ATIF_SQL_LOG_LEVEL` sets another level; `logger.remove()` deletes loguru's default handler first | `WARNING` / `ERROR`; INFO and DEBUG lines appear only under `ATIF_SQL_LOG_LEVEL=INFO` or `DEBUG` | `packages/atif-cli/src/atif_cli/app.py:2449-2457` |
+| The one loguru sink | stderr, WARNING and above unless `ATIF_SQL_LOG_LEVEL` sets another level; `logger.remove()` deletes loguru's default handler first | `WARNING` / `ERROR`; INFO and DEBUG lines appear only under `ATIF_SQL_LOG_LEVEL=INFO` or `DEBUG` | `packages/atif-cli/src/atif_cli/app.py:2457-2465` |
 | Classified error envelope, pipe form | stderr, one JSON object | `"error"`, `"kind"`, `"hint"` | `packages/atif-cli/src/atif_cli/errors.py:78-86` |
 | Classified error, TTY form | stderr, one line plus an optional hint line | `[<kind>]` at line start, then `hint:` | `packages/atif-cli/src/atif_cli/output.py:279-282` |
 | Process exit code | the shell | the reachable `EXIT_CODES` values | `packages/atif-cli/src/atif_cli/errors.py:30-66` |
 | Per-session materialize failures | stderr, table format only | `FAILED <session_id>:`, `UNREADABLE <session_id>`, `REJECTED '<name>'`, and `LAKE PENDING` | `packages/atif-cli/src/atif_cli/app.py:843-854` |
 | Materialize report | stdout, JSON on a pipe | `unreadable`, `failures`, `removed_session_ids` | `packages/atif-cli/src/atif_cli/app.py:798-824` |
 | Corpus freshness | `atif-sql status` stdout | `watermark_age_seconds`, `staleness`, `source_root` | `packages/atif-cli/src/atif_cli/app.py:1286-1311` |
-| DDL failure narration | stderr via `logger.exception`, with loguru's decorated traceback, then re-raised | `Failed to register raw readers over`, `Failed to register derived views`, `Failed to register macros` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:991`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1563`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2108` |
+| DDL failure narration | stderr via `logger.exception`, with loguru's decorated traceback, then re-raised | `Failed to register raw readers over`, `Failed to register derived views`, `Failed to register macros` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:991`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1563`, `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2109` |
 | Torn-session exclusion | stderr WARNING, one line per excluded dir | `Skipping incomplete session dir` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:562-566` |
-| Empty-store fallback | stderr WARNING at VSS bind | `No Lance embeddings table at` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1722-1727` |
+| Empty-store fallback | stderr WARNING at VSS bind | `No Lance embeddings table at` | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1723-1728` |
 | Unreadable-source warnings | stderr WARNING during the scan | `NOT treated as deleted`, `NOT treating it as deleted` | `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:169`, `packages/atif-corpus/src/atif_corpus/infrastructure/scanner.py:269` |
 | Source-removal marking suppression | stderr WARNING | `not marking any session source-removed`, `keeping session` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:1675`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:1204` |
 | Watermark degradation | stderr WARNING | `treating corpus as unmaterialized` | `packages/atif-corpus/src/atif_corpus/application/materialize.py:435`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:438`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:449` |
@@ -124,11 +124,11 @@ These properties of this surface change how you read it.
 from `ATIF_SQL_LOG_LEVEL` (default `WARNING`; an unknown level falls back to it
 with a warning). There is no `--verbose` and no `--log-level`, and `LOGURU_LEVEL`
 has no effect: `logger.remove()` deletes the default handler that would honor
-it (`packages/atif-cli/src/atif_cli/app.py:2449-2457`). The INFO lines that
+it (`packages/atif-cli/src/atif_cli/app.py:2457-2465`). The INFO lines that
 narrate a materialize pass
 (`packages/atif-corpus/src/atif_corpus/application/materialize.py:1811-1825`) or
 an embed backfill
-(`packages/atif-embed/src/atif_embed/application/embed.py:270-276`) appear only
+(`packages/atif-embed/src/atif_embed/application/embed.py:276-282`) appear only
 under `ATIF_SQL_LOG_LEVEL=INFO`, and each materialize pool worker reads the same
 variable (`packages/atif-cli/src/atif_cli/app.py:859`).
 
@@ -163,9 +163,9 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
    corpus and separate "my SQL is wrong" from "the corpus is not there". Every
    example is executed by the test suite against a fixture corpus, so a
    verbatim copy is known to parse.
-   `packages/atif-cli/src/atif_cli/app.py:2363-2367`,
-   `packages/atif-cli/src/atif_cli/app.py:2276-2277`,
-   `packages/atif-cli/src/atif_cli/app.py:2273-2275`
+   `packages/atif-cli/src/atif_cli/app.py:2371-2375`,
+   `packages/atif-cli/src/atif_cli/app.py:2284-2285`,
+   `packages/atif-cli/src/atif_cli/app.py:2281-2283`
 5. **Cross-check `status`'s session count against the view.** `atif-sql query
    --no-lake 'SELECT count(*) FROM sessions'` applies the meta gate; `status`
    counts directories. A gap is the number of dirs the gates excluded (a torn
@@ -193,14 +193,14 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
    `ATIF_SQL_LOG_LEVEL=DEBUG` shows the DEBUG narration of the staging sweep,
    the mid-scan races, the atomic-write tmp cleanups, and every view and macro
    registration.
-   `packages/atif-cli/src/atif_cli/app.py:2418`
+   `packages/atif-cli/src/atif_cli/app.py:2426`
 10. **Only now re-run a billable command**, and bound it: `analyze` defaults to
     a dry run and needs `--no-dry-run` to spend, and `embed` refuses to run
     without `--limit N` or `--all`. `atif-sql search` embeds the query once per
     run, on Bedrock under the default Cohere provider.
     `packages/atif-cli/src/atif_cli/app.py:1662`,
-    `packages/atif-cli/src/atif_cli/app.py:1930`,
-    `packages/atif-cli/src/atif_cli/app.py:2181`
+    `packages/atif-cli/src/atif_cli/app.py:1934`,
+    `packages/atif-cli/src/atif_cli/app.py:2187`
 
 ## Known incident patterns
 
@@ -216,11 +216,11 @@ Cheapest first. Steps 1 through 6 are free and read-only; step 10 spends money.
   error for a store that merely predates the `text_hash` stamp rebuilt both
   production corpora at the cost of a full Cohere re-embed. Signal: a full
   re-embed triggered by a schema read rather than by a provider change.
-  Mitigation: additive drift now migrates online via `Table.add_columns` and a
-  sentinel that re-embeds incrementally through the ordinary staleness path,
-  so search stays online throughout.
-  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:344-351`,
-  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:166-192`
+  Mitigation: additive drift now migrates online via `ALTER TABLE ... ADD
+  COLUMN ... DEFAULT` and a sentinel that re-embeds incrementally through the
+  ordinary staleness path, so search stays online throughout.
+  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:495-503`,
+  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:329-365`
 - **Corpus-slug collapse:** setting only `ATIF_SQL_SOURCE_ROOT` points one
   corpus's source at another root's transcripts while the corpus root still
   slugs from `CLAUDE_CONFIG_DIR`, so two corpora collapse onto one slug

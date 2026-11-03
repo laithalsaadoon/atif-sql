@@ -1,17 +1,17 @@
 # atif-sql · Data flow
 
 The distribution declares exactly one entry point, the console script
-`atif-sql = "atif_cli.app:main"` (`pyproject.toml:75`), and the `main` it names
-installs a WARNING-and-up loguru sink and hands control to cyclopts (`packages/atif-cli/src/atif_cli/app.py:2431`).
+`atif-sql = "atif_cli.app:main"` (`pyproject.toml:74`), and the `main` it names
+installs a WARNING-and-up loguru sink and hands control to cyclopts (`packages/atif-cli/src/atif_cli/app.py:2439`).
 Every process below therefore begins as a CLI invocation; there is no HTTP, RPC, or queue surface
 to enter through.
 
 The flows below either produce the corpus or consume it: `materialize` fills
 `<corpus_root>/sessions/` (`:878`), `analyze` fills `<corpus_root>/analytics/` (`:1656`), and
 `query` binds both and runs caller SQL over them (`:1320`). The other commands are subsets of
-these flows: `convert` (`:690`) is one iteration of flow 1's inner loop, `search` (`:2040`)
-re-enters flow 2's registration at `:2138` and adds one kNN statement, `embed` (`:1823`) writes the
-vector store that flow 2 and `search` read, `schema` (`:2357`) and `examples` (`:2265`) answer
+these flows: `convert` (`:690`) is one iteration of flow 1's inner loop, `search` (`:2046`)
+re-enters flow 2's registration at `:2144` and adds one kNN statement, `embed` (`:1824`) writes the
+vector store that flow 2 and `search` read, `schema` (`:2365`) and `examples` (`:2273`) answer
 from static catalog data, and `status` (`:1162`) replays materialize's plan and reads the lake's
 vitals without writing anything.
 
@@ -116,7 +116,7 @@ sequenceDiagram
    memory (`:1495`).
 3. Registration builds the whole catalog on that connection in a fixed order (raw TEMP tables,
    base views, VSS, macros, the authorship macro and views, analytics views, analytics macros),
-   because each later stage binds against the earlier one at `CREATE` time (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2206-2227`).
+   because each later stage binds against the earlier one at `CREATE` time (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2207-2228`).
 4. When the DuckLake at `ATIF_SQL_LAKE_ROOT` exists, its recorded schema matches the running code,
    and it holds this corpus at this root, the raw relations are views over the lake tables instead,
    filtered to this corpus (`--all-corpora` drops the filter): the command loads the ducklake
@@ -138,8 +138,8 @@ sequenceDiagram
 6. The edges and loss readers are semi-joined against the meta table, and the trajectory path list
    is built from it, so a session directory missing its `meta.json` contributes nothing rather than
    a partial artifact set. This is the read-side half of flow 1's meta-last write ordering (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:743`).
-7. The VSS step `ATTACH`es the LanceDB store through the lance extension (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1712`) and reads the
-   store's stamped `model` and `dim` back out (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1746`) before creating any view over it; a store
+7. The VSS step `ATTACH`es the Lance store through the lance extension (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1713`) and reads the
+   store's stamped `model` and `dim` back out (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1747`) before creating any view over it; a store
    written by a different provider or width raises instead of binding, because vectors from
    different models live in incompatible spaces and would return numerically valid but meaningless
    cosine scores (`packages/atif-duck/src/atif_duck/domain/embedding_guard.py:78`).
@@ -202,7 +202,7 @@ sequenceDiagram
    reading ahead in the newest-first walk order, and every other session from its files. Without
    a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json.zst` (or the plain file on an old-layout session);
    atif-analytics declares no DuckDB dependency, and the `forbidden` import contract puts atif-duck
-   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238`, `pyproject.toml:615`).
+   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238`, `pyproject.toml:614`).
    Either way the steps sit behind the reader's bounded memos
    (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:317`), and the
    reader labels each session's kind with the same rule `session_outcomes.kind` applies, so

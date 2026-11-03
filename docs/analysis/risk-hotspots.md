@@ -4,11 +4,11 @@ Risk here is a score over signals a command can produce, each countable and each
 line of source: `2 × T + 2 × E + 0.5 × W + 1 × C + 1 × H + U/10`. `T` counts defects a type
 checker located in the file; `E` and `W` count `error`- and `warn`-severity scanner findings from
 the scanner report tier (`mise.toml:675`); `C` counts complexity ratchets the ruff config
-sets at a function living in this file (`pyproject.toml:326-349`); `H` counts distinct unguarded
+sets at a function living in this file (`pyproject.toml:325-348`); `H` counts distinct unguarded
 concurrency or IO windows, where a window whose own docstring names its recovery does not count;
 and `U` is uncovered units (missed lines plus missed branches) under the branch-coverage config
-at `pyproject.toml:627`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
-`pyproject.toml:652`, so `U/10` puts a
+at `pyproject.toml:626`. Combined line-and-branch coverage is measured against the `fail_under = 89` floor at
+`pyproject.toml:651`, so `U/10` puts a
 file's share of the remaining uncovered units on the same scale as one located defect.
 
 Churn is rejected as a signal. One author wrote 88 of the 93 commits (the other five are three
@@ -28,7 +28,7 @@ workspace-wide is `LOW` severity, so `E` and `W` never discriminate either, and 
 it's the one input here that a reading of the code, git, and the linters can't re-derive.
 `packages/atif-embed/src/atif_embed/domain/ports.py` is excluded from the ranking despite reading
 as uncovered, because `exclude_also` drops a Protocol's `...` body while still measuring its `def` line
-(`pyproject.toml:653-660`); that is a measurement artifact, not a gap.
+(`pyproject.toml:652-659`); that is a measurement artifact, not a gap.
 
 | File | Trend | Open findings | Top owner | Citation |
 | --- | --- | --- | --- | --- |
@@ -48,11 +48,11 @@ ignored). Its one open finding is a `LOW`-severity `B105` on a record-type const
 `packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:37`, a file outside the table,
 which is why `Open findings` reads `none` on every row. The build-configuration
 rule that asks `[tool.uv]` for a dependency cooldown (`uv-missing-dependency-cooldown`) is met:
-`pyproject.toml:125` sets a seven-day `exclude-newer` window, and the comment at `:116-124` names
+`pyproject.toml:124` sets a seven-day `exclude-newer` window, and the comment at `:115-123` names
 the rule. The SQL sites are the ones that ruff suppresses per line (`ruff check --select S608 packages/` exits clean while the same run with
 `--ignore-noqa` over `packages/*/src` reports 70 sites against bandit's 69, the two sets differing
 by three statements the tools parse differently), and each `# noqa: S608` names what it
-interpolates (`pyproject.toml:211-214`). The scanner tier therefore carries no unaudited exposure,
+interpolates (`pyproject.toml:210-213`). The scanner tier therefore carries no unaudited exposure,
 which is why coverage, complexity, and concurrency carry the ranking instead.
 
 ## Per-file breakdown
@@ -64,7 +64,7 @@ which is why coverage, complexity, and concurrency carry the ranking instead.
 as `CREATE TEMP TABLE` over `read_json` under an explicit strict-projection `columns` filter
 (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:3-20`). Every registration function
 follows a register-or-fail-loud contract: log through `logger.exception` and re-raise on any DDL
-failure (`:62-63`, `:989-992`, `:1561-1564`, `:2106-2109`).
+failure (`:62-63`, `:989-992`, `:1561-1564`, `:2107-2110`).
 
 **Recent activity.** 12 commits in the 30-day window against a median of 1, so `↑ rising` under the
 mechanical rule, which here measures how often the file was edited, not whether it is
@@ -77,19 +77,19 @@ commits).
 carrying a per-line `# nosec B608` that names its interpolation: a module-constant reader or table
 with catalog columns (`:342`, `:395`), a glob or file list the statement binds as a parameter
 (`:762`, `:864`), the corpus name through `sql_literal` (`:1009`), local regex literals (`:1379`),
-an `int()`-coerced width (`:1771`), an int-derived alias (`:1826`), and the pricing rates
-(`:1989`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
-through `sql_literal` and coerces both rates with `float()` (`:1860-1887`, specifically `:1884`),
+an `int()`-coerced width (`:1772`), an int-derived alias (`:1827`), and the pricing rates
+(`:1990`). The file holds no type-checker defect; `_pricing_values_clause` escapes the model name
+through `sql_literal` and coerces both rates with `float()` (`:1861-1888`, specifically `:1885`),
 because the `pricing` parameter is reachable by an in-process embedding caller even though the CLI
-never passes one, and a `str` rate there would get past the type checkers (`:1877-1882`). Its
-uncovered units sit in `register_views` (`:1018-1564`), `register_macros` (`:1890-2109`),
-`register_vss` (`:1635-1776`), `_gate_session_dirs` (`:516-567`), and `_pricing_values_clause`
+never passes one, and a `str` rate there would get past the type checkers (`:1878-1883`). Its
+uncovered units sit in `register_views` (`:1018-1564`), `register_macros` (`:1891-2110`),
+`register_vss` (`:1637-1778`), `_gate_session_dirs` (`:516-567`), and `_pricing_values_clause`
 itself, although tests drive each of those paths: 14 test files call `register`, which runs
 `register_views` and `register_macros`, seven call `register_vss`, and
 `packages/atif-duck/tests/test_duck_views.py:663` passes a hostile model name through the pricing
 clause. The `register_vss` gap is the one that matters most: the ATTACH-failure arm that degrades
 a Lance directory to an empty-store fallback and logs rather than raising
-(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1715-1719`) is untested silent
+(`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1716-1720`) is untested silent
 degradation: no test calls `register_vss` on a directory that fails to ATTACH.
 
 ### `atif_analytics.infrastructure.parquet_cache`
@@ -132,13 +132,13 @@ changes.
 
 **Findings.** No `B608` site: the `search` kNN statement in `search_rows` binds the vector, the
 session id, and `k` as parameters and formats only the width `len(query_vector)` and constant
-fragments into `_SEARCH_SQL` (`:2223`, `:2240-2247`). It sets no complexity ratchet: `search` takes
+fragments into `_SEARCH_SQL` (`:2231`, `:2248-2255`). It sets no complexity ratchet: `search` takes
 seven parameters and the widest command, `analyze`, takes 13, while `max-args = 19` sits at
 `atif_corpus.application.materialize.materialize`
 (`packages/atif-corpus/src/atif_corpus/application/materialize.py:1497`). Its uncovered units
 concentrate in the commands that reach outward: `analyze`
 (`packages/atif-cli/src/atif_cli/app.py:1656-1757`), `convert` (`:690-772`), and `status`
-(`:1162-1311`), with a few in `search` (`:2040-2198`) and `main` (`:2431-2464`). `analyze` always
+(`:1162-1311`), with a few in `search` (`:2046-2204`) and `main` (`:2439-2472`). `analyze` always
 calls Bedrock, and `embed` and `search` do with the default Cohere provider, so the least-covered
 command body in the tree is also the one that spends money; the uncovered region inside `analyze`
 is the settings-override chain that applies the budget ceilings a crontab line depends on
@@ -160,8 +160,8 @@ lands in extra and there is nothing to join on (`:15-20`).
 
 **Findings.** No scanner findings, no IO windows (this is a pure function), and two of the
 workspace's complexity ratchets set by one function: `max-branches = 39` and
-`max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:340`, `:335`,
-`:344-349`; the function at
+`max-complexity = 38` are both pinned at `enrich_trajectory` (`pyproject.toml:339`, `:334`,
+`:343-348`; the function at
 `packages/atif-converter/src/atif_converter/domain/enrichment.py:198`). Each branch is one named
 fidelity gap, which is why the count is a ratchet rather than a target. Its uncovered units
 sit mostly inside `enrich_trajectory` (`:198-412`) and `_visible_user_text` (`:113-146`),
@@ -183,7 +183,7 @@ views bind to those literal values, so the vocabulary is a fixed contract (`:34-
 **Owners.** The sole author at 100% (all three commits touching the path).
 
 **Findings.** No scanner findings, and the `max-statements = 119` ratchet, set at `_friction_async`
-(`pyproject.toml:342`, `:337`; the function at
+(`pyproject.toml:341`, `:336`; the function at
 `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:210`). The coverage
 gap and the complexity outlier are the same region: most of the file's uncovered units sit inside
 `_friction_async` (`:210-498`), with the rest in `detect_user_friction` (`:501-606`) and

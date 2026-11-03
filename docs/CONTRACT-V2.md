@@ -95,7 +95,7 @@ Structural pipelines (cluster/terms/community): fixed hyperparameters
 
 ## VSS
 The stack: cohere embed v4 (the default; EmbeddingGemma 2 on this machine with
-ATIF_SQL_EMBED_PROVIDER=gemma, in its own store) -> lancedb IvfHnswSq -> duckdb lance
+ATIF_SQL_EMBED_PROVIDER=gemma, in its own store) -> Lance store written through duckdb lance
 ATTACH -> message_embeddings view + semantic_search(query_vec,k) macro +
 search CLI (cosine-distance ranking, int8-doc caveat). Embeds messages_text
 analogue = steps text >=32 chars (main+sidechain), uuid-keyed via source_uuids

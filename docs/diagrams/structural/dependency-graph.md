@@ -2,15 +2,15 @@
 
 The internal modules and their highest-frequency external dependencies. Internal nodes are
 the uv workspace members declared by `[tool.uv.workspace] members = ["packages/*"]`
-(`pyproject.toml:110-111`); external nodes are first-order distributions taken from a member's own
+(`pyproject.toml:109-110`); external nodes are first-order distributions taken from a member's own
 `[project.dependencies]`, never from the installed transitive closure.
 
-The internal direction is enforced rather than conventional. `pyproject.toml:554` declares
-`[tool.importlinter]` over every root package (`:555`), and `mise run lint:imports`
+The internal direction is enforced rather than conventional. `pyproject.toml:553` declares
+`[tool.importlinter]` over every root package (`:554`), and `mise run lint:imports`
 (`mise.toml:172`) is one of the gates `mise run check` depends on (`mise.toml:245-265`). Some of
-those contracts fix the shape drawn here: the `independence` contract at `pyproject.toml:606-609`
+those contracts fix the shape drawn here: the `independence` contract at `pyproject.toml:605-608`
 forbids any import edge among atif_converter, atif_corpus, atif_duck, atif_models, and atif_embed, and
-the `forbidden` contract at `:611-615` allows atif_analytics to import atif_models and nothing else
+the `forbidden` contract at `:610-614` allows atif_analytics to import atif_models and nothing else
 among the members.
 
 ```mermaid
@@ -30,7 +30,6 @@ flowchart LR
     pydsettings[(pydantic-settings)]:::external
     tenacity[(tenacity)]:::external
     pyarrow[(pyarrow)]:::external
-    lancedb[(lancedb)]:::external
     anyio[(anyio)]:::external
     cyclopts[(cyclopts)]:::external
     boto3[(boto3)]:::external
@@ -49,7 +48,6 @@ flowchart LR
     converter -->|all members| loguru
     analytics --> polars
     duck --> pyarrow
-    embed --> lancedb
     duck --> pydsettings
     embed --> boto3
     models --> anyio
@@ -77,12 +75,12 @@ from a file under the source member's `src/`.
 
 | edge | contract that permits it |
 | --- | --- |
-| atif-cli to atif-analytics | atif-cli is the composition root; it is in neither restrictive contract's restricted set (`pyproject.toml:609`, `:614`) |
+| atif-cli to atif-analytics | atif-cli is the composition root; it is in neither restrictive contract's restricted set (`pyproject.toml:608`, `:613`) |
 | atif-cli to atif-converter | as above; declared `packages/atif-cli/pyproject.toml:33` |
 | atif-cli to atif-corpus | as above; declared `packages/atif-cli/pyproject.toml:34` |
 | atif-cli to atif-duck | as above; declared `packages/atif-cli/pyproject.toml:35` |
 | atif-cli to atif-embed | as above; declared `packages/atif-cli/pyproject.toml:36` |
-| atif-analytics to atif-models | the `forbidden` contract's single permitted edge (`pyproject.toml:611-615`); declared `packages/atif-analytics/pyproject.toml:23` |
+| atif-analytics to atif-models | the `forbidden` contract's single permitted edge (`pyproject.toml:610-614`); declared `packages/atif-analytics/pyproject.toml:23` |
 
 Absences carry meaning too. atif-cli imports atif_models in no source file even though it composes
 everything else; it reaches the model registry through atif-analytics, and its
@@ -110,7 +108,6 @@ on import-site count, then on the member's own src line count, descending.
 | pydantic-settings | atif-duck | `packages/atif-duck/pyproject.toml:25` | `packages/atif-duck/src/atif_duck/infrastructure/lake_settings.py:15` |
 | tenacity | atif-models | `packages/atif-models/pyproject.toml:32` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:34` |
 | pyarrow | atif-duck | `packages/atif-duck/pyproject.toml:29` | `packages/atif-duck/src/atif_duck/infrastructure/columnar.py:287` |
-| lancedb | atif-embed | `packages/atif-embed/pyproject.toml:22` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:42` |
 | anyio | atif-models | `packages/atif-models/pyproject.toml:23` | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:30` |
 | cyclopts | atif-cli | `packages/atif-cli/pyproject.toml:37` | `packages/atif-cli/src/atif_cli/app.py:69` |
 | boto3 | atif-embed | `packages/atif-embed/pyproject.toml:20` | `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:136` |
@@ -121,7 +118,7 @@ What the drawn edge deliberately compresses:
 - **loguru is universal.** Every member declares it (`packages/atif-analytics/pyproject.toml:24`,
   `packages/atif-cli/pyproject.toml:43`, `packages/atif-converter/pyproject.toml:24`,
   `packages/atif-corpus/pyproject.toml:19`, `packages/atif-duck/pyproject.toml:21`,
-  `packages/atif-embed/pyproject.toml:23`, `packages/atif-models/pyproject.toml:29`), and the edge is
+  `packages/atif-embed/pyproject.toml:22`, `packages/atif-models/pyproject.toml:29`), and the edge is
   drawn from atif-converter only because more of the importing files are its than any other
   member's. The edge label states
   the real fan-out.
@@ -146,16 +143,16 @@ What the drawn edge deliberately compresses:
 
 The diagram's external nodes are what a member asks for, and that is a strictly smaller set than what
 `uv sync` installs. The gap includes a web stack this system never runs: harbor, a dev-group
-dependency (`pyproject.toml:159`), lists `fastapi`, `supabase`, and `uvicorn` in its own dependency
+dependency (`pyproject.toml:158`), lists `fastapi`, `supabase`, and `uvicorn` in its own dependency
 block, and `uv sync` installs the dev group by default. No member declares any of them, and
 `grep -rnE "^[[:space:]]*(from|import) +(fastapi|uvicorn|starlette|supabase)(\.| |$)" --include='*.py' packages/`
 returns no matches across every source and test file. atif-sql exposes no HTTP surface; it is one
-console script, `atif-sql = "atif_cli.app:main"` (`pyproject.toml:75`), over a set of
+console script, `atif-sql = "atif_cli.app:main"` (`pyproject.toml:74`), over a set of
 libraries.
 
 Every storage engine in the graph is embedded, so no server node belongs here either: duckdb runs
-in-process (`packages/atif-duck/pyproject.toml:20`) and lancedb is a local vector store
-(`packages/atif-embed/pyproject.toml:22`). The only edge that leaves the machine is boto3 to Amazon
+in-process (`packages/atif-duck/pyproject.toml:20`) and the vector store is local Lance files
+that atif-embed writes through DuckDB's lance extension (`packages/atif-embed/pyproject.toml:21`). The only edge that leaves the machine is boto3 to Amazon
 Bedrock, from `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:136` and
 `packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:14`, where both atif-models
 adapters build their client. The anthropic distribution adds no edge of its own: atif-models imports

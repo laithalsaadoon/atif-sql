@@ -2,7 +2,7 @@
 
 **The supported entry point is the `atif-sql` command, not an import.** This repository ships exactly
 one installable distribution, `atif-sql`, whose only console script is
-`atif-sql = "atif_cli.app:main"` (`pyproject.toml:75`). Every workspace member ships inside that
+`atif-sql = "atif_cli.app:main"` (`pyproject.toml:74`). Every workspace member ships inside that
 one wheel rather than as install targets, and the published name is deliberately split from the
 `atif_cli` module that provides the entry point (`pyproject.toml:16-18`). Install with `uvx atif-sql` or
 `uv tool install atif-sql`; `docs/reference/cli.md` is the primary reference for the surface a user
@@ -10,10 +10,10 @@ actually calls.
 
 What follows documents the **internal seam**: the highest-traffic symbols that one workspace member
 imports from another. That seam is enforced rather than conventional: the root `pyproject.toml`
-declares `[tool.importlinter]` over every root package at `pyproject.toml:554-555`, with an
-`independence` contract at `pyproject.toml:606-609` forbidding atif-converter, atif-corpus, atif-duck,
+declares `[tool.importlinter]` over every root package at `pyproject.toml:553-554`, with an
+`independence` contract at `pyproject.toml:605-608` forbidding atif-converter, atif-corpus, atif-duck,
 atif-models, and atif-embed from importing each other at all, and a `forbidden` contract at
-`pyproject.toml:611-615` limiting atif-analytics to atif-models alone. Every symbol below is a real
+`pyproject.toml:610-614` limiting atif-analytics to atif-models alone. Every symbol below is a real
 declaration read at the cited line; none of them is a supported import path for code outside this
 workspace, and no compatibility promise attaches to any of them. The entries also cover the
 atif-analytics prompt builders that every LLM stage shares inside that member.
@@ -22,7 +22,7 @@ These facts about the seam shape are worth carrying into every entry below. Firs
 abstractions are `typing.Protocol` classes, and all of them sit under a `domain/` package:
 `ConverterPort` at `packages/atif-corpus/src/atif_corpus/domain/ports.py:101`, `EmbeddingProvider`,
 `VectorStorePort`, and `TextRowsPort` at
-`packages/atif-embed/src/atif_embed/domain/ports.py:37`, `:65`, and `:93`, and
+`packages/atif-embed/src/atif_embed/domain/ports.py:37`, `:65`, and `:89`, and
 `LlmStructuredProvider` at `packages/atif-models/src/atif_models/domain/ports.py:131`. No
 `abstractmethod` exists anywhere in the workspace, so adapters satisfy a port structurally. Second,
 the name `DomainError` is declared independently more than once (one base class per erroring package, at
@@ -201,9 +201,9 @@ class EmbedSettings(BaseSettings):
 ```
 
 Env-driven settings for the embedding pipeline: the provider (`cohere` or `gemma`), each provider's
-model, the output width, batch size, concurrency, and the LanceDB URI.
+model, the output width, batch size, concurrency, and the Lance store directory.
 
-`packages/atif-embed/src/atif_embed/infrastructure/settings.py:46-146`
+`packages/atif-embed/src/atif_embed/infrastructure/settings.py:46-146` (`EmbedSettings`)
 
 ### EmbeddingProviderMismatch
 
@@ -326,7 +326,7 @@ The console-script entry point behind the `atif-sql` command; it replaces loguru
 with WARNING-and-up (`ATIF_SQL_LOG_LEVEL` widens it) so routine reads keep stderr quiet, then hands
 off to the cyclopts app and turns a cyclopts usage error into exit `64`.
 
-`packages/atif-cli/src/atif_cli/app.py:2431-2464`
+`packages/atif-cli/src/atif_cli/app.py:2439-2472`
 
 ### materialize
 
@@ -476,7 +476,7 @@ each session that has no current per-session parquet into TEMP tables, so the co
 per connection and a caller should reuse one connection per process. With `lake`, the raw relations
 are views over the lake's tables and nothing loads eagerly.
 
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129-2228`
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2131-2230`
 
 ### run_analyze
 
@@ -520,7 +520,7 @@ async def run_backfill(
 Discovers unembedded steps, embeds them, and appends to the Lance store; all its ports default to
 None and are constructed lazily so a dry run never loads boto3.
 
-`packages/atif-embed/src/atif_embed/application/embed.py:61-277`
+`packages/atif-embed/src/atif_embed/application/embed.py:63-283`
 
 ### scan_source_root
 

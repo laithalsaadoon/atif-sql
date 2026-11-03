@@ -14,7 +14,7 @@ declaration with no consumer**: a name in an `__all__` that nothing imports.
 **Technique, and what it cannot see.** No code index covers this repo (there is no `.codegraph/`, no LSP index, no AST
 symbol graph), and no dead-code analyzer is wired into the project: `grep -n
 "vulture|dead|unused|deptry|knip"` over `pyproject.toml` and `mise.toml` returns
-only unrelated hits, ty's `unused-ignore-comment` rule at `pyproject.toml:464`
+only unrelated hits, ty's `unused-ignore-comment` rule at `pyproject.toml:463`
 and a comment about it on line 465. The
 finding set is therefore derived, in these passes:
 
@@ -62,8 +62,8 @@ The limits of this derivation, stated because no index backs it:
   source text and pins its constants by name, and a re-import that hands a
   name on to a third module.
 - **Import position is irrelevant to the method, deliberately.** Because
-  `PLC0415` is off (`pyproject.toml:226`) to satisfy the lean-import assertion at
-  `packages/atif-cli/tests/test_lean_import.py:41`, atif-cli's cross-package
+  `PLC0415` is off (`pyproject.toml:225`) to satisfy the lean-import assertion at
+  `packages/atif-cli/tests/test_lean_import.py:40`, atif-cli's cross-package
   imports sit *inside* command bodies:
   `packages/atif-cli/src/atif_cli/app.py:727`,
   `packages/atif-cli/src/atif_cli/app.py:949`, and
@@ -87,13 +87,13 @@ The limits of this derivation, stated because no index backs it:
   and `packages/atif-cli/src/atif_cli/app.py:306` (`os`).
 
 Enforced gates are why the list is short rather than thin. ruff runs
-`select = ["ALL"]` (`pyproject.toml:208`) at zero, so `F401`, `F811`, `F841` and
+`select = ["ALL"]` (`pyproject.toml:207`) at zero, so `F401`, `F811`, `F841` and
 `ERA001` leave no unused import, no redefinition, no unused local, and no
-commented-out code, with two carve-outs: `pyproject.toml:286`
+commented-out code, with two carve-outs: `pyproject.toml:285`
 (`"**/__init__.py" = ["F401", "E402"]`), and the vendored harbor tree, which
-ruff doesn't lint at all (`pyproject.toml:190`). pyright runs
-`typeCheckingMode = "strict"` (`pyproject.toml:688`) over every `src/` and
-`tests/` tree plus `scripts` and `fuzz` (`pyproject.toml:689-706`) at zero errors, which enforces
+ruff doesn't lint at all (`pyproject.toml:189`). pyright runs
+`typeCheckingMode = "strict"` (`pyproject.toml:687`) over every `src/` and
+`tests/` tree plus `scripts` and `fuzz` (`pyproject.toml:688-705`) at zero errors, which enforces
 `reportUnusedFunction` / `reportUnusedClass` / `reportUnusedVariable` for every
 `_`-prefixed definition unused inside its own file. Neither gate can see a
 *public* symbol that no other module imports, and that gap is exactly what the
@@ -196,18 +196,16 @@ intra-module use site is named after the table.
 | `SNAPSHOT_RANGE_SQL` | `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py:95` | 2026-09-28 |
 | `StepMemberAccess` | `packages/atif-duck/src/atif_duck/infrastructure/projections.py:35` | 2026-09-12 |
 | `is_compressed` | `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py:41` | 2026-09-28 |
-| `SqlFragment` | `packages/atif-embed/src/atif_embed/domain/sql_literal.py:27` | 2026-09-12 |
+| `SqlFragment` | `packages/atif-embed/src/atif_embed/domain/sql_literal.py:30` | 2026-09-12 |
 | `TEXT_ONLY_CONFIG` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:60` | 2026-10-09 |
 | `INSTALL_HINT` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:68` | 2026-10-09 |
 | `pick_device` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:121` | 2026-10-09 |
 | `pick_dtype` | `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py:133` | 2026-10-09 |
 | `watermark_position` | `packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:79` | 2026-09-28 |
-| `write_schema_version` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:159` | 2026-08-28 |
-| `migrate_pre_stamp_table` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:166` | 2026-08-28 |
-| `add_chunk` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:242` | 2026-08-28 |
-| `ensure_index` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:254` | 2026-08-28 |
-| `optimize_if_needed` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:285` | 2026-08-28 |
-| `table_identity` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:309` | 2026-08-28 |
+| `write_schema_version` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:322` | 2026-08-28 |
+| `migrate_pre_stamp_table` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:329` | 2026-11-03 |
+| `add_chunk` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:432` | 2026-11-03 |
+| `optimize_if_needed` | `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:450` | 2026-11-03 |
 | `PROVIDER_DIMENSIONS` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:30` | 2026-10-09 |
 | `DEFAULT_DIMENSION` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:36` | 2026-10-09 |
 | `STORE_DIRNAME` | `packages/atif-embed/src/atif_embed/infrastructure/settings.py:40` | 2026-10-09 |
@@ -313,8 +311,8 @@ numbers follow it as plain numbers.
 - `is_compressed` is called at
   `packages/atif-duck/src/atif_duck/infrastructure/stored_artifacts.py:58`.
 - `SqlFragment` is the return type of `sql_literal` at
-  `packages/atif-embed/src/atif_embed/domain/sql_literal.py:30` and is
-  constructed at `:46`. The `SqlFragment` imported across atif-duck is
+  `packages/atif-embed/src/atif_embed/domain/sql_literal.py:33` and is
+  constructed at `:49`. The `SqlFragment` imported across atif-duck is
   atif-duck's own twin.
 - In `packages/atif-embed/src/atif_embed/infrastructure/gemma_local.py`,
   `TEXT_ONLY_CONFIG` is copied into the model's config arguments at `:167`;
@@ -323,12 +321,11 @@ numbers follow it as plain numbers.
 - `watermark_position` is called at
   `packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py:149`.
 - `write_schema_version` is called at
-  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:185` and
-  again on lines 209 and 212; `migrate_pre_stamp_table` at
-  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:205`; the module
-  functions `table_identity`, `add_chunk`, `optimize_if_needed`, and
-  `ensure_index` are what the `LanceVectorStore` methods call, at `:396`,
-  `:408`, `:412`, and `:419`.
+  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:358` and
+  again on lines 398 and 401; `migrate_pre_stamp_table` at
+  `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:394`; the module
+  functions `add_chunk` and `optimize_if_needed` are what the
+  `LanceVectorStore` methods of the same names call, at `:626` and `:630`.
 - `PROVIDER_DIMENSIONS` is read at
   `packages/atif-embed/src/atif_embed/infrastructure/settings.py:99`,
   `DEFAULT_DIMENSION` at `:104` and again on line 113, and `STORE_DIRNAME` at
@@ -377,13 +374,11 @@ modules that declare no `__all__` at all, so they're module-internal helpers:
 
 The rest sit in modules that do declare an `__all__` and are deliberately
 absent from it, which is the module saying they aren't exported:
-`packages/atif-cli/src/atif_cli/app.py:2223` (`search_rows`),
+`packages/atif-cli/src/atif_cli/app.py:2231` (`search_rows`),
 `packages/atif-cli/src/atif_cli/corpus.py:71` (`SessionLayout`) and `:158`
-(`CorpusSlimReport`),
+(`CorpusSlimReport`), and
 `packages/atif-duck/src/atif_duck/infrastructure/lake.py:117`
-(`DEFAULT_AGENT`), and
-`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:77`
-(`DistanceMetric`).
+(`DEFAULT_AGENT`).
 
 ## Unreferenced files
 
@@ -409,7 +404,7 @@ empty:
 ## Dead imports
 
 `__init__.py` files are the only linted files where `F401` is off
-(`pyproject.toml:286`), so outside the vendored harbor tree, which ruff skips,
+(`pyproject.toml:285`), so outside the vendored harbor tree, which ruff skips,
 they're the only place an import with no consumer survives lint (an isolated ruff run of
 `F401`, `F811`, and `F841` over the vendored tree finds none). Two members'
 `__init__.py` files re-export names. atif-converter's vendored
@@ -422,7 +417,7 @@ against upstream. atif-duck's three `__init__.py` files hold the rest, and
 is listed in its file's `__all__`, which is what keeps the statement alive to
 the linter; no tracked file imports any of them through a package `__init__`.
 The members aren't published on their own, but the one atif-sql wheel ships
-`atif_duck` as an importable package (`pyproject.toml:99`), so an installed copy
+`atif_duck` as an importable package (`pyproject.toml:98`), so an installed copy
 can reach the facade although nothing in the repo does.
 
 | Path | Symbol | Imported from |
@@ -477,21 +472,21 @@ write, over every tracked file:
 Every real consumer bypasses the facade for the deep module:
 
 - `packages/atif-cli/src/atif_cli/app.py:1478` and
-  `packages/atif-cli/src/atif_cli/app.py:2108` import `register` from
+  `packages/atif-cli/src/atif_cli/app.py:2114` import `register` from
   `atif_duck.infrastructure.registry`.
-- `packages/atif-cli/src/atif_cli/app.py:2292`:
+- `packages/atif-cli/src/atif_cli/app.py:2300`:
   `from atif_duck.domain.examples import (...)`.
-- `packages/atif-cli/src/atif_cli/app.py:2374`:
+- `packages/atif-cli/src/atif_cli/app.py:2382`:
   `from atif_duck.domain.catalog import (...)`, which takes `MACRO_SIGNATURES`
   and `VIEW_SCHEMA` with their analytics counterparts.
 - `packages/atif-cli/src/atif_cli/duck_errors.py:27`,
-  `packages/atif-cli/tests/test_app.py:136`, and
-  `packages/atif-cli/tests/test_app.py:956`.
+  `packages/atif-cli/tests/test_app.py:137`, and
+  `packages/atif-cli/tests/test_app.py:962`.
 
 The one dynamic reference to the package,
 `packages/atif-cli/tests/test_lean_import.py:21`, names
 `"atif_duck.infrastructure"` inside the `_FORBIDDEN_EAGER_IMPORTS` tuple at
-`packages/atif-cli/tests/test_lean_import.py:17-38`, an assertion that the
+`packages/atif-cli/tests/test_lean_import.py:17-37`, an assertion that the
 module must **not** load on `import atif_cli.app`, which is the opposite of a
 consumer.
 
