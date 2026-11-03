@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import struct
 from datetime import UTC, datetime
 from pathlib import Path
@@ -269,3 +270,44 @@ class TestProbeScan:
         monkeypatch.setattr(lance_store, "connect_db", recording)
         assert probe_store(store, corpus="corpus") is not None
         assert opened == [(store, {}, lance_store.WRITER_THREADS)]
+
+
+class _RecordingCon:
+    """A DuckDB connection whose statements are recorded."""
+
+    def __init__(self, con: Any, statements: list[str]) -> None:
+        self._con = con
+        self._statements = statements
+
+    def execute(self, sql: str, *args: Any, **kwargs: Any) -> Any:
+        self._statements.append(sql)
+        return self._con.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._con, name)
+
+
+def test_the_probe_vector_comes_from_one_statement(
+    corpus: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Picking the uuid and reading its vector in two statements let a delete between them
+    leave nothing to read (an IndexError)."""
+    store = _write_store(corpus / "embeddings_lance", _vectors())
+    real = lance_store.connect_db
+    statements: list[str] = []
+
+    def recording(uri: Path, **kwargs: object) -> lance_store.StoreConnection:
+        conn = real(uri, **kwargs)  # pyright: ignore[reportArgumentType]
+        conn._con = _RecordingCon(conn._con, statements)  # pyright: ignore[reportAttributeAccessIssue]
+        return conn
+
+    monkeypatch.setattr(lance_store, "connect_db", recording)
+    probe = probe_store(store, corpus="corpus")
+    assert probe is not None
+    assert probe.hits[0][0] == "u-000"
+    scan = next(i for i, sql in enumerate(statements) if "array_cosine_distance" in sql)
+    # Before the scan: the row count, and one statement that picks the probe
+    # row and reads its vector together.
+    reads = [sql for sql in statements[:scan] if f"FROM {TABLE}" in sql and "count(*)" not in sql]
+    assert len(reads) == 1
+    assert re.search(r"\bembedding\b", reads[0])
