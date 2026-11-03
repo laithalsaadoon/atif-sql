@@ -2,17 +2,17 @@
 
 The distribution declares exactly one entry point, the console script
 `atif-sql = "atif_cli.app:main"` (`pyproject.toml:74`), and the `main` it names
-installs a WARNING-and-up loguru sink and hands control to cyclopts (`packages/atif-cli/src/atif_cli/app.py:2439`).
+installs a WARNING-and-up loguru sink and hands control to cyclopts (`packages/atif-cli/src/atif_cli/app.py:2538`).
 Every process below therefore begins as a CLI invocation; there is no HTTP, RPC, or queue surface
 to enter through.
 
 The flows below either produce the corpus or consume it: `materialize` fills
-`<corpus_root>/sessions/` (`:878`), `analyze` fills `<corpus_root>/analytics/` (`:1718`), and
-`query` binds both and runs caller SQL over them (`:1382`). The other commands are subsets of
-these flows: `convert` (`:690`) is one iteration of flow 1's inner loop, `search` (`:2046`)
-re-enters flow 2's registration at `:2144` and adds one kNN statement, `embed` (`:1824`) writes the
-vector store that flow 2 and `search` read, `schema` (`:2365`) and `examples` (`:2273`) answer
-from static catalog data, and `status` (`:1205`) replays materialize's plan and reads the lake's
+`<corpus_root>/sessions/` (`:878`), `analyze` fills `<corpus_root>/analytics/` (`:1725`), and
+`query` binds both and runs caller SQL over them (`:1389`). The other commands are subsets of
+these flows: `convert` (`:690`) is one iteration of flow 1's inner loop, `search` (`:2123`)
+re-enters flow 2's registration at `:2226` and adds one kNN statement, `embed` (`:1893`) writes the
+vector store that flow 2 and `search` read, `schema` (`:2464`) and `examples` (`:2372`) answer
+from static catalog data, and `status` (`:1211`) replays materialize's plan and reads the lake's
 vitals without writing anything.
 
 `materialize` also keeps the DuckLake beside the corpora current (flow 1, step 10), and `query`
@@ -111,12 +111,12 @@ sequenceDiagram
 
 1. The `query` command resolves the corpus root and reads the active embedder's `(model_id, dim)`
    without constructing the embedder, so the vector store's stamped identity can be checked before
-   anything binds over it (`packages/atif-cli/src/atif_cli/app.py:1544`).
+   anything binds over it (`packages/atif-cli/src/atif_cli/app.py:1551`).
 2. A DuckDB connection is opened with no path or URI, so the engine runs in-process against
-   memory (`:1557`).
+   memory (`:1564`).
 3. Registration builds the whole catalog on that connection in a fixed order (raw TEMP tables,
    base views, VSS, macros, the authorship macro and views, analytics views, analytics macros),
-   because each later stage binds against the earlier one at `CREATE` time (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2207-2228`).
+   because each later stage binds against the earlier one at `CREATE` time (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2261-2282`).
 4. When the DuckLake at `ATIF_SQL_LAKE_ROOT` exists, its recorded schema matches the running code,
    and it holds this corpus at this root, the raw relations are views over the lake tables instead,
    filtered to this corpus (`--all-corpora` drops the filter): the command loads the ducklake
@@ -134,12 +134,12 @@ sequenceDiagram
    (DuckDB's JSON reader decompresses a `.zst` file itself) into a TEMP TABLE over an explicit
    path list; the two sets are unioned
    into one raw view per surface. The parse cost of a `query` invocation is therefore O(sessions
-   without artifacts) per connection (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:631`).
+   without artifacts) per connection (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:637`).
 6. The edges and loss readers are semi-joined against the meta table, and the trajectory path list
    is built from it, so a session directory missing its `meta.json` contributes nothing rather than
-   a partial artifact set. This is the read-side half of flow 1's meta-last write ordering (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:743`).
-7. The VSS step `ATTACH`es the Lance store through the lance extension (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1713`) and reads the
-   store's stamped `model` and `dim` back out (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1747`) before creating any view over it; a store
+   a partial artifact set. This is the read-side half of flow 1's meta-last write ordering (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:748`).
+7. The VSS step `ATTACH`es the Lance store through the lance extension (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1720`) and reads the
+   store's stamped `model` and `dim` back out (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:1767`) before creating any view over it; a store
    written by a different provider or width raises instead of binding, because vectors from
    different models live in incompatible spaces and would return numerically valid but meaningless
    cosine scores (`packages/atif-duck/src/atif_duck/domain/embedding_guard.py:78`).
@@ -191,9 +191,9 @@ sequenceDiagram
 
 1. The `analyze` command loads `AnalyticsSettings`, reuses the same corpus-root resolution the
    other commands share, and stamps explicit `--max-sessions` / `--max-cost-usd` ceilings over the
-   env defaults so a crontab line carries its spend cap visibly (`packages/atif-cli/src/atif_cli/app.py:1793-1798`).
+   env defaults so a crontab line carries its spend cap visibly (`packages/atif-cli/src/atif_cli/app.py:1800-1805`).
 2. The command opens the lake's session source when the lake holds the corpus
-   (`packages/atif-cli/src/atif_cli/app.py:1800`, `packages/atif-cli/src/atif_cli/lake_sessions.py:111`),
+   (`packages/atif-cli/src/atif_cli/app.py:1807`, `packages/atif-cli/src/atif_cli/lake_sessions.py:111`),
    and the pipeline runner builds one shared `CorpusReader` over it (or over the file source)
    for every stage and loops the LLM stages (classify, conflicts, friction, perceived); the
    `skip_*` flags subtract stages (`packages/atif-analytics/src/atif_analytics/application/analyze.py:62`).

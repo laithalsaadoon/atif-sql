@@ -326,7 +326,7 @@ The console-script entry point behind the `atif-sql` command; it replaces loguru
 with WARNING-and-up (`ATIF_SQL_LOG_LEVEL` widens it) so routine reads keep stderr quiet, then hands
 off to the cyclopts app and turns a cyclopts usage error into exit `64`.
 
-`packages/atif-cli/src/atif_cli/app.py:2439-2472`
+`packages/atif-cli/src/atif_cli/app.py:2538-2571`
 
 ### materialize
 
@@ -476,7 +476,7 @@ each session that has no current per-session parquet into TEMP tables, so the co
 per connection and a caller should reuse one connection per process. With `lake`, the raw relations
 are views over the lake's tables and nothing loads eagerly.
 
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2131-2230`
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2185-2284`
 
 ### run_analyze
 
