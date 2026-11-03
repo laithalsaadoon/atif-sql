@@ -126,7 +126,7 @@ places with no import edge between them.
 | `atif_embed.infrastructure.corpus_text_rows`: its own `sessions/` walk, gated on `meta.json` | indirect | yes | `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:166-184` |
 | `atif_analytics.infrastructure.corpus_reader`: re-declares the filename constants | indirect | yes | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:72-74` and `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:178-191` |
 | `atif_cli.app.convert`: writes `edges.jsonl` beside a `--trajectory-out` trajectory on the one-shot path | indirect | likely | `packages/atif-cli/src/atif_cli/app.py:755-756` |
-| `atif_cli.app.status`: reads the watermark through the producer's public `read_watermark` | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:1212` |
+| `atif_cli.app.status`: reads the watermark through the producer's public `read_watermark` | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:1274` |
 | `docs/CONTRACT.md:22-60`: the specification; the file declares itself orchestrator-owned and changeable only via itself | config | yes | `docs/CONTRACT.md:3` |
 | `test_domain.py::TestCorpusLayout.test_contract_paths`: pins every contract string | test | yes | `packages/atif-corpus/tests/test_domain.py:245-258` |
 | Independent fixture-corpus builders, one per consuming package | test | yes | `packages/atif-duck/tests/duck_fixtures.py:593`, `packages/atif-embed/tests/embed_fixtures.py:120`, `packages/atif-analytics/tests/analytics_fixtures.py:282` |
@@ -256,12 +256,12 @@ driving the CLI reads, so the dict is the surface, not the individual numbers, a
 | --- | --- | --- | --- |
 | `atif_cli.app`: the module-scope import; the dict is on the lean path | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:73` |
 | `atif_cli.app.convert`: exits `invalid_input`, `empty_session`, `runtime_error`, `validation_error` | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:742-772` |
-| `atif_cli.app.query`: `parse_error`, raised after the classified envelope is emitted | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:1448-1459` |
+| `atif_cli.app.query`: `parse_error`, raised after the classified envelope is emitted | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:1510-1521` |
 | `atif_cli.app.embed`: `invalid_input` plus a `EXIT_CODES[kind]` dispatch over the classifier's verdict | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:1934-1985` |
 | `atif_cli.app.search`: `no_embeddings`, the exit that tells an operator to run `embed` | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2174-2184` |
 | `atif_cli.app.examples`: `invalid_input` on an unknown `--category` / `--requires` value | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2310-2320` |
 | `atif_cli.duck_errors`: classifies `duckdb.Error` into parse / catalog / runtime plus `embedding_mismatch` | direct import | yes | `packages/atif-cli/src/atif_cli/duck_errors.py:26` and `packages/atif-cli/src/atif_cli/duck_errors.py:35-90` |
-| `atif_cli.cron`: the `install` / `status` companion to the cron lanes, which exits `invalid_input` when it can't find the refresh script; the lane itself, `scripts/atif-sql-refresh.sh`, suppresses retries on code 78 | direct import | likely | `packages/atif-cli/src/atif_cli/cron.py:32` and `packages/atif-cli/src/atif_cli/cron.py:181`, `scripts/atif-sql-refresh.sh:398` |
+| `atif_cli.cron`: the `install` / `status` companion to the cron lanes, which exits `invalid_input` when it can't find the refresh script; the lane itself, `scripts/atif-sql-refresh.sh`, suppresses retries on code 78 | direct import | likely | `packages/atif-cli/src/atif_cli/cron.py:32` and `packages/atif-cli/src/atif_cli/cron.py:181`, `scripts/atif-sql-refresh.sh:471` |
 | `ClassifiedError.to_payload()`: the JSON error envelope on non-TTY stderr | indirect | likely | `packages/atif-cli/src/atif_cli/errors.py:78-86` |
 | `test_app.py`: asserts against the dict, never against a literal, except where the number itself is the claim | test | yes | `packages/atif-cli/tests/test_app.py:42` and `packages/atif-cli/tests/test_app.py:1542` |
 | `test_cron.py`, `test_integration.py`, `test_vss_commands.py`: more suites keyed off the dict | test | yes | `packages/atif-cli/tests/test_cron.py:28`, `packages/atif-cli/tests/test_integration.py:147`, `packages/atif-cli/tests/test_vss_commands.py:21` |
@@ -388,7 +388,7 @@ it.
   `packages/atif-duck/src/atif_duck/domain/examples.py:174`, `pyproject.toml:210-213`).
 - **Watermark and quiescence** (`packages/atif-corpus/src/atif_corpus/domain/watermark.py:57`): the
   freshness rule that decides what `materialize` re-converts, surfaced to `status` through the
-  producer's public `read_watermark` (`packages/atif-cli/src/atif_cli/app.py:1222`) rather than a
+  producer's public `read_watermark` (`packages/atif-cli/src/atif_cli/app.py:1284`) rather than a
   private reader.
 
 ## See also

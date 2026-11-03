@@ -67,7 +67,7 @@ The limits of this derivation, stated because no index backs it:
   imports sit *inside* command bodies:
   `packages/atif-cli/src/atif_cli/app.py:727`,
   `packages/atif-cli/src/atif_cli/app.py:949`, and
-  `packages/atif-cli/src/atif_cli/app.py:1478` are all indented. The import graph
+  `packages/atif-cli/src/atif_cli/app.py:1540` are all indented. The import graph
   uses `ast.walk`, which descends into function
   bodies, and the reference regex is unanchored, so a deferred import counts as
   an inbound edge.
@@ -471,7 +471,7 @@ write, over every tracked file:
 
 Every real consumer bypasses the facade for the deep module:
 
-- `packages/atif-cli/src/atif_cli/app.py:1478` and
+- `packages/atif-cli/src/atif_cli/app.py:1540` and
   `packages/atif-cli/src/atif_cli/app.py:2114` import `register` from
   `atif_duck.infrastructure.registry`.
 - `packages/atif-cli/src/atif_cli/app.py:2300`:

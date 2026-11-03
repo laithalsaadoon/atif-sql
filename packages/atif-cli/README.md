@@ -16,6 +16,9 @@ atif-sql materialize [--force] [--quiesce-seconds N]
                      [--sessions id,id]   # contract-compatible extension:
                                           #   plan only the named sessions
 atif-sql status                        # corpus freshness, read-only
+atif-sql status --vector-probe         # time search's exact kNN over the store
+                                       #   (no Bedrock; the nightly compact lane
+                                       #   logs it per corpus)
 atif-sql query 'SQL' [--format auto|table|json|csv]
 atif-sql schema                        # static catalog, no duckdb bind, <50ms
 atif-sql examples                      # tested example queries per view/macro

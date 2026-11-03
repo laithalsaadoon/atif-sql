@@ -137,12 +137,12 @@ seven parameters and the widest command, `analyze`, takes 13, while `max-args = 
 `atif_corpus.application.materialize.materialize`
 (`packages/atif-corpus/src/atif_corpus/application/materialize.py:1497`). Its uncovered units
 concentrate in the commands that reach outward: `analyze`
-(`packages/atif-cli/src/atif_cli/app.py:1656-1757`), `convert` (`:690-772`), and `status`
+(`packages/atif-cli/src/atif_cli/app.py:1718-1819`), `convert` (`:690-772`), and `status`
 (`:1162-1311`), with a few in `search` (`:2046-2204`) and `main` (`:2439-2472`). `analyze` always
 calls Bedrock, and `embed` and `search` do with the default Cohere provider, so the least-covered
 command body in the tree is also the one that spends money; the uncovered region inside `analyze`
 is the settings-override chain that applies the budget ceilings a crontab line depends on
-(`:1722-1736`).
+(`:1784-1798`).
 
 ### `atif_converter.domain.enrichment`
 

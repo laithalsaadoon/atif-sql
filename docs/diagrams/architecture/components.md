@@ -72,8 +72,8 @@ console script declared at `pyproject.toml:74`.
 | Class | Workspace member | Method entry | Declared at |
 | --- | --- | --- | --- |
 | `AtifCliApp` | atif-cli | `materialize` | `packages/atif-cli/src/atif_cli/app.py:878` |
-| `AtifCliApp` | atif-cli | `query` | `packages/atif-cli/src/atif_cli/app.py:1320` |
-| `AtifCliApp` | atif-cli | `analyze` | `packages/atif-cli/src/atif_cli/app.py:1656` |
+| `AtifCliApp` | atif-cli | `query` | `packages/atif-cli/src/atif_cli/app.py:1382` |
+| `AtifCliApp` | atif-cli | `analyze` | `packages/atif-cli/src/atif_cli/app.py:1718` |
 | `AtifCliApp` | atif-cli | `embed` | `packages/atif-cli/src/atif_cli/app.py:1824` |
 | `AtifCliApp` | atif-cli | `search` | `packages/atif-cli/src/atif_cli/app.py:2046` |
 | `AtifConverter` | atif-converter | `convert_and_audit` | `packages/atif-converter/src/atif_converter/application/convert_and_audit.py:220` |
@@ -134,7 +134,7 @@ root. Those edges are the whole of its outbound surface: an unanchored grep for
 | `AtifCliApp -> AtifConverter` | converts | `packages/atif-cli/src/atif_cli/app.py:727` | `packages/atif-cli/src/atif_cli/app.py:741` |
 | `AtifCliApp -> CorpusMaterializer` | materializes | `packages/atif-cli/src/atif_cli/app.py:946` | `packages/atif-cli/src/atif_cli/app.py:973` |
 | `AtifCliApp -> DuckRegistry` | registers | `packages/atif-cli/src/atif_cli/app.py:1478`, `packages/atif-cli/src/atif_cli/app.py:2114` | `packages/atif-cli/src/atif_cli/app.py:1505`, `packages/atif-cli/src/atif_cli/app.py:2144` |
-| `AtifCliApp -> AnalyticsPipelines` | dispatches | `packages/atif-cli/src/atif_cli/app.py:1719` | `packages/atif-cli/src/atif_cli/app.py:1740` |
+| `AtifCliApp -> AnalyticsPipelines` | dispatches | `packages/atif-cli/src/atif_cli/app.py:1781` | `packages/atif-cli/src/atif_cli/app.py:1802` |
 | `AtifCliApp -> EmbedBackfill` | embeds | `packages/atif-cli/src/atif_cli/app.py:1929` | `packages/atif-cli/src/atif_cli/app.py:1963` |
 | `AnalyticsPipelines -> ModelRegistry` | resolves | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:46` | `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:49`, `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:50` |
 
