@@ -298,7 +298,7 @@ def test_the_probe_vector_comes_from_one_statement(
 
     def recording(uri: Path, **kwargs: object) -> lance_store.StoreConnection:
         conn = real(uri, **kwargs)  # pyright: ignore[reportArgumentType]
-        conn._con = _RecordingCon(conn._con, statements)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(conn, "_con", _RecordingCon(conn._con, statements))
         return conn
 
     monkeypatch.setattr(lance_store, "connect_db", recording)
