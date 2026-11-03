@@ -237,6 +237,38 @@ pulled into the runtime closure (`deprecation`, `lance-namespace`,
 --invert --package lancedb` prints nothing, and `packages/atif-cli/tests/test_no_lancedb.py`
 fails if anything under `packages/` imports it or any manifest or the lock brings it back.
 
+## Rolling back to 0.5.0
+
+atif-sql 0.5.0 wrote the embeddings store with `lancedb` 0.39.0, and this tree writes it through
+DuckDB's `lance` extension. Rolling back is safe only while lancedb 0.39.0 can open what the
+extension writes, so the safety rests on one extension build. It was checked on 2026-11-03
+against:
+
+- DuckDB 2.0.0 with `lance` extension build `86118537da` (`SELECT extension_version FROM
+  duckdb_extensions() WHERE extension_name = 'lance'`), which bundles lance-table 12.0.0, the
+  Lance core lancedb 0.39.0 ships.
+- New stores at data storage version 2.2, the version lancedb 0.39 and 0.40 create
+  (`DATA_STORAGE_VERSION` in `atif_embed.infrastructure.lance_store`). atif-sql 0.5.0's own store
+  code, under lancedb 0.39.0 and 0.40.0, read stores this tree created, searched them, appended
+  to them, deleted from them, compacted them and indexed them.
+- Copies of both fleet stores, which are at data storage version 2.1: appends from this tree
+  keep them at 2.1, and 0.5.0 reads the result.
+
+Run the recheck whenever `duckdb` moves in `uv.lock` or the extension moves to a new build.
+`INSTALL lance` on a fresh machine fetches whatever build DuckDB's repository serves for that
+DuckDB version, and `UPDATE EXTENSIONS` moves an installed one:
+
+```bash
+mise run release:lancedb-rollback
+```
+
+It writes a store through the extension. Then, under `uv run --isolated --no-project --with
+lancedb==0.39.0`, it reads the store, searches it by cosine, appends a row and compacts it.
+Last, it reads and extends the store through the extension again, which is rolling forward
+after a rollback. Each step prints one JSON line, and the first names the DuckDB version and
+extension build it checked: when it passes on a new build, record that build here. When it
+fails, a release on that build can't be rolled back to 0.5.0 without re-embedding.
+
 ## The normal path
 
 1. Land Conventional Commits on `main`. `feat:` moves the minor, `fix:` the patch, and a `!`

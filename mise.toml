@@ -724,6 +724,27 @@ uv run python scripts/verify_release_assets.py release "$version"
 """
 
 # ---------------------------------------------------------------------------
+# Rollback check: can atif-sql 0.5.0 still use a store this tree writes?
+# ---------------------------------------------------------------------------
+
+[tasks."release:lancedb-rollback"]
+description = "Recheck that lancedb 0.39.0 (atif-sql 0.5.0's) reads, searches, appends to and compacts a store this tree writes"
+# By hand, never in `check`: the middle step downloads lancedb. Run it whenever `duckdb` moves
+# in uv.lock or the lance extension moves to a new build, because rolling back to 0.5.0 is safe
+# only while lancedb opens what the extension writes (RELEASING.md, "Rolling back to 0.5.0").
+# `--isolated --no-project` runs lancedb in a throwaway environment, so it never enters the
+# workspace venv. A failed step leaves the store in its temp directory for a look.
+run = """
+set -eu
+unset VIRTUAL_ENV
+store="$(mktemp -d)/embeddings_lance"
+uv run python scripts/lancedb_rollback_check.py write "$store"
+uv run --isolated --no-project --with lancedb==0.39.0 python scripts/lancedb_rollback_check.py check "$store"
+uv run python scripts/lancedb_rollback_check.py reread "$store"
+rm -rf "$(dirname "$store")"
+"""
+
+# ---------------------------------------------------------------------------
 # CLI passthrough
 # ---------------------------------------------------------------------------
 
