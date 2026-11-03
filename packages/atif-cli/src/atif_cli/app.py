@@ -1151,6 +1151,49 @@ def _lake_surface(corpus_root: Path) -> dict[str, Any]:
     }
 
 
+def _emit_vector_probe(corpus_root: Path, fmt: OutputFormat) -> None:
+    """``status --vector-probe``: time ``search``'s exact kNN over this corpus's store."""
+    import duckdb
+
+    from atif_cli.duck_errors import classify_duckdb_error
+    from atif_cli.vector_probe import PROBE_K, probe_store
+    from atif_embed.domain.errors import LanceExtensionMissing
+
+    store = _embed_settings(fmt).resolve_lance_uri(corpus_root)
+    try:
+        probe = probe_store(store, corpus=corpus_root.name)
+    except LanceExtensionMissing as exc:
+        err = ClassifiedError(
+            kind="extension_missing",
+            exit_code=EXIT_CODES["extension_missing"],
+            message=f"the lance DuckDB extension is not installed, so the embeddings "
+            f"store at {store} cannot be read",
+            hint="run: atif-sql embed --install-extension (a one-time download)",
+        )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code) from exc
+    except duckdb.Error as exc:
+        err = classify_duckdb_error(exc)
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code) from exc
+    if probe is None:
+        err = ClassifiedError(
+            kind="no_embeddings",
+            exit_code=EXIT_CODES["no_embeddings"],
+            message=f"no embeddings to scan at {store}",
+            hint="Run: atif-sql embed --all --no-dry-run (or --limit N)",
+        )
+        emit_error(err, fmt)
+        raise SystemExit(err.exit_code)
+    if resolve_format(fmt) is OutputFormat.TABLE:
+        print(
+            f"vector probe: {probe.vector_rows:,} vectors, exact top-{PROBE_K} scan in "
+            f"{probe.scan_s:.3f}s  ({probe.store})"
+        )
+    else:
+        emit_json(probe.as_dict(), fmt)
+
+
 def _dir_bytes(root: Path) -> int:
     """Total bytes of every file under ``root`` (0 if absent)."""
     if not root.is_dir():
@@ -1165,6 +1208,7 @@ def status(
     source_root: Path | None = None,
     corpus_root: Path | None = None,
     quiesce_seconds: int | None = None,
+    vector_probe: Annotated[bool, cyclopts.Parameter(name="--vector-probe")] = False,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
     """Report corpus freshness: watermark age, counts, bytes, staleness.
@@ -1204,7 +1248,25 @@ def status(
     not installed; ``query`` binds ``message_embeddings`` empty rather than
     downloading it, so run ``atif-sql embed --install-extension``). Read
     from DuckDB's local extension listing; never installs anything.
+
+    ``--vector-probe`` prints a timing instead of the report. It runs the
+    exact top-10 cosine scan ``search`` runs over the embeddings store, with
+    the stored embedding of the smallest uuid as the query vector, so it
+    calls no embedding model and reaches no network. Only the scan is timed,
+    on the store's own bounded connection (1 GiB, 2 threads). Output:
+    ``{corpus, store, vector_rows, scan_s}``. It reads every stored vector,
+    so it costs what a ``search`` costs, and a plain ``status`` never runs
+    it. The nightly compact lane logs it per corpus to tell when ``search``
+    needs a vector index. Exit codes: 0, 2 no_embeddings (no store, or an
+    empty one), 78 extension_missing (the lance extension isn't installed;
+    the probe never downloads it), and a DuckDB error exits the way
+    ``query``'s do (70 when the store couldn't be read).
     """
+    if vector_probe:
+        settings = _corpus_settings(source_root, corpus_root, agent)
+        _emit_vector_probe(settings.corpus_root, fmt)
+        return
+
     import time
 
     from atif_cli.corpus import storage_layout
