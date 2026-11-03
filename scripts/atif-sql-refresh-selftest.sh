@@ -32,7 +32,12 @@
 #       budget under its own 4G scope,
 #       WHILE holding the materialize lane's lock (read back from inside the
 #       shim), skips when a materialize run outlasts the wait, and skips
-#       quietly against a CLI without `lake`.
+#       quietly against a CLI without `lake`;
+#   (j) the compact lane's vector probe logs one line per corpus, TRIPs on the
+#       median of a corpus's own last 7 probe lines (and not on one slow night,
+#       a short history, or another corpus's lines), turns a failing probe
+#       into a WARN line without touching the exit code, runs when compaction
+#       is skipped, and skips with one line against a CLI without the flag.
 #
 # Run by hand after an atif-sql upgrade, or wire into a nightly.
 # Exits the FAILURE COUNT (0 = green).
@@ -77,6 +82,10 @@ while IFS=' ' read -r subcommand flags; do
         # --agent is allowed to be absent — but ONLY because the script probes
         # for it and skips the Codex pass when it is missing.
         ok "$subcommand lacks --agent but the refresh script carries the codex absence guard"
+      elif [ "$flag" = --vector-probe ] && grep -q 'vector-probe not yet installed, skipping' "$SCRIPT"; then
+        # The same rule for the compact lane's probe: absent only because the
+        # lane checks `status --help` first and skips.
+        ok "$subcommand lacks --vector-probe but the compact lane carries the probe absence guard"
       else
         fail "$subcommand no longer accepts $flag (passed by the refresh script)"
       fi
@@ -527,13 +536,32 @@ if printf '%s' "$top_help" | grep -qw lake; then
 fi
 
 make_compact_shim() {
-  # $1 = shim dir, $2 = "with" | "without" (lake in --help)
-  local dir="$1" mode="$2"
+  # $1 = shim dir, $2 = "with" | "without" (lake in --help), $3 = "with" |
+  # "without" (--vector-probe in `status --help`, default with). The probe's
+  # answer for a corpus is <dir>/probe-<config dir basename>.json and .rc; a
+  # corpus with no answer file exits 2, as a corpus with no store does.
+  local dir="$1" mode="$2" probe="${3:-with}"
   mkdir -p "$dir"
   cat > "$dir/atif-sql" <<SHIM
 #!/usr/bin/env bash
 case "\${1:-}" in
   --help) echo "Usage: atif-sql COMMAND"; echo "  materialize  status  query  schema  embed$([ "$mode" = with ] && echo '  lake')" ;;
+  status)
+    if [ "\${2:-}" = --help ]; then
+      echo "Usage: atif-sql status [OPTIONS]"
+      echo "  --agent --source-root --corpus-root --format$([ "$probe" = with ] && echo ' --vector-probe')"
+      # The real help runs on for dozens of lines after the flag. Past a pipe
+      # buffer of it, a reader that stops at the first match (\`grep -q\`)
+      # leaves this writer a closed pipe, as the real CLI gets.
+      for _ in \$(seq 1 3000); do echo "  more of a long status --help, after every flag"; done
+      exit 0
+    fi
+    corpus="\$(basename "\${CLAUDE_CONFIG_DIR:-none}")"
+    echo "\$* \$corpus" >> "$dir/probe.log"
+    [ -f "$dir/probe-\$corpus.json" ] || exit 2
+    cat "$dir/probe-\$corpus.json"
+    exit "\$(cat "$dir/probe-\$corpus.rc" 2>/dev/null || echo 0)"
+    ;;
   lake)
     lock="\$ATIF_SQL_REFRESH_RUN_DIR/atif-sql-refresh-materialize.lock"
     if flock -n "\$lock" true; then held=free; else held=held; fi
@@ -617,6 +645,142 @@ if [ "$rc" = 0 ] && [ ! -e "$shim_root/compact-without/calls.log" ] \
   ok "compact lane: a CLI without \`lake\` skips with one line"
 else
   fail "compact lane: absence guard did not fire (exit=$rc)"
+fi
+
+# ---------------------------------------------------------------------------
+# (j) THE VECTOR PROBE. Two corpora (two config dirs, each with projects/),
+#     one compact shim whose `status --vector-probe` answers from a file per
+#     corpus, and lane logs seeded with earlier nights. Each run asserts on
+#     the lines it appended. The seeded history is chosen so a wrong median
+#     changes the outcome: reading the other corpus's lines, or only the
+#     newest one, gives a different TRIP line or none.
+# ---------------------------------------------------------------------------
+probe_dir="$shim_root/probe"
+make_compact_shim "$probe_dir" with
+probe_cfg_a="$shim_root/probe-cfg/claude-a"   # the lane's "primary"
+probe_cfg_b="$shim_root/probe-cfg/claude-b"   # the lane's "extra1"
+mkdir -p "$probe_cfg_a/projects" "$probe_cfg_b/projects"
+
+probe_answer() {
+  # $1 = config dir basename, $2 = rows, $3 = scan_s ("" for no output), $4 = exit code
+  rm -f "$probe_dir/probe-$1.json" "$probe_dir/probe-$1.rc"
+  [ "$2" = none ] && return 0
+  if [ -n "$3" ]; then
+    printf '{\n  "corpus": "%s",\n  "store": "/stores/%s/embeddings_lance",\n  "vector_rows": %s,\n  "scan_s": %s\n}\n' \
+      "$1" "$1" "$2" "$3" > "$probe_dir/probe-$1.json"
+  else
+    : > "$probe_dir/probe-$1.json"
+  fi
+  echo "$4" > "$probe_dir/probe-$1.rc"
+}
+
+seed_probe_line() {
+  # $1 = run dir, $2 = lane corpus name, $3 = scan_s
+  mkdir -p "$1"
+  echo "2026-11-01T03:41:00+00:00 vector-probe $2: rows=1000 scan_s=$3" >> "$1/atif-sql-refresh.log"
+}
+
+run_probe_tick() {
+  # $1 = run dir. Prints the lines this run appended to the lane log.
+  local before
+  mkdir -p "$1"
+  before="$(wc -l < "$1/atif-sql-refresh.log" 2>/dev/null || echo 0)"
+  rm -f "$probe_dir/probe.log"
+  CLAUDE_CONFIG_DIR="$probe_cfg_a" ATIF_SQL_EXTRA_CONFIG_DIRS="$probe_cfg_b" \
+    ATIF_SQL_CLI="$probe_dir/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$1" \
+    bash "$SCRIPT" compact
+  probe_rc=$?
+  tail -n "+$((before + 1))" "$1/atif-sql-refresh.log" > "$1/appended.log"
+}
+
+# Run A: primary's last 7 are 2.5 2.6 0.5 2.7 2.8 0.4 and tonight's 2.9, so
+# the median is 2.6 and it TRIPs. extra1's are six nights at 0.5 and tonight's
+# 0.6: no TRIP. The two histories are interleaved, as the real log interleaves
+# them, with an old TRIP line and a WARN line that must not count as samples.
+run_a="$shim_root/probe-run-a"
+for pair in "2.5 0.5" "2.6 0.5" "0.5 0.5" "2.7 0.5" "2.8 0.5" "0.4 0.5"; do
+  read -r a b <<< "$pair"
+  seed_probe_line "$run_a" primary "$a"
+  seed_probe_line "$run_a" extra1 "$b"
+done
+echo "2026-11-01T03:41:01+00:00 vector-probe extra1: TRIP median_7=9.9 (exact scan over 2.0 s; see PLAN.md Phase 6)" >> "$run_a/atif-sql-refresh.log"
+echo "2026-11-01T03:41:02+00:00 WARN: vector-probe primary: probe failed (exit 70, see above); the lane's exit is unchanged" >> "$run_a/atif-sql-refresh.log"
+probe_answer claude-a 150659 2.9 0
+probe_answer claude-b 1200 0.6 0
+run_probe_tick "$run_a"
+if [ "$probe_rc" = 0 ] \
+   && grep -q 'vector-probe primary: rows=150659 scan_s=2.9$' "$run_a/appended.log" \
+   && grep -q 'vector-probe extra1: rows=1200 scan_s=0.6$' "$run_a/appended.log" \
+   && grep -qx 'status --vector-probe --format json claude-a' "$probe_dir/probe.log" \
+   && grep -qx 'status --vector-probe --format json claude-b' "$probe_dir/probe.log"; then
+  ok "vector probe: one rows/scan_s line per corpus, from \`status --vector-probe --format json\`"
+else
+  fail "vector probe: per-corpus lines or calls missing (exit=$probe_rc): $(tr '\n' ';' < "$run_a/appended.log")"
+fi
+if grep -q 'vector-probe primary: TRIP median_7=2.6 (exact scan over 2.0 s; see PLAN.md Phase 6)$' "$run_a/appended.log" \
+   && ! grep -q 'vector-probe extra1: TRIP' "$run_a/appended.log"; then
+  ok "vector probe: TRIPs on the median of the corpus's own last 7 lines (primary 2.6), not on extra1's"
+else
+  fail "vector probe: wrong TRIP lines (want primary median_7=2.6 and no extra1 TRIP): $(grep TRIP "$run_a/appended.log" | tr '\n' ';')"
+fi
+
+# Run B: six fast nights and one slow one stay under the line, and a probe
+# that fails (exit 70, no output) is a WARN that leaves the lane's exit at 0.
+run_b="$shim_root/probe-run-b"
+for _ in 1 2 3 4 5 6; do seed_probe_line "$run_b" primary 0.5; done
+probe_answer claude-a 150659 9.0 0
+probe_answer claude-b 1200 "" 70
+run_probe_tick "$run_b"
+if [ "$probe_rc" = 0 ] \
+   && grep -q 'vector-probe primary: rows=150659 scan_s=9.0$' "$run_b/appended.log" \
+   && ! grep -q 'TRIP' "$run_b/appended.log"; then
+  ok "vector probe: one slow night among seven doesn't TRIP"
+else
+  fail "vector probe: a single slow night tripped or went unlogged (exit=$probe_rc): $(tr '\n' ';' < "$run_b/appended.log")"
+fi
+if grep -q 'WARN: vector-probe extra1: probe failed (exit 70' "$run_b/appended.log" \
+   && ! grep -q 'vector-probe extra1: rows=' "$run_b/appended.log" \
+   && grep -q 'refresh complete (mode=compact, exit=0)' "$run_b/appended.log"; then
+  ok "vector probe: a failing probe logs a WARN line and the lane still exits 0"
+else
+  fail "vector probe: a failing probe changed the exit or logged no WARN (exit=$probe_rc)"
+fi
+
+# Run C: compaction skipped (the materialize lock outlasts the wait), a short
+# history, and a corpus with no store. The probe still runs. Five slow nights
+# plus tonight's are 6 samples, all over the line, and 6 is not 7, so there's
+# no median yet and no TRIP. The storeless corpus is one skip line.
+run_c="$shim_root/probe-run-c"
+mkdir -p "$run_c"
+for _ in 1 2 3 4 5; do seed_probe_line "$run_c" primary 3.0; done
+probe_answer claude-a 150659 5.0 0
+probe_answer claude-b none "" 0
+flock "$run_c/atif-sql-refresh-materialize.lock" sleep 5 &
+holder=$!
+sleep 0.5
+ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS=1 run_probe_tick "$run_c"
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+if [ "$probe_rc" = 0 ] \
+   && grep -q 'skip\[compact\]: a materialize run held its lock' "$run_c/appended.log" \
+   && grep -q 'vector-probe primary: rows=150659 scan_s=5.0$' "$run_c/appended.log" \
+   && ! grep -q 'TRIP' "$run_c/appended.log" \
+   && grep -q 'vector-probe extra1: no embeddings store, skipped$' "$run_c/appended.log"; then
+  ok "vector probe: runs when compaction skips, needs 7 lines before a TRIP, and skips a storeless corpus"
+else
+  fail "vector probe: skipped-compaction / short-history / no-store run went wrong (exit=$probe_rc): $(tr '\n' ';' < "$run_c/appended.log")"
+fi
+
+# Run D: a CLI whose `status --help` lacks --vector-probe skips with one line.
+make_compact_shim "$shim_root/probe-without" with without
+CLAUDE_CONFIG_DIR="$probe_cfg_a" ATIF_SQL_EXTRA_CONFIG_DIRS="$probe_cfg_b" \
+  ATIF_SQL_CLI="$shim_root/probe-without/atif-sql" ATIF_SQL_REFRESH_RUN_DIR="$shim_root/probe-without/run" \
+  bash "$SCRIPT" compact
+rc=$?
+if [ "$rc" = 0 ] && [ ! -e "$shim_root/probe-without/probe.log" ] \
+   && grep -q '\[compact\] vector-probe not yet installed, skipping' "$shim_root/probe-without/run/atif-sql-refresh.log"; then
+  ok "vector probe: a CLI without --vector-probe skips with one line"
+else
+  fail "vector probe: absence guard did not fire (exit=$rc)"
 fi
 
 printf '\n%s\n' "selftest: $fails failure(s)"

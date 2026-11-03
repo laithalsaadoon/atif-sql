@@ -28,7 +28,8 @@
 #                      old snapshots, removes unreferenced files. Nightly,
 #                      because every materialize pass adds files. It runs
 #                      once per tick, not per corpus (one lake holds them all).
-#                      See THE COMPACT LANE below.
+#                      See THE COMPACT LANE below. Then, per corpus, it times
+#                      one exact vector scan: see THE VECTOR PROBE below.
 #
 # THE STRUCTURAL LANE WAS REMOVED 2026-09-27 with the cluster/terms/community
 # stages it ran. `structural` (and `struct`) is still ACCEPTED: it logs one
@@ -121,6 +122,28 @@
 # means compact skips this night (logged), never that it runs beside a writer.
 # A CLI without `lake` (it predates the lake) skips with one line, the same
 # shape as the analyze and embed absence guards.
+#
+# THE VECTOR PROBE runs in the compact lane after compaction, once per corpus
+# above. `search` reads no vector index: it ranks every stored vector, so what
+# it pays grows with the store. `atif-sql status --vector-probe` times that
+# same exact scan with no Bedrock call, and the lane logs one line per corpus:
+# `vector-probe <corpus>: rows=<vectors> scan_s=<seconds>`. The rules, each
+# with its reason:
+#   * It runs whether compaction ran, skipped or failed. The store isn't the
+#     lake, and a missed night is a missing sample. When compaction ran, the
+#     lane still holds the materialize lock, so no embed tick appends to the
+#     store mid-scan.
+#   * When the median scan_s of the corpus's last 7 probe lines in this log
+#     passes 2.0 s, the lane also logs a TRIP line. 2.0 s is where PLAN.md
+#     Phase 5 moves `search` onto a vector index (Phase 6). It's the median of
+#     7 so one cold-cache or contended night can't trip it, and with fewer
+#     than 7 lines there's no median yet. The lines are matched by corpus
+#     name, so renumbering ATIF_SQL_EXTRA_CONFIG_DIRS mixes two stores' history.
+#   * A failing probe logs a WARN line and never changes the lane's exit
+#     code: it's a measurement, and the exit reports the lake's maintenance.
+#   * A corpus with no embeddings store (exit 2) logs one skip line. A CLI
+#     whose `status` lacks `--vector-probe` (it predates the probe) skips with
+#     one line, the same shape as the other absence guards.
 #
 # scripts/atif-sql-refresh-selftest.sh asserts this file's flags against the
 # installed CLI's --help; run it after every atif-sql upgrade.
@@ -312,9 +335,67 @@ run_compact() {
   log "[compact] lake compact ok"
 }
 
+# THE VECTOR PROBE (see header). The threshold and window live here, once,
+# because the TRIP line quotes both.
+VECTOR_PROBE_TRIP_S=2.0
+VECTOR_PROBE_NIGHTS=7
+
+vector_probe_median() {
+  # Median scan_s of the last VECTOR_PROBE_NIGHTS probe lines for corpus $1,
+  # or nothing while fewer exist. Only `rows=` lines are samples: TRIP and
+  # WARN lines carry no timing of their own.
+  local values
+  values="$(grep -F "vector-probe $1: rows=" "$LOG" \
+    | sed -n 's/.* scan_s=\([0-9][0-9.]*\)$/\1/p' | tail -n "$VECTOR_PROBE_NIGHTS")"
+  [ "$(printf '%s\n' "$values" | grep -c .)" -eq "$VECTOR_PROBE_NIGHTS" ] || return 0
+  printf '%s\n' "$values" | sort -g | sed -n "$(((VECTOR_PROBE_NIGHTS + 1) / 2))p"
+}
+
+run_vector_probes() {
+  # Never fails: every outcome is a log line, and the caller ignores the status.
+  #
+  # The help is read whole before grep sees it. Piped straight into `grep -q`
+  # under pipefail, grep exits at the first match, the CLI's next write meets
+  # a closed pipe and exits nonzero, and the guard reads that as "no flag":
+  # `status --help` runs on long after `--vector-probe` (caught 2026-11-03 by a
+  # lane run against the real CLI, which skipped with the flag present).
+  local status_help
+  status_help="$("$ATIF_SQL" status --help 2>/dev/null 8>&- 9>&-)"
+  if ! grep -q -- '--vector-probe' <<< "$status_help"; then
+    log "[compact] vector-probe not yet installed, skipping"
+    return 0
+  fi
+  local i name config_dir out rc rows scan_s median
+  for i in "${!CORPUS_NAMES[@]}"; do
+    name="${CORPUS_NAMES[$i]}"
+    config_dir="${CORPUS_DIRS[$i]}"
+    [ -d "$config_dir/projects" ] || continue
+    rc=0
+    out="$(CLAUDE_CONFIG_DIR="$config_dir" ATIF_SQL_SOURCE_ROOT="$config_dir/projects" \
+      "$ATIF_SQL" status --vector-probe --format json 2>>"$LOG" 8>&- 9>&-)" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      log "vector-probe $name: no embeddings store, skipped"
+      continue
+    fi
+    rows="$(printf '%s\n' "$out" | sed -n 's/.*"vector_rows": *\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+    scan_s="$(printf '%s\n' "$out" | sed -n 's/.*"scan_s": *\([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+    if [ "$rc" -ne 0 ] || [ -z "$rows" ] || [ -z "$scan_s" ]; then
+      log "WARN: vector-probe $name: probe failed (exit $rc, see above); the lane's exit is unchanged"
+      continue
+    fi
+    log "vector-probe $name: rows=$rows scan_s=$scan_s"
+    median="$(vector_probe_median "$name")"
+    if [ -n "$median" ] && awk -v m="$median" -v t="$VECTOR_PROBE_TRIP_S" 'BEGIN { exit !(m > t) }'; then
+      log "vector-probe $name: TRIP median_${VECTOR_PROBE_NIGHTS}=$median (exact scan over ${VECTOR_PROBE_TRIP_S} s; see PLAN.md Phase 6)"
+    fi
+  done
+  return 0
+}
+
 if [ "$MODE" = compact ]; then
   overall=0
   run_compact || overall=1
+  run_vector_probes
   log "refresh complete (mode=$MODE, exit=$overall)"
   exit "$overall"
 fi
