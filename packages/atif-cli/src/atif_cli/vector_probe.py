@@ -106,12 +106,12 @@ def probe_store(store: Path, *, corpus: str, k: int = PROBE_K) -> VectorProbe | 
         if not has_table(conn):
             return None
         con = conn.con
-        vector_rows = int(con.execute(f"SELECT count(*) FROM {table}").fetchall()[0][0])  # noqa: S608 — table is the store's constant name
+        vector_rows = int(con.execute(f"SELECT count(*) FROM {table}").fetchall()[0][0])  # noqa: S608  # nosec B608 - table is the store's constant name
         if vector_rows == 0:
             return None
-        smallest = con.execute(f"SELECT min(uuid) FROM {table}").fetchall()[0][0]  # noqa: S608 — table is the store's constant name
+        smallest = con.execute(f"SELECT min(uuid) FROM {table}").fetchall()[0][0]  # noqa: S608  # nosec B608 - table is the store's constant name
         vector = con.execute(
-            f"SELECT embedding FROM {table} WHERE uuid = ? LIMIT 1",  # noqa: S608 — table is the store's constant name
+            f"SELECT embedding FROM {table} WHERE uuid = ? LIMIT 1",  # noqa: S608  # nosec B608 - table is the store's constant name
             [smallest],
         ).fetchall()[0][0]
         sql = probe_sql(dim=len(vector), table=table)
