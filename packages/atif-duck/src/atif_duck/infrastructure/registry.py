@@ -231,6 +231,11 @@ _OBJECT_SIZE_HEADROOM_BYTES: int = 1_048_576
 #: The DuckDB extension that reads the Lance embeddings store.
 LANCE_EXTENSION: str = "lance"
 
+#: The Lance dataset's directory inside an embeddings store directory. The same
+#: name as atif-embed's ``lance_store.DATASET_DIR``, kept here because the
+#: independence contract forbids importing it.
+LANCE_DATASET_DIR: str = "embeddings.lance"
+
 
 def _bounded(largest: int) -> int:
     """``largest`` plus headroom, floored at DuckDB's default and capped at :data:`_OBJECT_SIZE_CAP`."""
@@ -1696,6 +1701,7 @@ def register_vss(
     import duckdb as _duckdb
 
     attached = False
+    loaded = False
     if lance_uri.is_dir() and not load_lance_extension(con):
         logger.warning(
             "Lance store at {} cannot be read: the {} extension is not installed, so "
@@ -1705,6 +1711,7 @@ def register_vss(
             LANCE_EXTENSION,
         )
     elif lance_uri.is_dir():
+        loaded = True
         try:
             # ATTACH is one of the statement kinds DuckDB will not prepare, so
             # this is the one corpus path that still enters statement text; it
@@ -1721,12 +1728,25 @@ def register_vss(
             logger.exception("Lance ATTACH failed for {}; treating as empty store", lance_uri)
 
     if not attached or not _lance_table_present(con):
-        logger.warning(
-            "No Lance embeddings table at {}; creating empty message_embeddings "
-            "table so semantic_search binds. Run `atif-sql embed --all --no-dry-run` "
-            "to backfill.",
-            lance_uri,
-        )
+        if loaded and (lance_uri / LANCE_DATASET_DIR).exists():
+            # The extension leaves a dataset it can't open out of the catalog
+            # instead of failing the ATTACH, so "no table" with the dataset on
+            # disk means a damaged store, and embedding into it can't help.
+            logger.warning(
+                "Lance store at {} holds a dataset the {} extension can't open (its newest "
+                "manifest may be damaged or partly written), so message_embeddings binds "
+                "empty. Restore the store from a backup, or move it aside and re-embed with "
+                "`atif-sql embed --all --no-dry-run`.",
+                lance_uri,
+                LANCE_EXTENSION,
+            )
+        else:
+            logger.warning(
+                "No Lance embeddings table at {}; creating empty message_embeddings "
+                "table so semantic_search binds. Run `atif-sql embed --all --no-dry-run` "
+                "to backfill.",
+                lance_uri,
+            )
         con.execute(
             f"""
             CREATE OR REPLACE TABLE message_embeddings (
@@ -1787,6 +1807,32 @@ def _attached_lance_table_present(con: duckdb.DuckDBPyConnection, alias: str) ->
     return row is not None and int(row[0]) > 0
 
 
+def lance_store_unreadable(con: duckdb.DuckDBPyConnection, lance_uri: Path) -> bool:
+    """True when ``lance_uri`` holds :data:`LANCE_DATASET_DIR` but the lance extension can't open it.
+
+    The extension leaves a dataset it can't open (a truncated manifest, for
+    one) out of the catalog instead of failing the ATTACH, so such a store
+    binds as an empty one. ``search`` asks this when it finds no rows, so it
+    can say the store is damaged instead of asking for an embed run. The
+    store is ATTACHed under its own alias and DETACHed again. Needs the
+    extension loaded; without a dataset on disk the answer is ``False`` and
+    nothing is attached.
+    """
+    import duckdb as _duckdb
+
+    if not (lance_uri / LANCE_DATASET_DIR).exists():
+        return False
+    alias = "lance_store_check"
+    try:
+        con.execute(f"ATTACH {sql_literal(str(lance_uri))} AS {alias} (TYPE LANCE);")
+    except _duckdb.Error:
+        return True
+    try:
+        return not _attached_lance_table_present(con, alias)
+    finally:
+        con.execute(f"DETACH {alias};")
+
+
 def register_vss_stores(
     con: duckdb.DuckDBPyConnection,
     *,
@@ -1823,7 +1869,15 @@ def register_vss_stores(
         alias = f"lance_store_{int(index)}"
         con.execute(f"ATTACH IF NOT EXISTS {sql_literal(str(uri))} AS {alias} (TYPE LANCE);")
         if not _attached_lance_table_present(con, alias):
-            logger.info("No Lance embeddings table at {}; leaving it out", uri)
+            if (uri / LANCE_DATASET_DIR).exists():
+                logger.warning(
+                    "Lance store at {} holds a dataset the {} extension can't open (its "
+                    "newest manifest may be damaged or partly written); leaving it out",
+                    uri,
+                    LANCE_EXTENSION,
+                )
+            else:
+                logger.info("No Lance embeddings table at {}; leaving it out", uri)
             continue
         row = con.execute(f"SELECT model, dim FROM {alias}.main.embeddings LIMIT 1;").fetchone()  # noqa: S608  # nosec B608 - the alias is an int-derived name
         if row is None:

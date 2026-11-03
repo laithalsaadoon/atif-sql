@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING, Any, Self
 import pyarrow as pa
 from loguru import logger
 
+from atif_embed.domain.errors import EmbeddingStoreUnreadable
 from atif_embed.domain.sql_literal import sql_literal
 from atif_embed.infrastructure.lance_extension import load_lance_extension
 
@@ -64,6 +65,9 @@ if TYPE_CHECKING:
 
 #: Lance table name inside the namespace (the dataset is ``<lance_uri>/embeddings.lance``).
 TABLE_NAME = "embeddings"
+
+#: The Lance dataset's directory inside the store directory.
+DATASET_DIR = f"{TABLE_NAME}.lance"
 
 #: Catalog name the store directory is ATTACHed under. Distinct from
 #: atif-duck's ``lance_store`` so the two never meet in one connection.
@@ -284,13 +288,37 @@ def _first_row(
 
 
 def has_table(conn: StoreConnection) -> bool:
-    """True iff the ATTACHed store holds the embeddings table."""
+    """True iff the ATTACHed store holds the embeddings table.
+
+    Raises
+    ------
+    EmbeddingStoreUnreadable
+        :data:`DATASET_DIR` is on disk but the attached catalog doesn't list
+        the table. The lance extension leaves out a dataset it can't open (a
+        truncated manifest, for one) instead of failing the ATTACH, so
+        without this check an unreadable store reads as an empty one: every
+        corpus text looks unembedded, all of it goes to the embedder, and
+        the ``INSERT`` after it fails because the dataset already exists, on
+        every run. Every reader and writer here asks this first, so the
+        error comes before any embedding call.
+    """
     row = _first_row(
         conn,
         "SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND table_name = ?",
         [STORE_ALIAS, TABLE_NAME],
     )
-    return row is not None and int(row[0]) > 0
+    if row is not None and int(row[0]) > 0:
+        return True
+    dataset = conn.uri / DATASET_DIR
+    if dataset.exists():
+        msg = (
+            f"the embeddings store at {conn.uri} holds a Lance dataset the lance extension "
+            f"can't open ({dataset}); its newest manifest may be damaged or partly written. "
+            "Restore the store from a backup, or move it aside and re-embed with "
+            "`atif-sql embed --all --no-dry-run`"
+        )
+        raise EmbeddingStoreUnreadable(msg)
+    return False
 
 
 def column_names(conn: StoreConnection) -> list[str]:
@@ -639,6 +667,7 @@ class LanceVectorStore:
 
 
 __all__ = [
+    "DATASET_DIR",
     "DATA_STORAGE_VERSION",
     "SCHEMA_VERSION",
     "SCHEMA_VERSION_FILE",

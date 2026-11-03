@@ -25,9 +25,16 @@ import duckdb
 import pyarrow as pa
 import pytest
 from duck_fixtures import SESSION_IDS
+from loguru import logger
 
 from atif_duck.domain.embedding_guard import EmbeddingProviderMismatch
-from atif_duck.infrastructure.registry import register, register_vss
+from atif_duck.infrastructure.registry import (
+    LANCE_DATASET_DIR,
+    lance_store_unreadable,
+    register,
+    register_vss,
+    register_vss_stores,
+)
 
 DIM = 4
 MODEL = "test-embedder:1"
@@ -105,6 +112,85 @@ def con() -> Iterator[duckdb.DuckDBPyConnection]:
     connection = duckdb.connect(":memory:")
     yield connection
     connection.close()
+
+
+def truncate_newest_manifest(store: Path) -> Path:
+    """Cut the newest ``_versions/*.manifest`` of the store's dataset to 40 bytes; return it.
+
+    Lance's V2 manifest names count down from 2**64 - 1, so the newest
+    version has the smallest name; the assert pins that naming.
+    """
+    manifests = list((store / LANCE_DATASET_DIR / "_versions").glob("*.manifest"))
+    assert manifests
+    assert all(int(path.stem) > 2**63 for path in manifests)
+    newest = min(manifests, key=lambda path: int(path.stem))
+    newest.write_bytes(newest.read_bytes()[:40])
+    return newest
+
+
+def _warnings() -> tuple[list[str], int]:
+    lines: list[str] = []
+    return lines, logger.add(lambda message: lines.append(str(message)), level="WARNING")
+
+
+class TestUnreadableStore:
+    """A dataset the extension can't open binds empty, and the warning says it's damaged."""
+
+    def test_binds_empty_and_names_the_store_unreadable(
+        self, con: duckdb.DuckDBPyConnection, lance_uri: Path
+    ) -> None:
+        truncate_newest_manifest(lance_uri)
+        lines, sink = _warnings()
+        try:
+            bound = register_vss(con, lance_uri=lance_uri, expected_model=MODEL)
+        finally:
+            logger.remove(sink)
+        assert bound is False
+        assert con.execute("SELECT count(*) FROM message_embeddings").fetchone() == (0,)
+        assert any("can't open" in line and str(lance_uri) in line for line in lines)
+        assert not any("to backfill" in line for line in lines)
+
+    def test_a_store_without_a_dataset_still_asks_for_an_embed(
+        self, con: duckdb.DuckDBPyConnection, tmp_path: Path
+    ) -> None:
+        store = tmp_path / "lance"
+        store.mkdir()
+        (store / "schema_version.json").write_text('{"schema_version": 2}')
+        lines, sink = _warnings()
+        try:
+            assert register_vss(con, lance_uri=store) is False
+        finally:
+            logger.remove(sink)
+        assert any("to backfill" in line for line in lines)
+        assert not any("can't open" in line for line in lines)
+
+    def test_lance_store_unreadable_tells_damaged_from_healthy_and_absent(
+        self, con: duckdb.DuckDBPyConnection, lance_uri: Path, tmp_path: Path
+    ) -> None:
+        con.execute("LOAD lance")
+        healthy = _write_lance(tmp_path / "healthy")
+        assert lance_store_unreadable(con, healthy) is False
+        assert lance_store_unreadable(con, tmp_path / "missing") is False
+        (tmp_path / "no-dataset").mkdir()
+        assert lance_store_unreadable(con, tmp_path / "no-dataset") is False
+        truncate_newest_manifest(lance_uri)
+        assert lance_store_unreadable(con, lance_uri) is True
+        # It DETACHes what it attached, so asking twice works.
+        assert lance_store_unreadable(con, lance_uri) is True
+
+    def test_a_damaged_store_among_several_is_left_out_with_a_warning(
+        self, con: duckdb.DuckDBPyConnection, lance_uri: Path, tmp_path: Path
+    ) -> None:
+        healthy = _write_lance(tmp_path / "healthy")
+        truncate_newest_manifest(lance_uri)
+        lines, sink = _warnings()
+        try:
+            bound = register_vss_stores(con, lance_uris=[healthy, lance_uri], expected_model=MODEL)
+        finally:
+            logger.remove(sink)
+        assert bound is True
+        assert con.execute("SELECT count(*) FROM message_embeddings").fetchone() == (len(_ROWS),)
+        assert any("can't open" in line and str(lance_uri) in line for line in lines)
 
 
 class TestRegisterVss:

@@ -54,6 +54,20 @@ class EmbeddingStoreSchemaStale(DomainError):  # noqa: N818 — names a store st
     terminal = True
 
 
+class EmbeddingStoreUnreadable(DomainError):  # noqa: N818 — names a store state, not an "*Error"
+    """The store directory holds a Lance dataset the lance extension can't open.
+
+    The extension leaves a dataset it can't open (a truncated manifest, for
+    one) out of the catalog instead of failing, so the store would otherwise
+    read as one with no table. Every corpus text would then look unembedded:
+    the whole corpus would go to the embedder, and the write after it would
+    fail on the dataset already on disk, on every run. Terminal, because
+    only an operator can restore the store or move it aside.
+    """
+
+    terminal = True
+
+
 class EmbeddingProviderUnavailable(DomainError):  # noqa: N818 — names a provider state, not an "*Error"
     """The embedding backend could not be reached or refused the request.
 
@@ -112,6 +126,7 @@ __all__ = [
     "EmbeddingProviderUnavailable",
     "EmbeddingResponseInvalid",
     "EmbeddingStoreSchemaStale",
+    "EmbeddingStoreUnreadable",
     "LanceExtensionInstallFailed",
     "LanceExtensionMissing",
 ]

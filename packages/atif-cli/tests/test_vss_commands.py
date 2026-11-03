@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from cli_fixtures import truncate_newest_manifest
+from loguru import logger
 
-from atif_cli.app import embed, search
+from atif_cli.app import embed, query, search
 from atif_cli.errors import EXIT_CODES
 from atif_cli.output import OutputFormat
 from atif_embed.infrastructure.gemma_local import load_sentence_transformer
@@ -272,6 +274,66 @@ class TestSearchCommand:
 
 
 GEMMA_MODEL = "google/embeddinggemma-2"
+
+
+class TestUnreadableStore:
+    """A store the extension can't open: embed and search stop, query keeps working."""
+
+    @pytest.fixture
+    def damaged(
+        self, corpus: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> Path:
+        # The fake provider is patched here too, so this setup run can't reach
+        # Bedrock whatever order pytest sets fixtures up in.
+        monkeypatch.setattr(
+            "atif_embed.infrastructure.cohere_bedrock.CohereBedrockEmbedder", _FakeCohere
+        )
+        embed(all_steps=True, corpus_root=corpus, fmt=OutputFormat.JSON)
+        capsys.readouterr()
+        truncate_newest_manifest(corpus / "embeddings_lance")
+        return corpus
+
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_embed_exits_78_so_the_lane_stops_retrying(
+        self, damaged: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            embed(all_steps=True, corpus_root=damaged, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["terminal_state"] == 78
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "terminal_state"
+        assert "can't open" in err["message"]
+
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_search_names_the_store_instead_of_asking_for_an_embed(
+        self, damaged: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            search("anything", corpus_root=damaged, fmt=OutputFormat.JSON)
+        assert excinfo.value.code == EXIT_CODES["terminal_state"]
+        err = json.loads(capsys.readouterr().err)["error"]
+        assert err["kind"] == "terminal_state"
+        assert str(damaged / "embeddings_lance") in err["message"]
+        assert "can't open" in err["message"]
+
+    @pytest.mark.usefixtures("_fake_cohere")
+    def test_query_binds_empty_and_warns_that_the_store_cant_be_opened(
+        self, damaged: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        lines: list[str] = []
+        sink = logger.add(lambda message: lines.append(str(message)), level="WARNING")
+        try:
+            query(
+                "SELECT count(*) AS n FROM message_embeddings",
+                corpus_root=damaged,
+                fmt=OutputFormat.JSON,
+            )
+        finally:
+            logger.remove(sink)
+        assert json.loads(capsys.readouterr().out) == [{"n": 0}]
+        store_lines = [line for line in lines if "embeddings_lance" in line]
+        assert any("can't open" in line for line in store_lines)
+        assert not any("--all --no-dry-run` to backfill" in line for line in store_lines)
 
 
 class _FakeGemmaModel:
