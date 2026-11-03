@@ -33,7 +33,7 @@ body:
         - "atif-duck — DuckDB views and macros"
         - "atif-models — model alias registry, structured-output client"
         - "atif-analytics — classify / trajectory / conflicts / friction / cluster / terms / community"
-        - "atif-embed — Bedrock embeddings, LanceDB store, backfill"
+        - "atif-embed — Bedrock embeddings, Lance store, backfill"
         - "atif-cli — command surface"
         - "Docs, CI, or release tooling"
         - "Unsure / spans several"

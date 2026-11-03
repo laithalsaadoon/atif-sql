@@ -41,7 +41,7 @@ uv tool install 'atif-sql[local]' --torch-backend cpu
 ```
 
 Python 3.13 or newer. The install is substantial and deliberately so, because the analytics and
-vector paths carry `polars`, `pyarrow`, `lancedb`, and `duckdb`. Conversion itself needs none of
+vector paths carry `polars`, `pyarrow`, and `duckdb`. Conversion itself needs none of
 that weight: the ATIF models are vendored from Harbor and step pricing reads a vendored copy of
 litellm's price data, so neither `harbor` nor `litellm` is installed. Prebuilt wheels cover CPython
 3.13 on manylinux x86_64 and aarch64, macOS arm64, and Windows x86_64. Alpine and other musl targets
@@ -109,7 +109,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM clients for GPT-6 and Claude 5.5 on Bedrock; no other package hardcodes an LLM model id |
 | `atif-analytics` | the LLM pipelines `atif-sql analyze` runs: classify, conflicts, friction, and perceived |
-| `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine + LanceDB vector store + embedding backfill |
+| `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine + a Lance vector store written through DuckDB's lance extension + embedding backfill |
 | `atif-cli` | the composition root, and the source of the `atif-sql` command (see [What you can do](#what-you-can-do)) |
 
 ## Quick start

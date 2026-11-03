@@ -1,6 +1,6 @@
 # atif-sql · Module map
 
-The uv workspace members live under `packages/*`, declared at `pyproject.toml:111`. The root is
+The uv workspace members live under `packages/*`, declared at `pyproject.toml:110`. The root is
 both the workspace and the one published distribution: its `[project]` table builds a single
 `atif-sql` wheel carrying all seven module trees, its dependency list is the union of the members'
 third-party requirements, and it also holds the shared dev dependency-group and the shared tool
@@ -8,12 +8,12 @@ config (`pyproject.toml:1`, `:16`, `:34`). The internal import graph is a
 star: atif-cli declares five of its six siblings as `==`-pinned dependencies
 (`packages/atif-cli/pyproject.toml:32-36`) and reaches atif-models only through atif-analytics,
 plus one further edge from atif-analytics to atif-models that a `forbidden` import-linter contract
-leaves open while it closes every other atif-analytics edge (`pyproject.toml:612`), with every pair
-among the other five members closed by an `independence` contract (`pyproject.toml:607`). Outside
+leaves open while it closes every other atif-analytics edge (`pyproject.toml:611`), with every pair
+among the other five members closed by an `independence` contract (`pyproject.toml:606`). Outside
 atif-cli's adapter modules, which `atif_cli.app` imports only inside command bodies, every
 cross-package import sits inside a function body or a `TYPE_CHECKING` block, so the CLI's fast path
-pulls in no duckdb, harbor, lancedb, boto3, or polars, which is why `PLC0415` is ignored
-workspace-wide (`pyproject.toml:226`).
+pulls in no duckdb, harbor, boto3, or polars, which is why `PLC0415` is ignored
+workspace-wide (`pyproject.toml:225`).
 
 ## atif-analytics
 
@@ -32,7 +32,7 @@ response schemas they bind against are pure domain models whose field descriptio
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
 wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
 table (`packages/atif-analytics/src/atif_analytics/domain/authorship.py`). Apart from atif-cli, this
-is the one member permitted to import a sibling: atif-models and nothing else (`pyproject.toml:612`).
+is the one member permitted to import a sibling: atif-models and nothing else (`pyproject.toml:611`).
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py`: the task-framing
   system prompts, public constants assembled at
@@ -67,7 +67,7 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 
 `register(con, corpus_root)` binds a DuckDB connection to a contract-shaped corpus tree and exposes the
 core views and macros (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`,
-`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129`). Those names are not introspected
+`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2130`). Those names are not introspected
 at runtime: a static catalog answers `atif-sql schema` in under 50 ms with no DuckDB bind, and two
 drift tests assert it column-for-column against `DESCRIBE` and signature-for-signature against the
 DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The analytics views and
@@ -75,11 +75,11 @@ macros register separately, each only when its backing parquet is populated, bec
 `atif-sql analyze` run is the default state
 (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`). It has `domain/` and
 `infrastructure/` but no `application/`, and unlike atif-models, the other member with that shape,
-it carries no layers contract (`pyproject.toml:554`).
+it carries no layers contract (`pyproject.toml:553`).
 
 - `packages/atif-duck/src/atif_duck/infrastructure/registry.py`: the raw readers
   (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:631`), most of the core views
-  (`:1018`) and macros (`:1890`), and the Lance attach path (`:1635`).
+  (`:1018`) and macros (`:1891`), and the Lance attach path (`:1636`).
 - `packages/atif-duck/src/atif_duck/domain/raw_readers.py`: the raw relation names and
   column shapes the registry binds and the lake stores, so neither declares them twice.
 - `packages/atif-duck/src/atif_duck/domain/lake.py`: the lake's tables, partition specs and
@@ -133,9 +133,9 @@ The composition root: it declares five of its six siblings as `==`-pinned depend
 (`packages/atif-cli/pyproject.toml:32-36`) and wires every cross-package seam: the `ConverterPort`
 adapter, the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:7-9`).
 The commands hang off one cyclopts `App`: `@app.command` functions from `convert`
-(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2357`), plus the `cron`, `lake`, and
-`corpus` sub-apps registered at `:104-109`, with `main` (`:2431`) exposed as the single console
-script named `atif-sql` (`pyproject.toml:75`). Heavy imports (duckdb, the ATIF models through
+(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2365`), plus the `cron`, `lake`, and
+`corpus` sub-apps registered at `:104-109`, with `main` (`:2439`) exposed as the single console
+script named `atif-sql` (`pyproject.toml:74`). Heavy imports (duckdb, the ATIF models through
 atif-converter, pydantic through atif-corpus) are deferred into the command bodies that use them so
 `schema`, `--help`, and `--version` stay on a lean import graph that a fresh-interpreter test pins
 (`packages/atif-cli/src/atif_cli/app.py:50-53`). Failures resolve to stable exit codes, 64 for parse,
@@ -173,40 +173,43 @@ atif-converter, pydantic through atif-corpus) are deferred into the command bodi
 ## atif-embed
 
 The vector-search write path: an embedder behind `EmbeddingProvider` (Cohere Embed v4 on Bedrock by
-default, or EmbeddingGemma 2 on this machine), a local LanceDB store behind `VectorStorePort`, and a
+default, or EmbeddingGemma 2 on this machine), a local Lance store written through DuckDB's lance
+extension behind `VectorStorePort`, and a
 corpus reader behind `TextRowsPort`
 (`packages/atif-embed/src/atif_embed/domain/ports.py:37`). `run_backfill` anti-joins step text against
 the store's uuid-to-text-hash map, embeds the misses, and bounds loss in layers: chunked discovery,
 mid-run checkpoints, and per-batch isolation inside a chunk
-(`packages/atif-embed/src/atif_embed/application/embed.py:61`). Stamps keep the vector space
+(`packages/atif-embed/src/atif_embed/application/embed.py:63`). Stamps keep the vector space
 honest: `model_id` and `dimension` on every row, checked on both the write and the read path so a
 provider switch fails loud instead of corrupting kNN
 (`packages/atif-embed/src/atif_embed/domain/embedding_guard.py:3`), and `text_hash` of the exact text
 a row was built from, so a re-conversion under a stable uuid reads as stale
 (`packages/atif-embed/src/atif_embed/domain/text_stamp.py:3`). Additive schema columns migrate online
-through a metadata-only `add_columns` when a column is missing
-(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:166`), and the store records its
-`SCHEMA_VERSION` in a sidecar file (`:67`). Discovery reads the lake's
+through `ALTER TABLE ... ADD COLUMN ... DEFAULT` when a column is missing
+(`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:329`), and the store records its
+`SCHEMA_VERSION` in a sidecar file (`:85`). Discovery reads the lake's
 `steps` through `LakeStepsPort` when a lake holds the corpus, only the rows changed since a watermark
 kept in the store directory
 (`packages/atif-embed/src/atif_embed/infrastructure/lake_text_rows.py`), and falls back to the
 per-session reader otherwise.
 
-- `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py`: connect, open or
-  create, online-migrate, delete by predicate, append, index, and compact
-  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:195`).
+- `packages/atif-embed/src/atif_embed/infrastructure/lance_store.py`: a bounded DuckDB
+  connection with the lance extension loaded and the store directory attached
+  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:228`), then open or
+  create, online-migrate, delete by uuid, append, and compact plus vacuum, all as SQL
+  (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:558`).
 - `packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py`: the `invoke_model`
   adapter under a tenacity retry with botocore retries off, and the document-`int8` / query-`float`
   asymmetry (`packages/atif-embed/src/atif_embed/infrastructure/cohere_bedrock.py:285`).
 - `packages/atif-embed/src/atif_embed/application/embed.py`: `discover_unembedded`
-  (`packages/atif-embed/src/atif_embed/application/embed.py:43`), `run_backfill` (`:61`), and the sync
-  `embed_query` the search command calls (`:280`).
+  (`packages/atif-embed/src/atif_embed/application/embed.py:45`), `run_backfill` (`:63`), and the sync
+  `embed_query` the search command calls (`:286`).
 - `packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py`: reads the
   contract corpus layout with its own DuckDB connection, since importing atif-duck is forbidden
   (`packages/atif-embed/src/atif_embed/infrastructure/corpus_text_rows.py:229`).
 - `packages/atif-embed/src/atif_embed/domain/ports.py`: the port Protocols:
   `EmbeddingProvider` (`packages/atif-embed/src/atif_embed/domain/ports.py:37`), `VectorStorePort`
-  (`:65`), `TextRowsPort` (`:93`), and `LakeStepsPort` (`:202`).
+  (`:65`), `TextRowsPort` (`:89`), and `LakeStepsPort` (`:198`).
 - `packages/atif-embed/src/atif_embed/domain/embedding_guard.py`: `ensure_store_matches`,
   the fail-loud provider and dimension rule
   (`packages/atif-embed/src/atif_embed/domain/embedding_guard.py:38`).
@@ -346,7 +349,7 @@ table doesn't price is NULL. litellm is a dev dependency, for the identity test 
 A deliberately narrow seam: a system prompt, a user prompt, and a pydantic schema in; a validated
 instance of that schema out (`packages/atif-models/src/atif_models/domain/ports.py:131`). Its only
 in-repo consumer is atif-analytics, the single edge the `forbidden` contract leaves open
-(`pyproject.toml:612`), and the registry is the only place in the workspace where a Bedrock model id
+(`pyproject.toml:611`), and the registry is the only place in the workspace where a Bedrock model id
 is written down, so a pipeline names a family and a size alias and lets `resolve` pick the id
 (`packages/atif-models/src/atif_models/domain/registry.py:6`, `:162`). Small, medium, and large resolve
 to the GPT-6 models (`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`) in the openai family, the default,

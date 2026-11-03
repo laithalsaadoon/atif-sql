@@ -454,8 +454,8 @@ description = "Dependency license report over uv.lock via osv-scanner's allowlis
 # hdbscan, hyperframe, jinja2, lancedb, numba, polars, prompt-toolkit, python-dateutil,
 # scipy, shellingham, tiktoken, tokenizers, umap-learn — every one of them permissive), and
 # `non-standard` is itself rejected as an allowlist entry, so no allowlist can clear them.
-# (hdbscan, numba, scipy, umap-learn and llvmlite left the lock on 2026-09-27; the counts
-# here are the 2026-08-28 record, not a re-measurement.)
+# (hdbscan, numba, scipy, umap-learn and llvmlite left the lock on 2026-09-27, and lancedb
+# on 2026-11-03; the counts here are the 2026-08-28 record, not a re-measurement.)
 # The 17th is llvmlite, whose real expression `BSD-2-Clause AND Apache-2.0 WITH
 # LLVM-exception` cannot be allowlisted because `LLVM-exception` is not a standalone SPDX
 # id. `UNKNOWN` IS accepted and covers the seven workspace members, which have no

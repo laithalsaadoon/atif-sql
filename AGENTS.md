@@ -76,8 +76,9 @@ wheel bundles every member; members under `packages/*`):
   `infrastructure` > `domain`.
 - `packages/atif-embed`: Cohere Embed v4 on Bedrock (the default) or
   EmbeddingGemma 2 on this machine (`ATIF_SQL_EMBED_PROVIDER=gemma`, the
-  optional `local` extra, its own store `embeddings_lance_gemma`) + LanceDB
-  store + the backfill and orphan-prune use cases. torch, transformers and
+  optional `local` extra, its own store `embeddings_lance_gemma`) + a Lance
+  store written through DuckDB's lance extension (no `lancedb`; a guard test
+  fails on any import of it) + the backfill and orphan-prune use cases. torch, transformers and
   sentence-transformers load only inside the Gemma adapter, by name, and
   the lean-import test forbids them on `import atif_cli.app`. Discovery reads the lake's `steps`
   through the `LakeStepsPort` port (atif-cli implements it over atif-duck's

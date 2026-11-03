@@ -1575,9 +1575,10 @@ def _lance_table_present(con: duckdb.DuckDBPyConnection) -> bool:
 
     Probed via ``duckdb_tables()`` rather than a speculative SELECT: a Lance
     directory that exists with metadata but no embeddings table (legitimate
-    intermediate state after a ``lancedb.connect`` that never created a
-    table) ATTACHes cleanly but then blows up at view-bind time with a
-    catalog error. The right gate is "is the table actually there?".
+    intermediate state: the store directory holds its sidecar or lake
+    watermark before the first write creates the table) ATTACHes cleanly but
+    then blows up at view-bind time with a catalog error. The right gate is
+    "is the table actually there?".
     """
     row = con.execute(
         """
@@ -1641,11 +1642,11 @@ def register_vss(
     expected_dim: int | None = None,
     dim: int = 1024,
 ) -> bool:
-    """Bind ``message_embeddings`` over a LanceDB local dataset.
+    """Bind ``message_embeddings`` over a local Lance dataset.
 
-    LanceDB stores embeddings + its IVF_HNSW_SQ index in one place (written
-    by atif-embed's backfill); reads come back through DuckDB via the lance
-    core extension (``LOAD lance; ATTACH (TYPE LANCE)``). The extension is
+    atif-embed's backfill writes the embeddings as a Lance dataset through
+    DuckDB's lance core extension, and reads come back through the same
+    extension (``LOAD lance; ATTACH (TYPE LANCE)``). The extension is
     only LOADed, never INSTALLed, here: :func:`load_lance_extension` checks
     the local extension directory first and a missing extension degrades to
     the empty fallback table with a warning, so registration never reaches
@@ -1653,17 +1654,17 @@ def register_vss(
     (:func:`install_lance_extension`, behind ``atif-sql embed``). When no
     store directory exists the extension is not loaded at all, which is the
     state of every corpus that has not run ``embed``.
-    The store probe runs through DuckDB itself. atif-duck declares no lancedb
-    dependency: lancedb belongs to atif-embed, which writes the store, and the
-    independence contract forbids an import edge between the two packages — so
-    the lance extension is the only thing atif-duck may read the store with.
+    The store probe runs through DuckDB itself. The independence contract
+    forbids an import edge between atif-duck and atif-embed, which writes the
+    store, so atif-duck reads it only through the lance extension, never
+    through atif-embed's store module.
 
     Parameters
     ----------
     con
         Open DuckDB connection.
     lance_uri
-        Local LanceDB dataset directory.
+        Local Lance store directory (the namespace holding ``embeddings.lance``).
     expected_model
         When supplied (by the composition root), the active embedder's
         ``model_id``. Read against the store's stamped ``model`` column via
@@ -2174,7 +2175,7 @@ def register(
         Default ``False`` — an empty or absent store degrades to the empty
         fallback table, so registration is otherwise always safe.
     lance_uri
-        Local LanceDB dataset directory; defaults to
+        Local Lance store directory; defaults to
         ``<corpus_root>/embeddings_lance`` (atif-embed's per-corpus default).
     expected_model, expected_dim
         Active embedder identity for :func:`register_vss`'s fail-loud guard.

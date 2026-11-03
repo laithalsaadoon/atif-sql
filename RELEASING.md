@@ -206,7 +206,9 @@ du -sk /tmp/weight/lib/python3.13/site-packages          # installed on disk, no
 Count the requirement lines for the dependency roster (the `sys_platform == 'win32'` lines
 don't install on linux or macOS), and record both numbers in the release PR rather than
 here, where they would go stale. The weight sits in the analytics and vector paths:
-`polars-runtime-32`, `pyarrow`, `lancedb`, and `duckdb` are most of it.
+`polars-runtime-32`, `pyarrow`, and `duckdb` are most of it. DuckDB's `lance` extension, which
+`embed`, `query` and `search` use for the vector store, isn't part of this closure: `atif-sql embed`
+downloads it into DuckDB's own extension directory, so the recipe above doesn't count it.
 
 **Prebuilt wheel coverage is complete on every glibc target.** Every package in the closure
 that ships native code has cp313 wheels for manylinux x86_64, manylinux aarch64, macOS arm64,
@@ -214,9 +216,10 @@ and Windows x86_64. The one gap there used to be, `hdbscan` on manylinux aarch64
 ever published an aarch64 wheel, so a first `uvx atif-sql` on Graviton compiled Cython
 extensions), left with hdbscan and the structural pipelines on 2026-09-27.
 
-Alpine and other musl targets are not supported: `duckdb` and `lancedb` publish no
-musllinux wheels, and `lancedb==0.39.0` publishes **no sdist at all**, so there is nothing to
-build from.
+Alpine and other musl targets are not supported: `duckdb` 2.0.0 publishes no musllinux
+wheels (only an sdist, which means compiling DuckDB from source), and DuckDB's extension
+repository has no `linux_amd64_musl` build of the `lance` extension (checked 2026-11-03), so the
+vector store could not be written or read there even after that build.
 
 **harbor and litellm are not in the closure.** harbor's agent runtime carried a web server
 (`fastapi`, `uvicorn`, `starlette`), the whole `supabase` client stack, `litellm` and through
@@ -226,6 +229,13 @@ now vendored in `atif_converter.domain.atif` and the prices in
 `atif_converter/domain/model_prices.json` (see CONTRIBUTING), so both distributions are dev
 dependencies only. `uv tree --frozen --no-dev --invert --package harbor` (and `--package
 litellm`) prints nothing, and `test_dev_only_imports_guard.py` fails if `src/` imports either.
+
+**lancedb is not in the closure.** atif-embed writes its Lance store through DuckDB's `lance`
+extension, the one atif-duck already read it with, so `lancedb` and six packages that only it
+pulled into the runtime closure (`deprecation`, `lance-namespace`,
+`lance-namespace-urllib3-client`, `numpy`, `packaging`, `tqdm`) left on 2026-11-03. `uv tree --frozen
+--invert --package lancedb` prints nothing, and `packages/atif-cli/tests/test_no_lancedb.py`
+fails if anything under `packages/` imports it or any manifest or the lock brings it back.
 
 ## The normal path
 

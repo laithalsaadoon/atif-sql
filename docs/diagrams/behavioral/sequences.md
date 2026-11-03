@@ -56,7 +56,7 @@ sequenceDiagram
     participant REG as atif_duck register
     participant DB as DuckDB in-process
     participant FS as corpus artifacts
-    participant LN as LanceDB store
+    participant LN as Lance store
     participant OUT as stdout emitter
     CLI->>DB: connect()
     CLI->>REG: register(con)
@@ -81,9 +81,9 @@ Sources, in dispatch order:
   attached at `:1501` when it holds the corpus, `register` called at `:1505`,
   `_harden_query_connection` at `:537` called from `:1514`, caller SQL executed at `:1536`, emit at
   `:1542`.
-- atif_duck register: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2129`, whose
-  documented order is fixed at `:2150-2158`: `register_raw` `:631` (`register_lake_raw` instead when
-  the lake is attached), `register_views` `:1018`, `register_vss` `:1635`, `register_macros` `:1890`,
+- atif_duck register: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2130`, whose
+  documented order is fixed at `:2151-2159`: `register_raw` `:631` (`register_lake_raw` instead when
+  the lake is attached), `register_views` `:1018`, `register_vss` `:1636`, `register_macros` `:1891`,
   then the authorship surface and the analytics pair.
 - DuckDB in-process: the connection opened by the CLI; the sandbox settings and
   `lock_configuration` are issued against it at `packages/atif-cli/src/atif_cli/app.py:597-606`.
@@ -91,10 +91,10 @@ Sources, in dispatch order:
   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:749-764`; the analytics parquets bind
   through `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`, with the analytics
   macros at `:236`.
-- LanceDB store: reached through DuckDB's lance extension;
-  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1697-1714` loads it and ATTACHes the
-  store (installing it is `install_lance_extension` at `:1619`, behind `atif-sql embed`); the
-  stamped `(model, dim)` identity is read at `:1746` and checked by
+- Lance store: written by atif-embed and read here, both through DuckDB's lance extension;
+  `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1698-1715` loads it and ATTACHes the
+  store (installing it is `install_lance_extension` at `:1620`, behind `atif-sql embed`); the
+  stamped `(model, dim)` identity is read at `:1747` and checked by
   `packages/atif-duck/src/atif_duck/domain/embedding_guard.py:51`.
 - stdout emitter: `packages/atif-cli/src/atif_cli/output.py:158`; a registration failure routes
   through `packages/atif-cli/src/atif_cli/duck_errors.py:67` instead.
