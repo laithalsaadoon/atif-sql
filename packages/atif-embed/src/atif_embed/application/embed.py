@@ -4,7 +4,7 @@
 
 Discovers steps with no CURRENT embedding (through :class:`TextRowsPort`,
 against the Lance store's ``{uuid: text_hash}`` map), embeds them through the
-:class:`EmbeddingProvider` port, and appends the vectors to the LanceDB store
+:class:`EmbeddingProvider` port, and appends the vectors to the Lance store
 keyed by the step's primary raw-record uuid.
 
 The provider's ``model_id`` / ``dimension`` are stamped on every row and
@@ -12,9 +12,11 @@ enforced against the store's prior stamp (fail-loud on a provider switch:
 mixing vector spaces silently corrupts kNN search). Loss is bounded at three
 levels: discovery is consumed one chunk at a time, checkpoints of
 ``max(batch_size * 4, 256)`` rows commit progress mid-run, and a batch that
-fails terminally inside a chunk does not discard the batches around it. A
-Lance ``optimize()`` runs every 8 chunks and a final optimize +
-``ensure_index`` on the way out.
+fails terminally inside a chunk does not discard the batches around it. The
+store is compacted every 8 chunks and once more on the way out.
+
+No vector index is built: ``atif-sql search`` ranks by an exact cosine scan
+over the whole store, which reads no index.
 """
 
 from __future__ import annotations
@@ -114,7 +116,12 @@ async def run_backfill(
     if store is None:
         from atif_embed.infrastructure.lance_store import LanceVectorStore
 
-        store = LanceVectorStore(lance_uri, dim=settings.embedding_dim)
+        # A real run reaches Bedrock anyway, so it may also download the lance
+        # extension the store is written through. A dry run never reaches the
+        # network.
+        store = LanceVectorStore(
+            lance_uri, dim=settings.embedding_dim, install_extension=not dry_run
+        )
 
     plan_model = settings.expected_embedding_identity()[0]
     batch_size = settings.active_batch_size
@@ -219,9 +226,8 @@ async def run_backfill(
                 logger.info("Replacing {} stale rows whose source text changed", deleted)
             now = datetime.now(UTC)
             # Force a fixed-size Array so to_arrow() produces
-            # pa.list_(pa.float32, dim) — what Lance requires for vector
-            # columns. A regular pl.List becomes a variable-size list and
-            # Lance rejects it for indexing.
+            # pa.list_(pa.float32(), dim), the shape of the store's FLOAT[dim]
+            # column. A regular pl.List would be a variable-size list.
             df = pl.DataFrame(
                 {
                     "uuid": [p.uuid for p, _ in embedded],
@@ -255,10 +261,10 @@ async def run_backfill(
 
         chunk = list(islice(rows, chunk_size))
 
-    # Final compaction + index ensure on the way out so the search command
-    # sees an up-to-date index without paying brute-force scan latency.
+    # Final compaction on the way out, so the next run starts from few
+    # fragments and the old versions this run made don't outlive the
+    # retention window.
     store.optimize()
-    store.ensure_index(metric=settings.hnsw_metric)
 
     # A watermark may only move past rows that are all stored: a failed row
     # has to be found again next run, and a run cut short by --limit never

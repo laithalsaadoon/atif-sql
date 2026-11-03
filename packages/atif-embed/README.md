@@ -2,8 +2,9 @@
 
 Embedding pipeline for the atif-sql workspace: two embedders behind one
 port (Cohere Embed v4 on Bedrock, or EmbeddingGemma 2 on this machine), a
-local LanceDB vector store, and the backfill use case that discovers and
-embeds corpus steps with no current embedding.
+local Lance vector store written through DuckDB's lance extension, and the
+backfill use case that discovers and embeds corpus steps with no current
+embedding.
 
 ## Providers
 
@@ -39,7 +40,7 @@ atif_embed/
     discovery.py         PendingSelection — first-wins, hash skip, stale, limit
     embedding_guard.py   ensure_store_matches — fail-loud (model, dim) guard
     errors.py            DomainError taxonomy
-    sql_literal.py       SqlFragment + sql_literal (the Lance delete predicate's quoting)
+    sql_literal.py       SqlFragment + sql_literal (quoting for ATTACH and Lance DDL)
     text_stamp.py        text_hash + the 50K cap + PendingText
   infrastructure/
     cohere_bedrock.py    Cohere Embed v4 adapter (batch 96, semaphore 8,
@@ -47,7 +48,8 @@ atif_embed/
     gemma_local.py       EmbeddingGemma 2 adapter (text-only, pinned revision,
                          Document / SearchQuery prompts, bf16 or fp32)
     providers.py         build_embedder — the adapter the settings select
-    lance_store.py       LanceDB embeddings table + IvfHnswSq cosine index
+    lance_extension.py   load (and on a real run, install) DuckDB's lance extension
+    lance_store.py       Lance embeddings table, written as DuckDB SQL
     corpus_text_rows.py  DuckDbTextRows — TextRowsPort over the contract corpus
     lake_text_rows.py    LakeTextRows — TextRowsPort over LakeStepsPort, with
                          the lake watermark; falls back to DuckDbTextRows
@@ -117,7 +119,7 @@ implements it over atif-duck's `infrastructure.lake_steps`, and
 
 Lance table `embeddings` at `ATIF_SQL_LANCE_URI`
 (default `<corpus_root>/embeddings_lance` for Cohere and
-`<corpus_root>/embeddings_lance_gemma` for Gemma):
+`<corpus_root>/embeddings_lance_gemma` for Gemma), every column non-null:
 
 | column      | type                  |
 |-------------|-----------------------|
@@ -139,11 +141,36 @@ the Lance directory and re-run `atif-sql embed --all --no-dry-run` (a bare
 
 Schema evolution is versioned (`schema_version.json` sidecar next to the
 table; currently v2) and ADDITIVE changes migrate online: opening a store
-that predates a column evolves the table in place (`add_columns`,
-metadata-only) and backfills a sentinel, which the staleness anti-join then
-treats as a mismatch — the store re-embeds itself incrementally over
-successive runs while search stays up. Only a provider/dimension switch is
-a rebuild, via the fail-loud guard above.
+that predates a column evolves the table in place (`ALTER TABLE ... ADD
+COLUMN ... DEFAULT`, which leaves the vectors alone) and backfills a
+sentinel, which the staleness anti-join then treats as a mismatch — the
+store re-embeds itself incrementally over successive runs while search stays
+up. Only a provider/dimension switch is a rebuild, via the fail-loud guard
+above.
+
+## Writing the store
+
+The store is written through DuckDB's `lance` core extension, the same one
+atif-duck reads it with, so atif-embed doesn't depend on the `lancedb`
+package. `lance_store.connect_db` opens one DuckDB connection per run with a
+1 GiB `memory_limit`, 2 threads, a private spill directory, extension
+autoloading off and `TimeZone` pinned to UTC, then ATTACHes the store
+directory as a Lance namespace:
+
+- an append is `INSERT INTO ... SELECT` from the chunk's Arrow table;
+- a replace deletes the stale uuids first with `MERGE ... WHEN MATCHED THEN
+  DELETE` against an Arrow table of uuids (the extension refuses a `DELETE`
+  whose `IN` list DuckDB plans as a join, which happens past four values);
+- compaction is `OPTIMIZE`, then `VACUUM LANCE` with a one-hour
+  `older_than_seconds`, so old versions don't pile up;
+- a new store is created at Lance data storage version 2.2, the version
+  lancedb 0.39 and 0.40 create, so atif-sql 0.5.0 can still open it.
+
+A real run installs the extension when it's absent. A dry run never
+downloads it: over an existing store without the extension it stops with
+`LanceExtensionMissing` (exit 78) and names `atif-sql embed
+--install-extension`. Embed builds no vector index: `atif-sql search` ranks
+by an exact cosine scan.
 
 `text_hash` is what makes re-conversion safe. A step's uuid survives a
 harbor/converter fix but its flattened text may not, so discovery compares

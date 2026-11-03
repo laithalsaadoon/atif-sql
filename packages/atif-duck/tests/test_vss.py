@@ -2,9 +2,10 @@
 
 """VSS tests: register_vss over a tiny REAL lance table + the fixture corpus.
 
-The lance table is written with raw lancedb + pyarrow (a local library — no
-network), NOT via atif-embed: the independence contract keeps even the test
-surface free of sibling-package imports.
+The lance table is written with raw DuckDB SQL through the lance extension
+(local, no network once the suite's session fixture has installed it), NOT
+via atif-embed: the independence contract keeps even the test surface free of
+sibling-package imports.
 
 Vectors are hand-placed on known directions AND at deliberately UNEVEN
 magnitudes, mirroring the live store's un-normalized int8-cast vectors. That
@@ -21,7 +22,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import duckdb
-import lancedb
 import pyarrow as pa
 import pytest
 from duck_fixtures import SESSION_IDS
@@ -57,31 +57,42 @@ EXPECTED_ORDER = ["a-1", "a-3", "sa-1", "u-2"]
 EXPECTED_L2_ORDER = ["u-2", "a-3", "a-1", "sa-1"]
 
 
-def _write_lance(uri: Path, *, model: str = MODEL, dim: int = DIM) -> Path:
-    schema = pa.schema(
-        [
-            pa.field("uuid", pa.string(), nullable=False),
-            pa.field("model", pa.string(), nullable=False),
-            pa.field("dim", pa.int32(), nullable=False),
-            pa.field("embedding", pa.list_(pa.float32(), dim), nullable=False),
-            pa.field("embedded_at", pa.timestamp("us", tz="UTC"), nullable=False),
-        ]
-    )
+def write_lance_rows(
+    uri: Path, rows: list[tuple[str, list[float]]], *, model: str = MODEL, dim: int = DIM
+) -> Path:
+    """Write ``rows`` as the store's ``embeddings`` table at ``uri``, through DuckDB.
+
+    The same extension atif-duck reads the store with writes it here: the
+    directory is ATTACHed as a Lance namespace and the table is created from
+    an Arrow table whose ``embedding`` is a fixed-size float32 list, so it
+    lands as ``FLOAT[dim]``, the shape atif-embed writes.
+    """
     now = datetime.now(UTC)
     table = pa.table(
         {
-            "uuid": [u for u, _ in _ROWS],
-            "model": [model] * len(_ROWS),
-            "dim": [dim] * len(_ROWS),
-            "embedding": pa.array([v for _, v in _ROWS], type=pa.list_(pa.float32(), dim)),
-            "embedded_at": [now] * len(_ROWS),
-        },
-        schema=schema,
+            "uuid": [u for u, _ in rows],
+            "model": [model] * len(rows),
+            "dim": pa.array([dim] * len(rows), type=pa.int32()),
+            "embedding": pa.array([v for _, v in rows], type=pa.list_(pa.float32(), dim)),
+            "embedded_at": pa.array([now] * len(rows), type=pa.timestamp("us", tz="UTC")),
+        }
     )
     uri.mkdir(parents=True, exist_ok=True)
-    db = lancedb.connect(str(uri))
-    db.create_table("embeddings", data=table, mode="create")
+    quoted = "'" + str(uri).replace("'", "''") + "'"
+    writer = duckdb.connect(":memory:")
+    try:
+        writer.execute("SET TimeZone = 'UTC'")
+        writer.execute("LOAD lance")
+        writer.execute(f"ATTACH {quoted} AS fixture_store (TYPE LANCE)")
+        writer.register("fixture_rows", table)
+        writer.execute("CREATE TABLE fixture_store.main.embeddings AS SELECT * FROM fixture_rows")
+    finally:
+        writer.close()
     return uri
+
+
+def _write_lance(uri: Path, *, model: str = MODEL, dim: int = DIM) -> Path:
+    return write_lance_rows(uri, _ROWS, model=model, dim=dim)
 
 
 @pytest.fixture

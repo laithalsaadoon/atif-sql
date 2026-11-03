@@ -84,6 +84,27 @@ class EmbeddingResponseInvalid(DomainError):  # noqa: N818 — names a response 
     """
 
 
+class LanceExtensionMissing(DomainError):  # noqa: N818 — names an install state, not an "*Error"
+    """DuckDB's lance extension isn't installed, and this call may not download it.
+
+    The store is read and written only through that extension. A read-only
+    call (a dry run, a dry prune) never reaches the network, so it stops here
+    instead. That's terminal: retrying won't install anything, and
+    ``atif-sql embed --install-extension`` (or any real embed run) will.
+    """
+
+    terminal = True
+
+
+class LanceExtensionInstallFailed(DomainError):  # noqa: N818 — names an install state, not an "*Error"
+    """Downloading DuckDB's lance extension failed.
+
+    A real embed run installs the extension when it's absent. A failed
+    download usually means the network or the extension repository was
+    unavailable, so the next run may succeed: the error is transient.
+    """
+
+
 __all__ = [
     "DomainError",
     "EmbeddingProviderMismatch",
@@ -91,4 +112,6 @@ __all__ = [
     "EmbeddingProviderUnavailable",
     "EmbeddingResponseInvalid",
     "EmbeddingStoreSchemaStale",
+    "LanceExtensionInstallFailed",
+    "LanceExtensionMissing",
 ]

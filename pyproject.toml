@@ -45,7 +45,6 @@ dependencies = [
     "cyclopts>=5.1.1",
     "duckdb>=2.0.0,<3",
     "imagesize>=2.0",
-    "lancedb>=0.30,<0.41",
     "loguru>=0.7.3",
     "polars>=1.40.0",
     "pyarrow>=23.0.1",
@@ -222,8 +221,8 @@ ignore = [
     "E501",   # Line length is the formatter's. E501 can only fire where it cannot break a line: 14 sites, 8 of them inside LLM prompt text where rewrapping changes the string sent to the model.
 
     # --- measured house rules ----------------------------------------------
-    "ANN401", # 21 sites, each a duckdb / lancedb / boto3 / tenacity handle or a decoded-JSON value from a distribution shipping no `py.typed`. `Any` is the honest annotation there; `object` would only move the cast inward.
-    "PLC0415", # 182 sites. `atif_cli.app` MUST NOT import duckdb / harbor / lancedb / boto3 / polars at module scope, and `packages/atif-cli/tests/test_lean_import.py` asserts that in a fresh interpreter — a top-level import fails a test, so the deferred import is the contract.
+    "ANN401", # 21 sites, each a duckdb / boto3 / tenacity handle or a decoded-JSON value from a distribution shipping no `py.typed`. `Any` is the honest annotation there; `object` would only move the cast inward.
+    "PLC0415", # 182 sites. `atif_cli.app` MUST NOT import duckdb / harbor / boto3 / polars at module scope, and `packages/atif-cli/tests/test_lean_import.py` asserts that in a fresh interpreter — a top-level import fails a test, so the deferred import is the contract.
     "D401",   # 33 sites, every one a value-returning accessor or predicate whose summary names the returned value as a noun phrase ("True when …", "The newest ``mtime_ns`` …"). Imperative mood describes an action; these describe a value.
     "RUF001", # 13 sites, all typography inside string literals (em dash, arrow, non-breaking hyphen).
     "RUF002", # 52 sites, the same typography inside docstrings.
@@ -241,7 +240,7 @@ ignore = [
     # The deferred-import property that DOES matter here is enforced where it
     # matters, by a test rather than a lint: `test_lean_import.py` proves in a
     # fresh interpreter that `import atif_cli.app` pulls in no duckdb / harbor /
-    # lancedb / boto3 / polars. TC004 / TC005 / TC006 / TC010 stay ON.
+    # boto3 / polars. TC004 / TC005 / TC006 / TC010 stay ON.
     "TC001", "TC002", "TC003",
 ]
 
@@ -759,8 +758,10 @@ exclude = [
 # ~250). Neither is enough on its own, and sklearn / umap / hdbscan /
 # graspologic_native have no stubs to add, so the rules stay off rather than
 # carrying a hundred per-site suppressions that say the same sentence.
-# (2026-09-27: those four, and scipy, left with the structural pipelines; the
-# counts above are the 2026-08-28 record, not a re-measurement.)
+# (2026-09-27: those four, and scipy, left with the structural pipelines;
+# 2026-11-03: lancedb left too, when atif-embed began writing its store through
+# DuckDB's lance extension. The counts above are the 2026-08-28 record, not a
+# re-measurement.)
 reportUnknownMemberType = "none"
 reportUnknownVariableType = "none"
 reportUnknownArgumentType = "none"

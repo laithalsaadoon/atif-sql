@@ -23,10 +23,9 @@ _FORBIDDEN_EAGER_IMPORTS = (
     # command defers it into its body.
     "atif_analytics",
     "polars",
-    # VSS stack: lancedb costs ~2.6s of import, boto3 hundreds of ms; both
-    # belong inside the embed/search command bodies.
+    # VSS stack: atif_embed's store loads duckdb and pyarrow, boto3 costs
+    # hundreds of ms; both belong inside the embed/search command bodies.
     "atif_embed",
-    "lancedb",
     "boto3",
     "polars",
     # The local embedding stack (the optional `local` extra): torch alone takes

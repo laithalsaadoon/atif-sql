@@ -85,13 +85,13 @@ class EmbedSettings(BaseSettings):
     #: Texts per local forward pass. Peak memory grows with it times the
     #: longest text in the batch.
     gemma_batch_size: int = Field(default=32, ge=1)
-    #: Local LanceDB dataset URI. ``None`` (the default) resolves per corpus
+    #: Local Lance store directory. ``None`` (the default) resolves per corpus
     #: and per provider via :meth:`resolve_lance_uri` — one vector store per
     #: corpus, so re-pointing the source root never mixes two corpora's
-    #: vectors (the corpus-scoping rule).
+    #: vectors (the corpus-scoping rule). ``ATIF_SQL_HNSW_METRIC``, which
+    #: picked the metric of a vector index embed no longer builds, is ignored
+    #: like any other unknown key (``extra="ignore"``).
     lance_uri: Path | None = None
-    #: Distance metric for the IVF_HNSW_SQ index.
-    hnsw_metric: Literal["cosine", "l2", "dot"] = "cosine"
 
     @model_validator(mode="after")
     def _width_fits_provider(self) -> Self:

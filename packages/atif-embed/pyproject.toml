@@ -1,7 +1,7 @@
 [project]
 name = "atif-embed"
 version = "0.5.0"
-description = "Embedding providers (Cohere Embed v4 on Bedrock, or EmbeddingGemma 2 on this machine) + LanceDB vector store + embed backfill over the ATIF corpus."
+description = "Embedding providers (Cohere Embed v4 on Bedrock, or EmbeddingGemma 2 on this machine) + a Lance vector store written through DuckDB + embed backfill over the ATIF corpus."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -19,7 +19,6 @@ classifiers = [
 dependencies = [
     "boto3>=1.42.91",
     "duckdb>=2.0.0,<3",
-    "lancedb>=0.30,<0.41",
     "loguru>=0.7.3",
     "polars>=1.40.0",
     "pyarrow>=23.0.1",
