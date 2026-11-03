@@ -133,15 +133,15 @@ the audit never read the session separately.
 
 ## analyze: orchestrate the analytics stages
 
-Entry point: `packages/atif-cli/src/atif_cli/app.py:1656`
+Entry point: `packages/atif-cli/src/atif_cli/app.py:1718`
 
 1. Resolve `AnalyticsSettings`, reusing the corpus-root resolution the other
    commands share, then let `--max-sessions` and `--max-cost-usd` override the
-   env ceilings so a crontab line carries its spend cap visibly (`:1733-1736`).
+   env ceilings so a crontab line carries its spend cap visibly (`:1795-1798`).
    `--llm-only` is accepted and dropped, since every stage is an LLM stage.
 2. Open the lake's session source when the lake holds the corpus, else warn
    once and read the files (`--no-lake` forces the files):
-   `packages/atif-cli/src/atif_cli/app.py:1760`. Build one `CorpusReader` over
+   `packages/atif-cli/src/atif_cli/app.py:1822`. Build one `CorpusReader` over
    it, shared by every stage: the steps memo is the expensive part and every
    stage walks the same sessions
    (`packages/atif-analytics/src/atif_analytics/application/analyze.py:62`,
@@ -158,7 +158,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1656`
 5. Emit the per-stage summary carrying `budget_exhausted` and, on a real run,
    `llm_spent_usd`:
    `packages/atif-analytics/src/atif_analytics/application/analyze.py:150-152`,
-   `packages/atif-cli/src/atif_cli/app.py:1757`.
+   `packages/atif-cli/src/atif_cli/app.py:1819`.
 
 ### Related
 
@@ -295,16 +295,16 @@ deletes) the ones no step names (`packages/atif-embed/src/atif_embed/application
 
 ## query: one SQL statement over the catalog
 
-Entry point: `packages/atif-cli/src/atif_cli/app.py:1320`
+Entry point: `packages/atif-cli/src/atif_cli/app.py:1382`
 
 1. Short-circuit `--examples` to the examples listing without opening DuckDB;
-   a missing statement emits a classified parse error and exits 64 (`:1445-1459`).
+   a missing statement emits a classified parse error and exits 64 (`:1507-1521`).
 2. Resolve the corpus root and the expected embedder identity, then open an
-   in-memory DuckDB connection (`:1480-1495`).
+   in-memory DuckDB connection (`:1542-1557`).
 3. Attach the lake when it exists, its schema is current, and it holds the
    corpus: every raw relation is then a view over the lake's tables scoped to
    that corpus, and nothing loads before the statement runs
-   (`packages/atif-cli/src/atif_cli/app.py:1602`,
+   (`packages/atif-cli/src/atif_cli/app.py:1664`,
    `packages/atif-duck/src/atif_duck/infrastructure/lake.py:1037`). Otherwise
    warn once and register the raw readers over the contract layout (trajectory rows come
    from `read_parquet` for sessions with current columnar artifacts and from
@@ -390,56 +390,66 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:2046`
 
 ## refresh lane: the scheduled driver
 
-Entry point: `scripts/atif-sql-refresh.sh:160`
+Entry point: `scripts/atif-sql-refresh.sh:183`
 
 1. Pin the identity trio once from the invoking environment and unset
    `AWS_PROFILE` and `AWS_DEFAULT_PROFILE`, because an inherited profile name
    with no matching config entry makes botocore raise at credential resolution
-   before Bedrock is reached (`:135-140`, `:147`).
+   before Bedrock is reached (`:158-163`, `:170`).
 2. Normalize the lane argument before it names a lock file, so two spellings of
    one lane cannot take two locks; an unknown mode exits 64 rather than
    defaulting to a plane. The removed `structural` lane (and `struct`) still
-   parses: it logs one "lane removed" line and exits 0 (`:160-168`, `:164-167`).
+   parses: it logs one "lane removed" line and exits 0 (`:183-191`, `:187-190`).
 3. Read the rotated Bedrock bearer token at run time and export it only when
    non-empty, because botocore treats an empty value as a real broken
-   credential and skips the default chain (`:238-241`).
+   credential and skips the default chain (`:261-264`).
 4. Resolve the corpus list (the primary config directory first, then each
    `ATIF_SQL_EXTRA_CONFIG_DIRS` entry) and export both `CLAUDE_CONFIG_DIR` and
    `ATIF_SQL_SOURCE_ROOT` per corpus so the source root and the corpus slug
-   stay coherent (`:250-260`, `:497-498`).
+   stay coherent (`:273-283`, `:570-571`).
 5. Resolve the CLI through the override, then a user install, then the
    workspace venv script, and take a nonblocking per-lane `flock`: a busy lane
-   skips this tick rather than queueing behind it (`:267-273`, `:279-285`).
+   skips this tick rather than queueing behind it (`:290-296`, `:302-308`).
 6. On the `llm` lane, probe `atif-sql --help` for `analyze` and exit 0 when it
    is absent, so an armed crontab line against an older CLI is a no-op instead
-   of a nightly error (`:324-329`).
+   of a nightly error (`:397-402`).
 7. Run the lane per corpus: `materialize` plus a bounded `embed --limit 500`
    piggyback, or
    `analyze --no-dry-run --llm-only --max-sessions 1000000 --max-cost-usd 1000000`,
    the only spending line in the file, with both caps set out of reach on
-   purpose (`:394`, `:446`). The `materialize` lane then runs one extra
+   purpose (`:467`, `:519`). The `materialize` lane then runs one extra
    `materialize --agent codex` pass over the Codex transcripts, with no embed
-   piggyback (`:453`).
+   piggyback (`:526`).
 8. On embed exit 78, write a terminal marker keyed on the store path and its
    mtime and suppress further embeds for that corpus until the mtime changes;
-   every other nonzero exit stays transient and retries next tick (`:398-403`,
-   `:380-390`).
+   every other nonzero exit stays transient and retries next tick (`:471-476`,
+   `:453-463`).
 9. The `compact` lane runs `atif-sql lake compact --memory-limit 2GiB` once
    (not per corpus; `ATIF_SQL_REFRESH_COMPACT_MEMORY_LIMIT` changes the
    budget) under a 4G scope, after taking the materialize lane's lock too (waiting up to
    `ATIF_SQL_REFRESH_COMPACT_WAIT_SECONDS`), so no materialize tick writes the
    lake while it runs; a CLI without `lake` skips with one line.
+10. After compaction, whether it ran, skipped or failed, the `compact` lane
+    runs `atif-sql status --vector-probe` once per corpus and logs
+    `vector-probe <corpus>: rows=<n> scan_s=<s>` (`:354-393`). When the median
+    `scan_s` of that corpus's last 7 such lines passes 2.0 s it also logs a
+    `TRIP` line, the signal to move `search` onto a vector index; with fewer
+    than 7 lines there's no median yet (`:343-351`, `:389`). A failing probe is
+    a `WARN` line that leaves the lane's exit code alone, a corpus with no
+    store is one skip line, and a CLI without the flag skips the probe
+    (`:365`, `:377`, `:383`).
 
 ### Related
 
-- `scripts/atif-sql-refresh-selftest.sh:121`
-- `scripts/atif-sql-refresh-selftest.sh:134`
+- `scripts/atif-sql-refresh-selftest.sh:130`
+- `scripts/atif-sql-refresh-selftest.sh:143`
+- `scripts/atif-sql-refresh-selftest.sh:651`
 - `packages/atif-cli/src/atif_cli/cron.py:47`
 - `packages/atif-cli/src/atif_cli/app.py:104`
 
 ## Minor flows
 
-- status: entry at `packages/atif-cli/src/atif_cli/app.py:1162`. Read-only
+- status: entry at `packages/atif-cli/src/atif_cli/app.py:1205`. Read-only
   freshness report: scans source mtimes and replays the same pure plan
   `materialize` would build, generation staleness included, without converting anything, so its stale,
   up-to-date, and live counts are exactly what a pass would do

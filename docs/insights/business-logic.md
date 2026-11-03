@@ -224,7 +224,7 @@ perceived pipeline admits a session only at 2 or more pairs
   explicit-scope gate under Embeddings and the SQL surface is what keeps a mistyped `embed`
   from spending. `packages/atif-analytics/src/atif_analytics/application/analyze.py:42`,
   `packages/atif-analytics/src/atif_analytics/application/use_cases/perceived.py:366`,
-  `packages/atif-cli/src/atif_cli/app.py:1662`,
+  `packages/atif-cli/src/atif_cli/app.py:1724`,
   `packages/atif-embed/src/atif_embed/application/embed.py:71`.
 - **Session ceiling:** each LLM pipeline admits at most `llm_max_sessions_per_run`
   sessions per run (default 50, newest-first so fresh sessions win), enforced DURING the
@@ -342,7 +342,7 @@ perceived pipeline admits a session only at 2 or more pairs
 
 - **Cron lanes, split by cost:** `materialize` every 10 minutes (cheap incremental),
   `llm` once daily at 10:20 (the lane that spends), and `compact` nightly at 03:40 (lake
-  maintenance).
+  maintenance, then one timed vector scan per corpus).
   `packages/atif-cli/src/atif_cli/cron.py:43-51`.
 - **`cron install` never writes a crontab:** it prints the block for a human to paste,
   after checking `crontab -l`. `packages/atif-cli/src/atif_cli/cron.py:186-203`.

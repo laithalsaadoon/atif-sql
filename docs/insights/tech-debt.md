@@ -69,7 +69,7 @@ because the search was narrow.
   an osv-scanner flag at `mise.toml:431-432`, short SPDX ids at `.github/workflows/dependency-review.yml:67`,
   model retirement dates in the bundled price table, and example text in an analytics prompt
   at `packages/atif-analytics/src/atif_analytics/application/prompts.py:260`.
-- The closest thing to a marker is a comment at `scripts/atif-sql-refresh.sh:86-89`, which
+- The closest thing to a marker is a comment at `scripts/atif-sql-refresh.sh:87-90`, which
   calls leaving embedding out of the Codex pass a deliberate deferral and semantic search over
   that corpus a follow-up. It names a scope choice rather than a defect, so it has no register
   row.
