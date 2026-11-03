@@ -16,7 +16,7 @@ The twelve registered commands — nine ``@app.command`` functions plus the
 * ``status``       corpus freshness — read-only, fast
 * ``query``        SQL over the atif-duck views/macros with classified errors
 * ``analyze``      run the analytics pipelines — CALLS BEDROCK, spends money
-* ``embed``        backfill step embeddings into LanceDB — CALLS BEDROCK
+* ``embed``        backfill step embeddings into the Lance store — CALLS BEDROCK
 * ``search``       embed one query string, then kNN over the store — CALLS BEDROCK
 * ``examples``     derived, test-executed example queries (also ``query --examples``)
 * ``schema``       static catalog dump, no DuckDB bind, <50ms
@@ -1805,8 +1805,9 @@ def _install_lance_extension(fmt: OutputFormat, *, quiet: bool = False) -> None:
                 from loguru import logger
 
                 logger.warning(
-                    "Could not install the lance DuckDB extension ({}); vector search stays "
-                    "unavailable until `atif-sql embed --install-extension` succeeds",
+                    "Could not install the lance DuckDB extension ({}); the embeddings store "
+                    "can't be written or searched until `atif-sql embed --install-extension` "
+                    "succeeds",
                     str(exc).splitlines()[0],
                 )
                 return
@@ -1831,7 +1832,7 @@ def embed(
     corpus_root: Path | None = None,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
-    """Embed unembedded corpus steps and append them to LanceDB.
+    """Embed unembedded corpus steps and append them to the Lance store.
 
     Provider
     --------
@@ -1869,14 +1870,17 @@ def embed(
 
     Extension
     ---------
-    ``query`` and ``search`` read the store through DuckDB's lance extension
-    and never install it themselves (installing is a 242 MB download from
-    the extension repository, and ``query`` runs unattended). It is
-    installed here, where the network is already a deliberate act: every
-    REAL run installs it first, and ``--install-extension`` installs it and
-    exits without touching Bedrock or the store (``{"extension": "lance",
-    "installed": true, "install_path": ...}``). ``atif-sql status`` reports
-    whether it is present.
+    The store is written and read only through DuckDB's lance extension.
+    ``query`` and ``search`` never install it themselves (installing is a
+    242 MB download from the extension repository, and ``query`` runs
+    unattended). It is installed here, where the network is already a
+    deliberate act: every REAL run installs it first, and
+    ``--install-extension`` installs it and exits without touching Bedrock
+    or the store (``{"extension": "lance", "installed": true,
+    "install_path": ...}``). A dry run never installs it, so a dry run over
+    an existing store without the extension exits 78 and names
+    ``--install-extension``. ``atif-sql status`` reports whether it is
+    present.
 
     Cost
     ----
@@ -2012,7 +2016,9 @@ def _prune_orphans(corpus_root: Path | None, *, dry_run: bool, fmt: OutputFormat
     report = prune_orphans(
         settings.corpus_root,
         lake=lake_steps_port(),
-        store=LanceVectorStore(lance_uri, dim=embed_settings.embedding_dim),
+        store=LanceVectorStore(
+            lance_uri, dim=embed_settings.embedding_dim, install_extension=not dry_run
+        ),
         dry_run=dry_run,
     )
     if report is None:

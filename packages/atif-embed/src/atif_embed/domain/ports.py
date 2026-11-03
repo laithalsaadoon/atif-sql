@@ -82,11 +82,7 @@ class VectorStorePort(Protocol):
         ...
 
     def optimize(self) -> None:
-        """Compact accumulated fragments (best-effort)."""
-        ...
-
-    def ensure_index(self, *, metric: str = "cosine") -> None:
-        """Create the vector index if missing (best-effort)."""
+        """Compact accumulated fragments and drop old versions (best-effort)."""
         ...
 
 

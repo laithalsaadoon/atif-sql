@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, Any, override
 
 import pytest
 from embed_fixtures import (
@@ -40,13 +40,16 @@ def store(settings: EmbedSettings, corpus_root: Path) -> LanceVectorStore:
     return LanceVectorStore(settings.resolve_lance_uri(corpus_root), dim=DIM)
 
 
-def _stored_flags(uri: Path) -> dict[str, bool]:
-    db = lance_store.connect_db(uri)
-    tbl = db.open_table(lance_store.TABLE_NAME)
-    arrow = tbl.search().select(["uuid", "truncated"]).limit(1000).to_arrow()
-    return dict(
-        zip(arrow.column("uuid").to_pylist(), arrow.column("truncated").to_pylist(), strict=True)
-    )
+def _stored(uri: Path, column: str) -> dict[str, Any]:
+    """``{uuid: column}`` for every stored row, read through the lance extension."""
+    table = f"{lance_store.STORE_ALIAS}.main.{lance_store.TABLE_NAME}"
+    with lance_store.connect_db(uri) as conn:
+        rows = conn.con.execute(f"SELECT uuid, {column} FROM {table}").fetchall()
+    return {str(uuid): value for uuid, value in rows}
+
+
+def _stored_flags(uri: Path) -> dict[str, Any]:
+    return _stored(uri, "truncated")
 
 
 class TestDiscover:
@@ -236,19 +239,9 @@ class TestReconversionStaleness:
         asyncio.run(
             run_backfill(corpus_root=corpus_root, settings=settings, embedder=embedder, store=store)
         )
-        uri = settings.resolve_lance_uri(corpus_root)
-        db = lance_store.connect_db(uri)
-        tbl = db.open_table(lance_store.TABLE_NAME)
-        arrow = tbl.search().select(["uuid", "embedding"]).limit(1000).to_arrow()
-        vectors = dict(
-            zip(
-                arrow.column("uuid").to_pylist(),
-                arrow.column("embedding").to_pylist(),
-                strict=True,
-            )
-        )
+        vectors = _stored(settings.resolve_lance_uri(corpus_root), "embedding")
         expected = embedder._vector(new_text)
-        assert vectors["ua-1"] == pytest.approx(expected, abs=1e-6)
+        assert list(vectors["ua-1"]) == pytest.approx(expected, abs=1e-6)
 
     def test_unchanged_siblings_are_not_re_embedded(
         self, corpus_root: Path, store: LanceVectorStore, settings: EmbedSettings

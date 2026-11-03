@@ -17,7 +17,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from duck_fixtures import SESSION_IDS, build_corpus
-from test_vss import DIM, MODEL, _write_lance
+from test_vss import DIM, MODEL, _write_lance, write_lance_rows
 
 from atif_duck.domain.embedding_guard import EmbeddingProviderMismatch
 from atif_duck.infrastructure.lake import (
@@ -207,25 +207,9 @@ class TestStoresUnion:
             )
 
     def test_stores_of_two_widths_are_refused(self, tmp_path: Path) -> None:
-        import lancedb
-        import pyarrow as pa
-
         one = _write_lance(tmp_path / "one")
-        wide = tmp_path / "two"
-        wide.mkdir()
         width = DIM * 2
-        lancedb.connect(str(wide)).create_table(
-            "embeddings",
-            data=pa.table(
-                {
-                    "uuid": ["w"],
-                    "model": [MODEL],
-                    "dim": pa.array([width], type=pa.int32()),
-                    "embedding": pa.array([[0.5] * width], type=pa.list_(pa.float32(), width)),
-                    "embedded_at": pa.array([0], type=pa.timestamp("us", tz="UTC")),
-                }
-            ),
-        )
+        wide = write_lance_rows(tmp_path / "two", [("w", [0.5] * width)], dim=width)
         con = duckdb.connect()
         with pytest.raises(EmbeddingProviderMismatch):
             register_vss_stores(con, lance_uris=[one, wide])

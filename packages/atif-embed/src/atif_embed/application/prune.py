@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from atif_embed.domain.ports import LakeStepsPort, VectorStorePort
 
-#: uuids per Lance delete predicate.
+#: uuids per store delete, so one delete's Arrow table and join stay small.
 _DELETE_CHUNK = 1000
 
 

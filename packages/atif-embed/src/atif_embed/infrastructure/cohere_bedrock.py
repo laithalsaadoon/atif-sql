@@ -287,7 +287,7 @@ class CohereBedrockEmbedder:
 
     Documents embed at ``settings.embedding_type`` (``int8`` by default) and
     are float-widened on the way out; queries force ``embedding_type="float"``
-    because the HNSW distance math needs float vectors. The Matryoshka
+    because the cosine distance math needs float vectors. The Matryoshka
     ``output_dimension`` knob (256/512/1024/1536) is Cohere-specific and is
     the provider's fixed :attr:`dimension`.
     """
@@ -399,11 +399,11 @@ class CohereBedrockEmbedder:
         return vectors
 
     def embed_query(self, text: str) -> list[float]:
-        """Embed a single query string for HNSW nearest-neighbor search.
+        """Embed a single query string for nearest-neighbor search.
 
         Uses ``input_type="search_query"`` and forces ``embedding_type="float"``
-        regardless of ``settings.embedding_type`` because HNSW distance math
-        needs float vectors. Returns a single vector of length :attr:`dimension`.
+        regardless of ``settings.embedding_type`` because the cosine distance
+        math needs float vectors. Returns a single vector of length :attr:`dimension`.
         """
         client = _build_bedrock_client(self._settings)
         sent, was_truncated = clip_text(text)

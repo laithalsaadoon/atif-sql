@@ -1,30 +1,38 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local LanceDB embeddings store.
+"""Local Lance embeddings store, written through DuckDB's lance extension.
 
-Lance is exactly the right shape for "AI artifact store with versioning +
-native vector search":
+The store is one Lance dataset, ``<lance_uri>/embeddings.lance``. This module
+reads and writes it with DuckDB's ``lance`` core extension: the store
+directory is ATTACHed as a Lance namespace (``ATTACH ... (TYPE LANCE)``) and
+every operation is a SQL statement.
 
-* writes are append-only fragments via ``tbl.add()``
-* stale rows are removed by predicate via ``tbl.delete()``
-* compaction is explicit via ``tbl.optimize()``
-* the vector index lives next to the data
-* DuckDB reads it back via the lance core extension
-  (``INSTALL lance; LOAD lance; ATTACH (TYPE LANCE)`` — that read path lives
-  in atif-duck's ``register_vss``; this module never touches DuckDB)
+* an append is an ``INSERT`` from the chunk's Arrow table
+* a replace deletes the stale rows first, with ``MERGE ... WHEN MATCHED THEN
+  DELETE`` against an Arrow table of uuids, in one Lance transaction
+* compaction is ``OPTIMIZE``, followed by ``VACUUM LANCE``, which removes the
+  versions older than :data:`VERSION_RETENTION_SECONDS` so they stop piling up
+* reads are plain scans
+
+atif-duck reads the same dataset through the same extension (``register_vss``).
+Up to atif-sql 0.5.0 the writer was the ``lancedb`` package instead. The
+on-disk format is the same Lance format, so a store either one wrote opens in
+the other with no re-embedding, and a new store is created at the data storage
+version lancedb 0.39 and 0.40 write (:data:`DATA_STORAGE_VERSION`), so going
+back to 0.5.0 stays safe.
 
 Schema evolution policy (v2, 2026-08-27)
 ----------------------------------------
 ADDITIVE columns migrate ONLINE, never via rebuild: opening a store that
-lacks a newer column evolves the table in place (``Table.add_columns``, a
-metadata-only operation — no re-embedding, no data loss) and backfills the
-new column with a sentinel/default. Rows carrying the
-:data:`_PRE_STAMP_SENTINEL` stamp then mismatch their corpus hash in the
-discovery anti-join and re-embed incrementally through the ordinary
+lacks a newer column evolves the table in place (``ALTER TABLE ... ADD
+COLUMN ... DEFAULT``, which back-fills every existing row without touching
+the vectors) and backfills the new column with a sentinel or default. Rows
+carrying the :data:`_PRE_STAMP_SENTINEL` stamp then mismatch their corpus hash
+in the discovery anti-join and re-embed incrementally through the ordinary
 staleness path (delete-before-append), so the store heals itself across
-successive runs while search stays online. A BREAKING change — a provider
-or dimension switch — stays fail-loud via ``embedding_guard``: those
-vectors live in an incompatible space and must be rebuilt deliberately.
+successive runs while search stays online. A BREAKING change (a provider or
+dimension switch) stays fail-loud via ``embedding_guard``: those vectors live
+in an incompatible space and must be rebuilt deliberately.
 
 The store records its schema version in a ``schema_version.json`` sidecar
 next to the table (written on create, checked on open). Bump
@@ -35,24 +43,34 @@ stored number rather than probing by column name.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+import shutil
+import tempfile
+import weakref
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Self
 
-import lancedb
 import pyarrow as pa
-from lancedb.index import IvfHnswSq
 from loguru import logger
 
 from atif_embed.domain.sql_literal import sql_literal
+from atif_embed.infrastructure.lance_extension import load_lance_extension
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from types import TracebackType
 
+    import duckdb
     import polars as pl
 
-#: Lance table name inside the namespace.
+#: Lance table name inside the namespace (the dataset is ``<lance_uri>/embeddings.lance``).
 TABLE_NAME = "embeddings"
+
+#: Catalog name the store directory is ATTACHed under. Distinct from
+#: atif-duck's ``lance_store`` so the two never meet in one connection.
+STORE_ALIAS = "atif_embed_store"
+
+#: Fully qualified name of the embeddings table in an open connection.
+_TABLE = f"{STORE_ALIAS}.main.{TABLE_NAME}"
 
 #: Current store schema version. v1 was the pre-stamp 5-column shape; v2
 #: added ``text_hash`` + ``truncated``. Bump with the next ADDITIVE evolution
@@ -66,42 +84,75 @@ SCHEMA_VERSION = 2
 #: not require the schema to be readable.
 SCHEMA_VERSION_FILE = "schema_version.json"
 
+#: Lance file format version of a NEW store. lancedb 0.39.0 (Lance 12.0.0,
+#: what atif-sql 0.5.0 locked) and 0.40.0 (Lance 13.0.0) both create tables at
+#: 2.2, so a store this module creates is one 0.5.0 could have created itself.
+#: Pinned rather than left to the extension's default, so a later extension
+#: release with a newer default can't create stores an older atif-sql can't
+#: open. An existing store keeps whatever version it was created at: appends
+#: never change it.
+DATA_STORAGE_VERSION = "2.2"
+
+#: DuckDB memory cap for the store's connection. A bare ``duckdb.connect()``
+#: takes 80% of the host's RAM; on the 124 GB fleet host that's about 99 GB,
+#: and its default spill directory is ``.tmp`` under the working directory. The
+#: store's own work is small (one chunk of a few hundred vectors per INSERT, a
+#: two-column scan of every uuid and hash), and Lance's compaction and cleanup
+#: run in the extension's own memory, outside this cap.
+WRITER_MEMORY_BYTES: int = 1024**3
+
+#: DuckDB threads for the store's connection.
+WRITER_THREADS: int = 2
+
+#: ``VACUUM LANCE`` keeps every version younger than this. A reader that
+#: opened a version a moment ago (a ``search`` running while embed compacts)
+#: still finds every file it names, the same one-hour grace the lake's cleanup
+#: uses. lancedb's ``optimize()`` kept a week of versions, which is how one
+#: fleet store reached 1,568 versions and 2.9 GB of old data.
+VERSION_RETENTION_SECONDS: int = 3600
+
 #: ``text_hash`` stamped on rows that predate the stamp. Angle brackets make
 #: it impossible to equal a real blake2b hex digest, so every pre-stamp row
 #: mismatches its current corpus hash in the discovery anti-join and is
 #: re-embedded incrementally through the ordinary staleness path.
 _PRE_STAMP_SENTINEL = "<pre-stamp>"
 
-#: Distance metrics accepted by the LanceDB vector index (``IvfHnswSq``'s
-#: ``distance_type``). Mirrors ``EmbedSettings.hnsw_metric``'s domain.
-DistanceMetric = Literal["cosine", "l2", "dot"]
+#: The table's columns as DuckDB DDL, in :func:`lance_schema` order. ``{dim}``
+#: is the only placeholder, filled through ``int()``.
+_COLUMN_DDL: tuple[tuple[str, str], ...] = (
+    ("uuid", "VARCHAR"),
+    ("model", "VARCHAR"),
+    ("dim", "INTEGER"),
+    ("embedding", "FLOAT[{dim}]"),
+    ("embedded_at", "TIMESTAMPTZ"),
+    ("text_hash", "VARCHAR"),
+    ("truncated", "BOOLEAN"),
+)
 
-# Process-local connection cache. lancedb.connect() is cheap (no I/O until a
-# table is opened) but caching avoids re-running the consistency-interval setup.
-_DB_CACHE: dict[str, lancedb.DBConnection] = {}
+#: Column names, in table order.
+_COLUMNS: tuple[str, ...] = tuple(name for name, _ in _COLUMN_DDL)
 
+#: Columns a v1 (pre-stamp) store lacks, with the DDL type and the literal
+#: default each one is back-filled with.
+_PRE_STAMP_ADDITIONS: tuple[tuple[str, str, str], ...] = (
+    ("text_hash", "VARCHAR", sql_literal(_PRE_STAMP_SENTINEL)),
+    ("truncated", "BOOLEAN", "false"),
+)
 
-def _has_table(db: lancedb.DBConnection, name: str) -> bool:
-    """True iff ``name`` exists in the LanceDB root namespace.
-
-    ``db.list_tables()`` returns a ``ListTablesResponse`` (pydantic model)
-    with a ``tables: list[str]`` field plus an opaque ``page_token``. The
-    local namespace is small enough that pagination never kicks in, so we
-    read ``.tables`` directly. ``db.table_names()`` is deprecated as of
-    lancedb 0.30 (emits ``DeprecationWarning``) — don't reach for it.
-    """
-    return name in db.list_tables().tables
+#: Names the Arrow tables of one write are registered under, for one statement.
+_CHUNK_VIEW = "atif_embed_chunk"
+_DELETE_VIEW = "atif_embed_delete"
 
 
 # pyarrow ships no py.typed and no bundled stubs, so `pa.Schema` is itself an
 # unknown type and any signature naming it reports as partially unknown. The
 # annotation is still the most precise one available and is what a reader needs.
 def lance_schema(dim: int) -> pa.Schema:  # pyright: ignore[reportUnknownParameterType]
-    """Pyarrow schema for the embeddings table.
+    """Arrow schema of the embeddings table, as Lance stores it.
 
-    The ``embedding`` column is a FIXED-SIZE list of float32. Lance treats
-    this as a vector column for indexing — a regular ``pa.list_(pa.float32())``
-    won't work for ``create_index``.
+    The ``embedding`` column is a FIXED-SIZE list of float32 (``FLOAT[dim]``
+    in DuckDB). Lance treats only that shape as a vector column; a
+    variable-size list won't index.
 
     ``text_hash`` is the content stamp the backfill's staleness check reads:
     a re-converted session can change a step's flattened text under the same
@@ -109,6 +160,10 @@ def lance_schema(dim: int) -> pa.Schema:  # pyright: ignore[reportUnknownParamet
     as already embedded forever. ``truncated`` marks rows whose source text
     was clipped before embedding, so a search miss past the clip point is
     attributable instead of invisible.
+
+    The table is created from :data:`_COLUMN_DDL`, and every column is then
+    marked NOT NULL, which yields exactly this schema; a test reads a created
+    store back against it.
     """
     return pa.schema(
         [
@@ -123,21 +178,129 @@ def lance_schema(dim: int) -> pa.Schema:  # pyright: ignore[reportUnknownParamet
     )
 
 
-def connect_db(uri: Path | str) -> lancedb.DBConnection:
-    """Open (or reuse) a LanceDB connection rooted at ``uri``.
+class StoreConnection:
+    """One DuckDB connection with the lance extension loaded and one store ATTACHed.
 
-    ``read_consistency_interval=timedelta(0)`` makes every read see writes
-    from other processes immediately. Without this, readers get a stale
-    manifest snapshot and miss recently appended fragments.
+    Opened by :func:`connect_db`. :meth:`close` (or leaving a ``with`` block)
+    releases the connection and removes its private spill directory.
     """
-    key = str(Path(uri).resolve())
-    cached = _DB_CACHE.get(key)
-    if cached is not None:
-        return cached
-    Path(uri).mkdir(parents=True, exist_ok=True)
-    db = lancedb.connect(key, read_consistency_interval=timedelta(0))
-    _DB_CACHE[key] = db
-    return db
+
+    def __init__(self, con: duckdb.DuckDBPyConnection, uri: Path, spill: Path) -> None:
+        self._con = con
+        self._uri = uri
+        self._spill = spill
+        self._closed = False
+
+    @property
+    def con(self) -> duckdb.DuckDBPyConnection:
+        """The DuckDB connection; the store's table is :data:`STORE_ALIAS` ``.main.embeddings``."""
+        return self._con
+
+    @property
+    def uri(self) -> Path:
+        """The store directory this connection has ATTACHed."""
+        return self._uri
+
+    def close(self) -> None:
+        """Close the connection and remove its spill directory. Safe to call twice."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._con.close()
+        finally:
+            shutil.rmtree(self._spill, ignore_errors=True)
+
+    def __enter__(self) -> Self:
+        """Open for a ``with`` block."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close at the end of the ``with`` block."""
+        self.close()
+
+
+def connect_db(uri: Path | str, *, install_extension: bool = False) -> StoreConnection:
+    """Open a DuckDB connection on the store at ``uri``, creating the directory if missing.
+
+    The connection is bounded: :data:`WRITER_MEMORY_BYTES`,
+    :data:`WRITER_THREADS`, and a private spill directory that
+    :meth:`StoreConnection.close` removes. Extension autoloading is off, and
+    the lance extension is loaded explicitly through
+    :func:`~atif_embed.infrastructure.lance_extension.load_lance_extension`,
+    which downloads it only when ``install_extension`` is true. ``TimeZone``
+    is pinned to UTC, because a ``TIMESTAMPTZ`` column takes the session's
+    zone into the Lance schema it creates: under ``TZ=America/Chicago`` a new
+    table's ``embedded_at`` would be ``timestamp[us, tz=America/Chicago]``
+    instead of the ``UTC`` every existing store carries.
+
+    Every statement runs in autocommit, so each write is its own Lance commit
+    and is visible to every other connection (another process's ``search``
+    included) as soon as it returns.
+    """
+    import duckdb
+
+    root = Path(uri).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    spill = Path(tempfile.mkdtemp(prefix="atif-sql-embed-"))
+    con = duckdb.connect(
+        config={
+            "memory_limit": f"{int(WRITER_MEMORY_BYTES)}B",
+            "threads": int(WRITER_THREADS),
+            "temp_directory": str(spill),
+            "autoinstall_known_extensions": False,
+            "autoload_known_extensions": False,
+        }
+    )
+    try:
+        con.execute("SET TimeZone = 'UTC';")
+        load_lance_extension(con, install=install_extension)
+        # ATTACH is one of the statement kinds DuckDB will not prepare, so the
+        # path enters the statement text, through sql_literal only.
+        con.execute(f"ATTACH {sql_literal(str(root))} AS {STORE_ALIAS} (TYPE LANCE);")
+    except BaseException:
+        con.close()
+        shutil.rmtree(spill, ignore_errors=True)
+        raise
+    return StoreConnection(con, root, spill)
+
+
+def _first_row(
+    conn: StoreConnection, sql: str, params: list[object] | None = None
+) -> tuple[Any, ...] | None:
+    """The first row of ``sql``, reading the result to its end.
+
+    ``fetchall`` rather than ``fetchone``: DuckDB 2.0 counts a result read
+    with ``fetchone`` as unfinished until a later fetch returns nothing, and
+    ``register`` refuses to run while one is pending.
+    """
+    rows = conn.con.execute(sql, params).fetchall() if params else conn.con.execute(sql).fetchall()
+    return tuple(rows[0]) if rows else None
+
+
+def has_table(conn: StoreConnection) -> bool:
+    """True iff the ATTACHed store holds the embeddings table."""
+    row = _first_row(
+        conn,
+        "SELECT count(*) FROM duckdb_tables() WHERE database_name = ? AND table_name = ?",
+        [STORE_ALIAS, TABLE_NAME],
+    )
+    return row is not None and int(row[0]) > 0
+
+
+def column_names(conn: StoreConnection) -> list[str]:
+    """The embeddings table's column names, in table order (empty when there's no table)."""
+    rows = conn.con.execute(
+        "SELECT column_name FROM duckdb_columns() "
+        "WHERE database_name = ? AND table_name = ? ORDER BY column_index",
+        [STORE_ALIAS, TABLE_NAME],
+    ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 def read_schema_version(lance_uri: Path) -> int | None:
@@ -163,150 +326,198 @@ def write_schema_version(lance_uri: Path, version: int = SCHEMA_VERSION) -> None
     sidecar.write_text(json.dumps({"schema_version": version}) + "\n", encoding="utf-8")
 
 
-def migrate_pre_stamp_table(tbl: Any, lance_uri: Path) -> None:
+def migrate_pre_stamp_table(conn: StoreConnection) -> None:
     """Evolve a pre-stamp table to the v2 schema, in place and online.
 
     Adds ``text_hash`` (backfilled with :data:`_PRE_STAMP_SENTINEL`) and
-    ``truncated`` (backfilled false) via Lance schema evolution
-    (``Table.add_columns`` with SQL default expressions) — a metadata-only
-    operation: no rows are dropped, no vectors re-embedded, and readers keep
-    working throughout. The sentinel then drives incremental re-embedding
-    through the ordinary staleness path (see the module docstring).
+    ``truncated`` (backfilled false) with ``ALTER TABLE ... ADD COLUMN ...
+    DEFAULT``, then marks each NOT NULL, the schema lancedb's
+    ``add_columns`` left behind. No rows are dropped, no vectors are
+    re-embedded, and readers keep working throughout. The sentinel then
+    drives incremental re-embedding through the ordinary staleness path (see
+    the module docstring).
+
+    Each default is a plain literal on purpose. The extension rejects
+    ``ALTER COLUMN ... SET DEFAULT``, and DuckDB rewrites any other ``ADD
+    COLUMN ... DEFAULT`` form into an ``ADD COLUMN`` followed by one, which
+    could fail after the column exists. Each column is added on its own, so a
+    run cut short between the two leaves a table the next open finishes (a
+    column added but not yet marked NOT NULL stays nullable, which every
+    writer still fills).
     """
-    missing = [name for name in ("text_hash", "truncated") if name not in tbl.schema.names]
-    additions: dict[str, str] = {}
-    if "text_hash" in missing:
-        additions["text_hash"] = f"'{_PRE_STAMP_SENTINEL}'"
-    if "truncated" in missing:
-        additions["truncated"] = "false"
-    if not additions:
+    present = set(column_names(conn))
+    added: list[str] = []
+    for name, ddl_type, default in _PRE_STAMP_ADDITIONS:
+        if name in present:
+            continue
+        conn.con.execute(f"ALTER TABLE {_TABLE} ADD COLUMN {name} {ddl_type} DEFAULT {default};")
+        conn.con.execute(f"ALTER TABLE {_TABLE} ALTER COLUMN {name} SET NOT NULL;")
+        added.append(name)
+    if not added:
         return
-    tbl.add_columns(additions)
-    write_schema_version(lance_uri)
+    write_schema_version(conn.uri)
     logger.info(
         "Migrated pre-stamp Lance store at {} to schema v{}: added {} online "
-        "(metadata-only; rows re-embed incrementally via the sentinel staleness path)",
-        lance_uri,
+        "(no vectors rewritten; rows re-embed incrementally via the sentinel staleness path)",
+        conn.uri,
         SCHEMA_VERSION,
-        sorted(additions),
+        sorted(added),
     )
 
 
-def open_or_create_table(db: lancedb.DBConnection, *, dim: int) -> Any:
-    """Open the embeddings table, creating it with the right schema if missing.
+def _create_table(conn: StoreConnection, *, dim: int) -> None:
+    """Create the embeddings table at :data:`DATA_STORAGE_VERSION`, every column NOT NULL.
+
+    The extension's ``CREATE TABLE`` takes no column constraints, so the
+    columns are marked NOT NULL one ``ALTER`` at a time afterwards. That
+    costs a handful of tiny versions once per store, which the next
+    ``VACUUM LANCE`` removes.
+    """
+    columns = ", ".join(f"{name} {ddl_type.format(dim=int(dim))}" for name, ddl_type in _COLUMN_DDL)
+    conn.con.execute(
+        f"CREATE TABLE {_TABLE} ({columns}) "
+        f"WITH (data_storage_version = {sql_literal(DATA_STORAGE_VERSION)});"
+    )
+    for name in _COLUMNS:
+        conn.con.execute(f"ALTER TABLE {_TABLE} ALTER COLUMN {name} SET NOT NULL;")
+
+
+def open_or_create_table(conn: StoreConnection, *, dim: int) -> None:
+    """Make sure the embeddings table exists with the current schema.
 
     An existing table that predates a current ADDITIVE column is evolved in
-    place (see :func:`migrate_pre_stamp_table`) before it is handed to the
-    write path, so ``add_chunk`` never appends a 7-column frame into a
-    5-column table (Lance rejects the schema mismatch).
+    place (see :func:`migrate_pre_stamp_table`) before the write path uses
+    it, so ``add_chunk`` never appends a 7-column chunk into a 5-column table.
+    A missing table is created with :func:`lance_schema`'s schema.
     """
-    if _has_table(db, TABLE_NAME):
-        tbl = db.open_table(TABLE_NAME)
-        migrate_pre_stamp_table(tbl, Path(db.uri))
-        if read_schema_version(Path(db.uri)) is None:
+    if has_table(conn):
+        migrate_pre_stamp_table(conn)
+        if read_schema_version(conn.uri) is None:
             # A store from before the sidecar existed whose schema is already
             # current: stamp it so the NEXT evolution keys on the number.
-            write_schema_version(Path(db.uri))
-        return tbl
-    tbl = db.create_table(TABLE_NAME, schema=lance_schema(dim), mode="create")
-    write_schema_version(Path(db.uri))
-    return tbl
+            write_schema_version(conn.uri)
+        return
+    _create_table(conn, dim=dim)
+    write_schema_version(conn.uri)
 
 
-def _is_missing_column(exc: Exception, column: str) -> bool:
-    """True when ``exc`` is LanceDB's untyped "no such column" ValueError.
-
-    LanceDB raises a plain ``ValueError`` whose text carries the schema
-    complaint, so matching the message is the only available discriminator.
-    """
-    message = str(exc)
-    return "Schema error" in message and f"No field named {column}" in message
-
-
-def delete_uuids(tbl: Any, uuids: Iterable[str]) -> int:
+def delete_uuids(conn: StoreConnection, uuids: Iterable[str]) -> int:
     """Delete every row whose uuid is in ``uuids``; return how many were named.
 
     Re-embedding a changed text must REPLACE the stale vector, not sit
     beside it: two rows under one uuid would make the kNN join fan out and
-    rank against pre-change content. Lance has no upsert on this table, so
+    rank against pre-change content. The table has no upsert key, so
     delete-then-append is the replace.
+
+    The delete is a ``MERGE`` against an Arrow table of the uuids rather than
+    ``DELETE ... WHERE uuid IN (...)``: DuckDB plans an ``IN`` list longer
+    than four values as a join, which the extension's ``DELETE`` refuses
+    ("unsupported DELETE plan"). The uuids never enter the statement text,
+    and the whole delete is one Lance commit.
     """
     names = sorted(set(uuids))
     if not names:
         return 0
-    predicate = f"uuid IN ({', '.join(sql_literal(u) for u in names)})"
-    tbl.delete(predicate)
+    conn.con.register(_DELETE_VIEW, pa.table({"uuid": pa.array(names, pa.string())}))
+    try:
+        conn.con.execute(
+            f"MERGE INTO {_TABLE} AS target USING {_DELETE_VIEW} AS gone "
+            "ON target.uuid = gone.uuid WHEN MATCHED THEN DELETE;"
+        ).fetchall()
+    finally:
+        conn.con.unregister(_DELETE_VIEW)
     return len(names)
 
 
-def add_chunk(tbl: Any, df: pl.DataFrame) -> None:
+def add_chunk(conn: StoreConnection, df: pl.DataFrame) -> None:
     """Append one chunk of embeddings.
 
-    The polars DataFrame must have ``embedding: pl.Array(pl.Float32, dim)``
-    — the fixed-size list shape Lance expects. ``to_arrow()`` preserves the
-    distinction; a regular ``pl.List`` becomes a variable-size list and Lance
-    will reject it as a vector column for indexing.
+    The polars DataFrame must have ``embedding: pl.Array(pl.Float32, dim)``,
+    the fixed-size list shape the table's ``FLOAT[dim]`` column holds.
+    ``to_arrow()`` keeps that shape, and the INSERT names every column, so a
+    frame with columns in another order still lands in the right ones.
     """
-    arrow_table = df.to_arrow()
-    tbl.add(arrow_table)
+    columns = ", ".join(_COLUMNS)
+    conn.con.register(_CHUNK_VIEW, df.to_arrow())
+    try:
+        conn.con.execute(
+            f"INSERT INTO {_TABLE} ({columns}) SELECT {columns} FROM {_CHUNK_VIEW};"  # noqa: S608  # nosec B608 - module-constant names only
+        ).fetchall()
+    finally:
+        conn.con.unregister(_CHUNK_VIEW)
 
 
-def ensure_index(tbl: Any, *, metric: DistanceMetric = "cosine") -> None:
-    """Create the IVF_HNSW_SQ vector index on the ``embedding`` column.
+def optimize_if_needed(conn: StoreConnection) -> None:
+    """Compact accumulated fragments, then remove versions past the retention window.
 
-    No-op if an index already exists. Index name is exactly ``IVF_HNSW_SQ``
-    (scalar-quantized HNSW) — there is no plain ``IVF_HNSW`` literal in
-    LanceDB. SQ gives a good size/recall balance at small-corpus scale.
+    Every append, delete and compaction commits a new Lance version, and
+    every append adds a fragment. ``OPTIMIZE`` merges small fragments and
+    rewrites the ones carrying many deletions; ``VACUUM LANCE`` then deletes
+    the files only versions older than :data:`VERSION_RETENTION_SECONDS`
+    still name. Both are best-effort, as lancedb's ``optimize()`` was: a
+    failure is logged and the next run tries again, because a store that
+    isn't compacted is slower, not wrong.
     """
+    import duckdb
+
     try:
-        existing = tbl.list_indices()
-    except (AttributeError, RuntimeError):
-        existing = []
-    for idx in existing:
-        if getattr(idx, "column", None) == "embedding":
-            return
-        if "embedding" in getattr(idx, "columns", []):
-            return
+        conn.con.execute(f"OPTIMIZE {_TABLE};").fetchall()
+    except duckdb.Error as exc:
+        logger.warning("Lance OPTIMIZE failed: {}", exc)
+        return
     try:
-        # lancedb >=0.30 unified index API: pass the vector column as the first
-        # positional arg and an index-config object via ``config=``. The legacy
-        # ``metric=/vector_column_name=/index_type=`` kwargs are deprecated
-        # (they emit a DeprecationWarning as of 0.34). ``IvfHnswSq`` is the
-        # config class for the scalar-quantized HNSW index this store uses;
-        # ``distance_type`` carries the former ``metric``.
-        tbl.create_index("embedding", config=IvfHnswSq(distance_type=metric))
-    except (RuntimeError, ValueError) as exc:
-        # Index creation can fail on tiny tables (no vectors yet, or k-means
-        # seeding hits a degenerate split). Log and continue — cosine search
-        # still works without an index, just slower (brute-force scan).
-        logger.warning("LanceDB create_index failed ({}); falling back to brute-force scan", exc)
+        conn.con.execute(
+            f"VACUUM LANCE {_TABLE} WITH (older_than_seconds = {int(VERSION_RETENTION_SECONDS)});"
+        ).fetchall()
+    except duckdb.Error as exc:
+        logger.warning("Lance VACUUM failed: {}", exc)
 
 
-def optimize_if_needed(tbl: Any) -> None:
-    """Compact accumulated fragments + clean up old versions.
-
-    Lance accumulates one fragment per ``tbl.add()`` call. Past ~100
-    fragments read latency starts to degrade; the backfill triggers
-    compaction much earlier (every 8 chunks) because the embeddings table is
-    small. ``tbl.optimize()`` returns ``None`` and mutates in place.
-    """
-    try:
-        tbl.optimize()
-    except (RuntimeError, AttributeError) as exc:
-        logger.warning("Lance optimize failed: {}", exc)
-
-
-def count_rows(lance_uri: Path) -> int:
-    """Return the row count of the embeddings Lance table, or 0 when missing."""
-    if not lance_uri.exists():
+def _count_rows(conn: StoreConnection) -> int:
+    if not has_table(conn):
         return 0
-    db = connect_db(lance_uri)
-    if not _has_table(db, TABLE_NAME):
+    row = _first_row(conn, f"SELECT count(*) FROM {_TABLE};")  # noqa: S608  # nosec B608 - module-constant names only
+    return int(row[0]) if row else 0
+
+
+def _table_identity(conn: StoreConnection) -> tuple[str, int] | None:
+    if not has_table(conn):
+        return None
+    row = _first_row(conn, f"SELECT model, dim FROM {_TABLE} LIMIT 1;")  # noqa: S608  # nosec B608 - module-constant names only
+    if row is None:
+        return None
+    return (str(row[0]), int(row[1]))
+
+
+def _embedded_hashes(conn: StoreConnection) -> dict[str, str]:
+    if not has_table(conn):
+        return {}
+    if "text_hash" not in column_names(conn):
+        rows = conn.con.execute(f"SELECT uuid FROM {_TABLE};").fetchall()  # noqa: S608  # nosec B608 - module-constant names only
+        logger.info(
+            "Embedding store at {} predates the text_hash stamp; treating all "
+            "{} rows as stale for incremental online re-embedding",
+            conn.uri,
+            len(rows),
+        )
+        return {str(row[0]): _PRE_STAMP_SENTINEL for row in rows}
+    rows = conn.con.execute(f"SELECT uuid, text_hash FROM {_TABLE};").fetchall()  # noqa: S608  # nosec B608 - module-constant names only
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def count_rows(lance_uri: Path, *, install_extension: bool = False) -> int:
+    """Return the row count of the embeddings table, or 0 when missing.
+
+    A directory that doesn't exist is answered without opening DuckDB, so no
+    directory is created and the extension isn't needed.
+    """
+    if not Path(lance_uri).is_dir():
         return 0
-    return int(db.open_table(TABLE_NAME).count_rows())
+    with connect_db(lance_uri, install_extension=install_extension) as conn:
+        return _count_rows(conn)
 
 
-def table_identity(lance_uri: Path) -> tuple[str, int] | None:
+def table_identity(lance_uri: Path, *, install_extension: bool = False) -> tuple[str, int] | None:
     """Return the store's stamped ``(model, dim)`` from its first row, or ``None``.
 
     ``None`` means the store is empty or absent (fresh install), so any
@@ -315,121 +526,136 @@ def table_identity(lance_uri: Path) -> tuple[str, int] | None:
     fail-loud provider/dimension guard
     (:func:`atif_embed.domain.embedding_guard.ensure_store_matches`).
     """
-    n = count_rows(lance_uri)
-    if n == 0:
+    if not Path(lance_uri).is_dir():
         return None
-    db = connect_db(lance_uri)
-    tbl = db.open_table(TABLE_NAME)
-    arrow = tbl.search().select(["model", "dim"]).limit(1).to_arrow()
-    if arrow.num_rows == 0:
-        return None
-    model = str(arrow.column("model").to_pylist()[0])
-    dim = int(arrow.column("dim").to_pylist()[0])
-    return (model, dim)
+    with connect_db(lance_uri, install_extension=install_extension) as conn:
+        return _table_identity(conn)
 
 
-def get_embedded_hashes(lance_uri: Path) -> dict[str, str]:
+def get_embedded_hashes(lance_uri: Path, *, install_extension: bool = False) -> dict[str, str]:
     """Return ``{uuid: text_hash}`` for every embedded row.
 
     Used by the backfill's anti-join: a uuid whose stored hash differs from
     the corpus's current text is STALE, not embedded, so it must be re-picked
-    and its old row deleted. Reads only two string columns via a
-    column-projected scan so the ``FLOAT[dim]`` vector column is never
-    decoded — ``to_arrow()`` has no projection pushdown and materializes the
-    full N×dim float matrix before a ``.select()`` could prune it (~221 MB
-    peak at 20k×1024 unprojected vs ~0 MB projected). The explicit
-    ``limit(count_rows())`` overrides LanceDB's default 10-row query cap so
-    the scan returns every row.
+    and its old row deleted. The scan projects the two string columns, so
+    Lance never decodes the ``FLOAT[dim]`` vector column.
 
-    A store written before ``text_hash`` existed has no such column, and
-    LanceDB reports that as a bare ``ValueError``. That is NOT terminal:
-    every row gets :data:`_PRE_STAMP_SENTINEL` instead (a value no real
-    blake2b digest can equal), so the discovery anti-join marks every row
-    stale and the store migrates itself incrementally through the ordinary
-    delete-before-append path — no rebuild, no empty-store window. The
-    2026-08-24 incident (both production corpora rebuilt, ~3.4M vectors of Cohere
-    spend) came from raising a destroy-and-rebuild error here instead.
+    A store written before ``text_hash`` existed has no such column. That is
+    NOT terminal: every row gets :data:`_PRE_STAMP_SENTINEL` instead (a value
+    no real blake2b digest can equal), so the discovery anti-join marks every
+    row stale and the store migrates itself incrementally through the
+    ordinary delete-before-append path, with no rebuild and no empty-store
+    window. The 2026-08-24 incident (both production corpora rebuilt, ~3.4M
+    vectors of Cohere spend) came from raising a destroy-and-rebuild error
+    here instead.
     """
-    n = count_rows(lance_uri)
-    if n == 0:
+    if not Path(lance_uri).is_dir():
         return {}
-    db = connect_db(lance_uri)
-    tbl = db.open_table(TABLE_NAME)
-    try:
-        arrow = tbl.search().select(["uuid", "text_hash"]).limit(n).to_arrow()
-    except ValueError as exc:
-        if not _is_missing_column(exc, "text_hash"):
-            raise
-        logger.info(
-            "Embedding store at {} predates the text_hash stamp; treating all "
-            "{} rows as stale for incremental online re-embedding",
-            lance_uri,
-            n,
-        )
-        arrow = tbl.search().select(["uuid"]).limit(n).to_arrow()
-        return {str(u): _PRE_STAMP_SENTINEL for u in arrow.column("uuid").to_pylist()}
-    uuids = arrow.column("uuid").to_pylist()
-    hashes = arrow.column("text_hash").to_pylist()
-    return {str(u): str(h) for u, h in zip(uuids, hashes, strict=True)}
+    with connect_db(lance_uri, install_extension=install_extension) as conn:
+        return _embedded_hashes(conn)
 
 
 class LanceVectorStore:
     """:class:`~atif_embed.domain.ports.VectorStorePort` over this module.
 
-    Thin object adapter binding the module functions to one ``lance_uri`` +
-    ``dim`` pair so the use case takes a single injectable seam.
+    Binds the module functions to one ``lance_uri`` + ``dim`` pair and keeps
+    ONE connection open for its lifetime, so a run pays for loading the
+    extension and attaching the store once. Reads on a store directory that
+    doesn't exist answer empty without opening anything, so a dry run on a
+    fresh corpus creates nothing. The first write creates the directory and
+    the table (or migrates an older one).
+
+    ``install_extension`` lets the connection download the lance extension
+    when it's absent. Only a caller that already reaches the network passes
+    it (a real embed run); otherwise an absent extension raises
+    :class:`~atif_embed.domain.errors.LanceExtensionMissing`.
+
+    :meth:`close` releases the connection; the store also closes itself when
+    it's garbage-collected.
     """
 
-    def __init__(self, lance_uri: Path, *, dim: int) -> None:
+    def __init__(self, lance_uri: Path, *, dim: int, install_extension: bool = False) -> None:
         self._lance_uri = lance_uri
         self._dim = dim
-        self._tbl: Any | None = None
+        self._install_extension = install_extension
+        self._conn: StoreConnection | None = None
+        self._finalizer: weakref.finalize[[], Self] | None = None
+        self._writable = False
 
-    def _table(self) -> Any:
-        if self._tbl is None:
-            db = connect_db(self._lance_uri)
-            self._tbl = open_or_create_table(db, dim=self._dim)
-        return self._tbl
+    def _connection(self) -> StoreConnection:
+        if self._conn is None:
+            conn = connect_db(self._lance_uri, install_extension=self._install_extension)
+            self._conn = conn
+            self._finalizer = weakref.finalize(self, conn.close)
+        return self._conn
+
+    def _write_connection(self) -> StoreConnection:
+        conn = self._connection()
+        if not self._writable:
+            open_or_create_table(conn, dim=self._dim)
+            self._writable = True
+        return conn
+
+    def _readable(self) -> bool:
+        return self._conn is not None or Path(self._lance_uri).is_dir()
 
     def table_identity(self) -> tuple[str, int] | None:
         """The store's stamped ``(model, dim)``, or None when it has none."""
-        return table_identity(self._lance_uri)
+        if not self._readable():
+            return None
+        return _table_identity(self._connection())
 
     def get_embedded_hashes(self) -> dict[str, str]:
         """``{uuid: text_hash}`` for every row already in the store."""
-        return get_embedded_hashes(self._lance_uri)
+        if not self._readable():
+            return {}
+        return _embedded_hashes(self._connection())
+
+    def count_rows(self) -> int:
+        """The number of rows in the store (0 when it has no table)."""
+        if not self._readable():
+            return 0
+        return _count_rows(self._connection())
 
     def delete_uuids(self, uuids: Iterable[str]) -> int:
         """Delete the rows carrying ``uuids``; return how many went."""
-        return delete_uuids(self._table(), uuids)
+        return delete_uuids(self._write_connection(), uuids)
 
     def add_chunk(self, df: pl.DataFrame) -> None:
         """Append one embedded chunk to the table."""
-        add_chunk(self._table(), df)
+        add_chunk(self._write_connection(), df)
 
     def optimize(self) -> None:
-        """Compact the table's fragments when it has accumulated enough."""
-        optimize_if_needed(self._table())
+        """Compact the table's fragments and remove versions past the retention window."""
+        optimize_if_needed(self._write_connection())
 
-    def ensure_index(self, *, metric: str = "cosine") -> None:
-        """Create the vector index under ``metric`` when the table lacks one."""
-        if metric not in {"cosine", "l2", "dot"}:
-            msg = f"Unsupported Lance metric: {metric!r}"
-            raise ValueError(msg)
-        ensure_index(self._table(), metric=metric)  # type: ignore[arg-type]
+    def close(self) -> None:
+        """Close the store's connection, if one is open. Safe to call twice."""
+        if self._finalizer is not None:
+            self._finalizer()
+        self._conn = None
+        self._finalizer = None
+        self._writable = False
 
 
 __all__ = [
+    "DATA_STORAGE_VERSION",
     "SCHEMA_VERSION",
     "SCHEMA_VERSION_FILE",
+    "STORE_ALIAS",
     "TABLE_NAME",
+    "VERSION_RETENTION_SECONDS",
+    "WRITER_MEMORY_BYTES",
+    "WRITER_THREADS",
     "LanceVectorStore",
+    "StoreConnection",
     "add_chunk",
+    "column_names",
     "connect_db",
     "count_rows",
     "delete_uuids",
-    "ensure_index",
     "get_embedded_hashes",
+    "has_table",
     "lance_schema",
     "migrate_pre_stamp_table",
     "open_or_create_table",

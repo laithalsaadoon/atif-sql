@@ -167,6 +167,23 @@ def corpus_root(tmp_path: Path) -> Path:
     return write_corpus(tmp_path / "corpus", torn_session=True)
 
 
+# The store is read and written only through DuckDB's lance extension, and a
+# test's store opens without ``install_extension`` (as a dry run would), so
+# the suite installs the extension once up front, as atif-duck's and
+# atif-cli's suites do. A no-op where it is already present; a one-time
+# download on a fresh runner. A public name on purpose: ``conftest.py``
+# re-exports this module with ``import *``, which skips underscore names.
+@pytest.fixture(scope="session", autouse=True)
+def lance_extension_present() -> None:
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        con.execute("INSTALL lance")
+    finally:
+        con.close()
+
+
 class FakeEmbedder:
     """Deterministic :class:`EmbeddingProvider` for use-case tests.
 

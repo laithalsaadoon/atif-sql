@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from cli_fixtures import write_analytics_parquets
+from duckdb import connect as _unpatched_duckdb_connect
 from loguru import logger
 
 from atif_cli import app as app_module
@@ -304,31 +305,36 @@ def _write_contract_corpus(root: Path) -> Path:
 
 
 def _write_lance_store(uri: Path, *, model: str = EMBED_MODEL, dim: int = EMBED_DIM) -> Path:
-    """A tiny REAL Lance store, written with raw lancedb (no atif-embed)."""
-    import lancedb
+    """A tiny REAL Lance store, written with raw DuckDB SQL through the lance extension.
+
+    Not through atif-embed's writer, so these tests pin what the CLI reads
+    rather than restating what the writer writes. The connection comes from
+    ``duckdb.connect`` as imported at collection time, so a test that has
+    patched ``duckdb.connect`` (``empty_extension_dir``) neither breaks the
+    fixture nor records its statements.
+    """
     import pyarrow as pa
 
-    schema = pa.schema(
-        [
-            pa.field("uuid", pa.string(), nullable=False),
-            pa.field("model", pa.string(), nullable=False),
-            pa.field("dim", pa.int32(), nullable=False),
-            pa.field("embedding", pa.list_(pa.float32(), dim), nullable=False),
-            pa.field("embedded_at", pa.timestamp("us", tz="UTC"), nullable=False),
-        ]
-    )
     table = pa.table(
         {
             "uuid": ["u-1"],
             "model": [model],
-            "dim": [dim],
+            "dim": pa.array([dim], type=pa.int32()),
             "embedding": pa.array([[1.0] + [0.0] * (dim - 1)], type=pa.list_(pa.float32(), dim)),
-            "embedded_at": [datetime.now(UTC)],
-        },
-        schema=schema,
+            "embedded_at": pa.array([datetime.now(UTC)], type=pa.timestamp("us", tz="UTC")),
+        }
     )
     uri.mkdir(parents=True, exist_ok=True)
-    lancedb.connect(str(uri)).create_table("embeddings", data=table, mode="create")
+    quoted = "'" + str(uri).replace("'", "''") + "'"
+    writer = _unpatched_duckdb_connect(":memory:")
+    try:
+        writer.execute("SET TimeZone = 'UTC'")
+        writer.execute("LOAD lance")
+        writer.execute(f"ATTACH {quoted} AS fixture_store (TYPE LANCE)")
+        writer.register("fixture_rows", table)
+        writer.execute("CREATE TABLE fixture_store.main.embeddings AS SELECT * FROM fixture_rows")
+    finally:
+        writer.close()
     return uri
 
 
