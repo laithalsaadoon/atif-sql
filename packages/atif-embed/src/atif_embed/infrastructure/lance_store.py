@@ -484,15 +484,18 @@ def optimize_if_needed(conn: StoreConnection) -> None:
     the files only versions older than :data:`VERSION_RETENTION_SECONDS`
     still name. Both are best-effort, as lancedb's ``optimize()`` was: a
     failure is logged and the next run tries again, because a store that
-    isn't compacted is slower, not wrong.
+    isn't compacted is slower, not wrong. They're also independent: VACUUM
+    runs whether or not OPTIMIZE committed.
     """
     import duckdb
 
     try:
         conn.con.execute(f"OPTIMIZE {_TABLE};").fetchall()
     except duckdb.Error as exc:
-        logger.warning("Lance OPTIMIZE failed: {}", exc)
-        return
+        # Under a steady delete-and-insert loop OPTIMIZE loses commits to
+        # retryable conflicts (30 of 244 in the 2026-11-03 review). Returning
+        # here would let old versions pile up for as long as that lasted.
+        logger.warning("Lance OPTIMIZE failed: {}; running VACUUM anyway", exc)
     try:
         conn.con.execute(
             f"VACUUM LANCE {_TABLE} WITH (older_than_seconds = {int(VERSION_RETENTION_SECONDS)});"
