@@ -108,11 +108,19 @@ WRITER_MEMORY_BYTES: int = 1024**3
 #: DuckDB threads for the store's connection.
 WRITER_THREADS: int = 2
 
-#: ``VACUUM LANCE`` keeps every version younger than this. A reader that
-#: opened a version a moment ago (a ``search`` running while embed compacts)
-#: still finds every file it names, the same one-hour grace the lake's cleanup
-#: uses. lancedb's ``optimize()`` kept a week of versions, which is how one
-#: fleet store reached 1,568 versions and 2.9 GB of old data.
+#: ``VACUUM LANCE`` removes the versions created longer ago than this, except
+#: the current one. It ages a version by when it was created, not by when a
+#: newer one replaced it: a head replaced a moment earlier, created 4 s before,
+#: went under a 2-second window (checked 2026-11-03). So the window promises a
+#: reader nothing on its own. After an idle hour, the first tick's cleanup can
+#: delete the files of the version a running ``search`` opened a moment ago.
+#: Lance appears to keep the files it has already opened readable: the
+#: 2026-11-03 review ran 16 scans overlapping cleanups with no error. The gap
+#: left is a reader that has read the manifest but not yet opened a fragment it
+#: names when the cleanup runs. That read fails, and running it again reads the
+#: current version. The hour matches the lake's cleanup. lancedb's
+#: ``optimize()`` kept a week of versions, which is how one fleet store reached
+#: 1,568 versions and 2.9 GB of old data.
 VERSION_RETENTION_SECONDS: int = 3600
 
 #: ``text_hash`` stamped on rows that predate the stamp. Angle brackets make
