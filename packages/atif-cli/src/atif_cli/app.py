@@ -2205,12 +2205,14 @@ def search(
 
 
 #: ``search``'s kNN, one text per shape. Rank by cosine similarity
-#: descending: ORDER BY array_cosine_distance (== 1 - sim) ASC is what
-#: triggers the cosine HNSW index lookup. Using array_distance here (L2) would
-#: silently bypass the index AND give wrong ranks: the raw int8-cast-to-float
-#: document vectors have magnitudes in the thousands while the query vector is
-#: unit-normalized — only cosine is magnitude-invariant. ``{dim}`` is the only
-#: placeholder, filled with ``int(len(vector))``.
+#: descending: ORDER BY array_cosine_distance (== 1 - sim) ASC with a LIMIT,
+#: which DuckDB runs as an exact top-k over a full scan of the Lance table
+#: (EXPLAIN shows a ``Lance Table Scan`` with ``Lance Limit: none`` under the
+#: join and a ``Top N`` above it; no vector index is read).
+#: Cosine is the only correct metric here, not a speed choice: the raw
+#: int8-cast-to-float document vectors have magnitudes in the thousands while
+#: the query vector is unit-normalized, so array_distance (L2) would give wrong
+#: ranks. ``{dim}`` is the only placeholder, filled with ``int(len(vector))``.
 _SEARCH_SQL = """
     WITH qv AS (SELECT CAST(? AS FLOAT[{dim}]) AS v)
     SELECT me.uuid                                                     AS uuid,
