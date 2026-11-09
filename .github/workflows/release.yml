@@ -99,7 +99,7 @@ jobs:
           persist-credentials: true
           ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
 
-      - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
