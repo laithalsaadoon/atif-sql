@@ -1734,15 +1734,17 @@ def analyze(
     skip_conflicts: bool = False,
     skip_friction: bool = False,
     skip_perceived: bool = False,
+    narrate: Annotated[bool, cyclopts.Parameter(name="--narrate", negative="")] = False,
     corpus_root: Path | None = None,
     lake: Annotated[bool, cyclopts.Parameter(negative="--no-lake")] = True,
     fmt: Annotated[OutputFormat, cyclopts.Parameter(name="--format")] = OutputFormat.AUTO,
 ) -> None:
-    """Run the four LLM analytics pipelines: classify, conflicts, friction, perceived.
+    """Run the LLM analytics pipelines: classify, conflicts, friction, perceived, and narrate on request.
 
     Defaults to a DRY RUN (plan dicts + cost estimates, zero LLM spend);
     pass ``--no-dry-run`` to execute them. ``--skip-<stage>`` subtracts
-    individual stages. The deterministic surfaces (``user_steps``,
+    individual stages, and ``--narrate`` adds the narrate stage, which is
+    off by default. The deterministic surfaces (``user_steps``,
     ``human_turns``, ``session_outcomes``) are views, so they need no run.
 
     Session data comes from the lake when it holds the corpus (a session
@@ -1774,6 +1776,11 @@ def analyze(
         lines and scripts keep parsing.
     skip_classify, skip_conflicts, skip_friction, skip_perceived
         Opt out of one stage.
+    narrate
+        Also run the narrate stage: a plain-language account of each window
+        of every session (``session_narration``) and a story per session
+        (``session_stories``). It reads every session, one-shot jobs and
+        audits included, and makes one model call per window, so it's opt-in.
     corpus_root
         Override the materialized corpus root.
     lake
@@ -1815,6 +1822,7 @@ def analyze(
             skip_conflicts=skip_conflicts,
             skip_friction=skip_friction,
             skip_perceived=skip_perceived,
+            narrate=narrate,
             source=source,
         )
     finally:

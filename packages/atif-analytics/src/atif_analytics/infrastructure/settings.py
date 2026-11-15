@@ -23,6 +23,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from atif_analytics.domain.config import TranscriptCaps
 from atif_analytics.domain.layout import AnalyticsLayout
+from atif_analytics.domain.narration import (
+    DEFAULT_RESULT_FAILED_TAIL_CHARS,
+    DEFAULT_RESULT_HEAD_CHARS,
+    DEFAULT_TOOL_INPUT_CHARS,
+    DEFAULT_WINDOW_MAX_CHARS,
+    DEFAULT_WINDOW_MIN_CHARS,
+)
 
 if TYPE_CHECKING:
     from atif_models.infrastructure.settings import LlmSettings
@@ -92,6 +99,33 @@ class AnalyticsSettings(BaseSettings):
     #: size stub (see TranscriptCaps). Env:
     #: ``ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES``.
     session_text_tool_result_bodies: bool = False
+
+    # --- narrate pipeline knobs ---
+    #: Ceiling of one narration window in rendered characters; a longer run
+    #: of steps splits. Env: ``ATIF_SQL_NARRATE_WINDOW_MAX_CHARS``.
+    narrate_window_max_chars: int = Field(default=DEFAULT_WINDOW_MAX_CHARS, ge=1)
+    #: A window under this many rendered characters isn't closed at a
+    #: boundary mark; it runs on into the next steps. Env:
+    #: ``ATIF_SQL_NARRATE_WINDOW_MIN_CHARS``.
+    narrate_window_min_chars: int = Field(default=DEFAULT_WINDOW_MIN_CHARS, ge=0)
+    #: How many raw steps of the previous window each narration call carries
+    #: over, and the character ceiling on them. Env:
+    #: ``ATIF_SQL_NARRATE_CARRY_STEPS`` / ``ATIF_SQL_NARRATE_CARRY_MAX_CHARS``.
+    narrate_carry_steps: int = Field(default=6, ge=0)
+    narrate_carry_max_chars: int = Field(default=4_000, ge=0)
+    #: How much of each tool result a narration call is shown: its opening,
+    #: and for a failed result its ending as well. 0 for the head shows a
+    #: result as its size only, the way the other pipelines read one. These
+    #: are narrate's own bounds; ``session_text_tool_result_bodies`` doesn't
+    #: apply to it. Env: ``ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS`` /
+    #: ``ATIF_SQL_NARRATE_TOOL_RESULT_FAILED_TAIL_CHARS``.
+    narrate_tool_result_head_chars: int = Field(default=DEFAULT_RESULT_HEAD_CHARS, ge=0)
+    narrate_tool_result_failed_tail_chars: int = Field(
+        default=DEFAULT_RESULT_FAILED_TAIL_CHARS, ge=0
+    )
+    #: Length each tool call's arguments are shown at in a narration call
+    #: (the other pipelines read 400). Env: ``ATIF_SQL_NARRATE_TOOL_INPUT_CHARS``.
+    narrate_tool_input_chars: int = Field(default=DEFAULT_TOOL_INPUT_CHARS, ge=1)
 
     # ------------------------------------------------------------------
     # Derivations

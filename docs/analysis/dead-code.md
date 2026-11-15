@@ -82,8 +82,8 @@ The limits of this derivation, stated because no index backs it:
   No `getattr` targets a first-party module object; every site takes an
   instance, an upstream class, or a standard-library or third-party module,
   including
-  `packages/atif-models/src/atif_models/infrastructure/settings.py:74`,
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:58`,
+  `packages/atif-models/src/atif_models/infrastructure/settings.py:107`,
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:65`,
   and `packages/atif-cli/src/atif_cli/app.py:306` (`os`).
 
 Enforced gates are why the list is short rather than thin. ruff runs
@@ -133,14 +133,12 @@ intra-module use site is named after the table.
 | `CONFLICTS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:26` | 2026-08-28 |
 | `USER_FRICTION_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:27` | 2026-08-28 |
 | `PERCEIVED_ERRORS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:28` | 2026-08-28 |
-| `REFUSALS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:39` | 2026-08-28 |
-| `STATE_DB_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:41` | 2026-08-28 |
-| `TOOL_INPUT_PREVIEW_CHARS` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:68` | 2026-08-28 |
+| `REFUSALS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:46` | 2026-08-28 |
+| `STATE_DB_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:48` | 2026-08-28 |
 | `UUID_HEADER_ESCAPE` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:79` | 2026-08-28 |
-| `main_chain` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:242` | 2026-08-28 |
-| `parse_trajectory_step` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:115` | 2026-09-28 |
-| `read_trajectory_steps` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238` | 2026-09-28 |
-| `read_edges_uuids` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:249` | 2026-09-28 |
+| `parse_trajectory_step` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:118` | 2026-09-28 |
+| `read_trajectory` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:270` | 2026-11-15 |
+| `read_edges_uuids` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:382` | 2026-09-28 |
 | `is_sharded_dir` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:35` | 2026-08-28 |
 | `write_part` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90` | 2026-08-28 |
 | `read_all` | `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:114` | 2026-08-28 |
@@ -148,8 +146,8 @@ intra-module use site is named after the table.
 | `StorageLayout` | `packages/atif-cli/src/atif_cli/corpus.py:83` | 2026-09-28 |
 | `LaneStatus` | `packages/atif-cli/src/atif_cli/cron.py:74` | 2026-08-28 |
 | `DuckLakeSteps` | `packages/atif-cli/src/atif_cli/embed_lake.py:70` | 2026-09-28 |
-| `TURNS_BATCH_SIZE` | `packages/atif-cli/src/atif_cli/lake_sessions.py:65` | 2026-09-28 |
-| `STEPS_BATCH_SIZE` | `packages/atif-cli/src/atif_cli/lake_sessions.py:69` | 2026-09-28 |
+| `TURNS_BATCH_SIZE` | `packages/atif-cli/src/atif_cli/lake_sessions.py:68` | 2026-09-28 |
+| `STEPS_BATCH_SIZE` | `packages/atif-cli/src/atif_cli/lake_sessions.py:72` | 2026-09-28 |
 | `emit_row_batches` | `packages/atif-cli/src/atif_cli/output.py:181` | 2026-08-28 |
 | `CODEX_TOOL_IMAGE_MEDIA_TYPES` | `packages/atif-converter/src/atif_converter/domain/blobs.py:96` | 2026-10-08 |
 | `codex_tool_image_media_type` | `packages/atif-converter/src/atif_converter/domain/blobs.py:339` | 2026-10-08 |
@@ -187,7 +185,7 @@ intra-module use site is named after the table.
 | `VerifyReport` | `packages/atif-duck/src/atif_duck/infrastructure/lake.py:1082` | 2026-09-28 |
 | `LakeStatus` | `packages/atif-duck/src/atif_duck/infrastructure/lake.py:1184` | 2026-09-28 |
 | `CompactReport` | `packages/atif-duck/src/atif_duck/infrastructure/lake.py:1282` | 2026-09-28 |
-| `DEFAULT_READER_MEMORY_BYTES` | `packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:57` | 2026-09-28 |
+| `DEFAULT_READER_MEMORY_BYTES` | `packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:59` | 2026-09-28 |
 | `STEPS_TABLE` | `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py:52` | 2026-09-28 |
 | `STEP_TEXTS_SQL` | `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py:67` | 2026-09-28 |
 | `CHANGED_STEP_TEXTS_SQL` | `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py:75` | 2026-09-28 |
@@ -225,20 +223,14 @@ numbers follow it as plain numbers.
   `ModelSpec.chars_per_token` instead, so the fallback applies only to a caller that omits it.
 - The `*_DIRNAME` constants and `STATE_DB_FILENAME` are each joined onto
   `analytics_dir` by one property in
-  `packages/atif-analytics/src/atif_analytics/domain/layout.py:55-83`, in
+  `packages/atif-analytics/src/atif_analytics/domain/layout.py:62-105`, in
   declaration order.
-- `TOOL_INPUT_PREVIEW_CHARS` is a default argument at
-  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:101`;
-  `UUID_HEADER_ESCAPE` is the substitution at
-  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:91`;
-  `main_chain` is called at
-  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:282`. The
-  `main_chain` in
-  `packages/atif-duck/tests/test_result_views.py:86` is a local variable.
+- `UUID_HEADER_ESCAPE` is the substitution at
+  `packages/atif-analytics/src/atif_analytics/domain/transcript.py:91`.
 - `parse_trajectory_step` is called at
-  `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:246`,
-  inside `read_trajectory_steps`, which a reader method calls at `:303`;
-  `read_edges_uuids` is called at `:311`.
+  `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:281`,
+  inside `read_trajectory`, which a reader method calls at `:442`;
+  `read_edges_uuids` is called at `:466`.
 - `is_sharded_dir` is called at
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:97`;
   the module functions `write_part` and `read_all` are what the `ParquetCache`
@@ -253,7 +245,7 @@ numbers follow it as plain numbers.
 - `DuckLakeSteps` is the return type of `lake_steps_port` at
   `packages/atif-cli/src/atif_cli/embed_lake.py:89` and is constructed at `:95`.
 - `TURNS_BATCH_SIZE` and `STEPS_BATCH_SIZE` are default arguments at
-  `packages/atif-cli/src/atif_cli/lake_sessions.py:96` and `:97`.
+  `packages/atif-cli/src/atif_cli/lake_sessions.py:99` and `:100`.
 - `emit_row_batches` is the shared writer both public emitters call, at
   `packages/atif-cli/src/atif_cli/output.py:155` and again on line 178 of that
   file.
@@ -299,7 +291,7 @@ numbers follow it as plain numbers.
   `VerifyReport`, `LakeStatus`, and `CompactReport` are return types at `:766`,
   `:1109`, `:1222`, and `:1305`; `LakeMismatch` annotates `:1087`.
 - `DEFAULT_READER_MEMORY_BYTES` is the reader's fallback memory limit at
-  `packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:103`.
+  `packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:105`.
 - In `packages/atif-duck/src/atif_duck/infrastructure/lake_steps.py`,
   `STEPS_TABLE` is interpolated at `:60`; `STEP_TEXTS_SQL`,
   `CHANGED_STEP_TEXTS_SQL`, `STEP_KEYS_SQL`, `REGISTERED_AT_SQL`, and
@@ -335,7 +327,7 @@ numbers follow it as plain numbers.
   `ProviderUnavailable` at `:51`.
 - `ReasoningEffort` types `DEFAULT_REASONING_EFFORT` at
   `packages/atif-models/src/atif_models/domain/registry.py:45` and a model field
-  at `packages/atif-models/src/atif_models/domain/registry.py:80`.
+  at `packages/atif-models/src/atif_models/domain/registry.py:97`.
 
 Further public-by-naming symbols have no outside reference and are **not**
 listed, because their modules make no export claim about them. Most live in
@@ -374,7 +366,7 @@ modules that declare no `__all__` at all, so they're module-internal helpers:
 
 The rest sit in modules that do declare an `__all__` and are deliberately
 absent from it, which is the module saying they aren't exported:
-`packages/atif-cli/src/atif_cli/app.py:2330` (`search_rows`),
+`packages/atif-cli/src/atif_cli/app.py:2338` (`search_rows`),
 `packages/atif-cli/src/atif_cli/corpus.py:71` (`SessionLayout`) and `:158`
 (`CorpusSlimReport`), and
 `packages/atif-duck/src/atif_duck/infrastructure/lake.py:117`
@@ -472,11 +464,11 @@ write, over every tracked file:
 Every real consumer bypasses the facade for the deep module:
 
 - `packages/atif-cli/src/atif_cli/app.py:1547` and
-  `packages/atif-cli/src/atif_cli/app.py:2192-2196` import `register` from
+  `packages/atif-cli/src/atif_cli/app.py:2200-2204` import `register` from
   `atif_duck.infrastructure.registry`.
-- `packages/atif-cli/src/atif_cli/app.py:2399`:
+- `packages/atif-cli/src/atif_cli/app.py:2407`:
   `from atif_duck.domain.examples import (...)`.
-- `packages/atif-cli/src/atif_cli/app.py:2481`:
+- `packages/atif-cli/src/atif_cli/app.py:2489`:
   `from atif_duck.domain.catalog import (...)`, which takes `MACRO_SIGNATURES`
   and `VIEW_SCHEMA` with their analytics counterparts.
 - `packages/atif-cli/src/atif_cli/duck_errors.py:27`,

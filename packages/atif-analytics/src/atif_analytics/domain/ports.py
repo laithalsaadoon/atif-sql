@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from datetime import datetime
 
+    from atif_analytics.domain.narration import SubagentRef, TaskNotice
     from atif_analytics.domain.transcript import StepEvent
 
 #: ``{session_id: (last_record_ts, trajectory_mtime)}``: the two bounds the
@@ -85,6 +86,31 @@ class SessionSource(Protocol):
         """Each session's steps, in order, with every tool call and result.
 
         What the transcript renderer reads. Same key rule as :meth:`load_turns`.
+        """
+        ...
+
+    def subagents(self, session_id: str) -> list[SubagentRef]:
+        """The session's declared subagents, from ``trajectory.extra.subagents``.
+
+        One entry per subagent the converter recorded, with the tool call
+        that launched it. Empty when the session spawned none or the list is
+        unreadable.
+        """
+        ...
+
+    def task_notices(self, session_id: str) -> list[TaskNotice]:
+        """The task notifications the harness queued beside the session's transcript.
+
+        From the session's ``session_events`` (the ``queued_command``
+        attachments). Empty when it has none.
+        """
+        ...
+
+    def tool_result_file(self, session_id: str, path: str) -> str | None:
+        """The text of a tool result the harness saved to a file, or ``None``.
+
+        ``path`` is the path the transcript's stub names; an adapter reads
+        the corpus's archived copy by file name and never opens the path.
         """
         ...
 

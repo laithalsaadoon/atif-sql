@@ -10,12 +10,21 @@ is I/O, so this lives in ``infrastructure``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import cast
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from atif_models.domain.registry import DEFAULT_FAMILY, Family, ModelSpec, Size, resolve
+from atif_models.domain.registry import (
+    DEFAULT_FAMILY,
+    Family,
+    ModelSpec,
+    ReasoningEffort,
+    Size,
+    resolve,
+    resolve_model,
+)
 
 #: Families with a wired provider adapter
 #: (:func:`atif_models.infrastructure.providers.build_structured_provider`).
@@ -64,11 +73,35 @@ class LlmSettings(BaseSettings):
     # perceived judges user-visible evidence over full transcripts — medium.
     # Env: ATIF_SQL_LLM_SIZE_PERCEIVED.
     llm_size_perceived: Size = "medium"
+    # narrate describes one window per call and makes many calls per session,
+    # so it runs on the high-volume tier. Env: ATIF_SQL_LLM_SIZE_NARRATE.
+    llm_size_narrate: Size = "small"
+    # narrate can also be pointed at one model by name, and at a reasoning
+    # effort of its own, without moving any other pipeline: the model wins
+    # over the size alias (and brings its own family), and the effort
+    # replaces the registry's default for narrate's calls only. Names are
+    # the ones :func:`atif_models.domain.registry.resolve_model` accepts
+    # (``gpt-6.1-terra``, ``gpt-6-luna``, ...). Env:
+    # ATIF_SQL_LLM_MODEL_NARRATE / ATIF_SQL_LLM_EFFORT_NARRATE.
+    llm_model_narrate: str | None = None
+    llm_effort_narrate: ReasoningEffort | None = None
+
+    @field_validator("llm_model_narrate")
+    @classmethod
+    def _model_must_be_known(cls, value: str | None) -> str | None:
+        """Refuse a model name the registry can't resolve, with the names it can."""
+        if value is None:
+            return None
+        try:
+            resolve_model(value)
+        except KeyError as exc:
+            raise ValueError(str(exc.args[0])) from None
+        return value
 
     def size_for(self, pipeline: str) -> Size:
         """The configured size alias for ``pipeline``.
 
-        Pipelines: classify / conflicts / friction / perceived.
+        Pipelines: classify / conflicts / friction / perceived / narrate.
         """
         try:
             size = getattr(self, f"llm_size_{pipeline}")
@@ -78,8 +111,17 @@ class LlmSettings(BaseSettings):
         return cast("Size", size)
 
     def spec_for(self, pipeline: str) -> ModelSpec:
-        """Resolve ``pipeline`` to its :class:`~atif_models.domain.registry.ModelSpec`."""
-        return resolve(self.size_for(pipeline), self.llm_family)
+        """Resolve ``pipeline`` to its :class:`~atif_models.domain.registry.ModelSpec`.
+
+        The pipeline's size alias in the configured family, unless the
+        pipeline has a ``llm_model_<pipeline>`` setting that names a model;
+        a ``llm_effort_<pipeline>`` setting then replaces the spec's
+        reasoning effort. Only narrate has either.
+        """
+        name = getattr(self, f"llm_model_{pipeline}", None)
+        spec = resolve_model(name) if name else resolve(self.size_for(pipeline), self.llm_family)
+        effort = getattr(self, f"llm_effort_{pipeline}", None)
+        return replace(spec, reasoning_effort=effort) if effort else spec
 
 
 __all__ = ["LlmSettings"]

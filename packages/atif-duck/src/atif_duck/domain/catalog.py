@@ -362,7 +362,9 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
 
 # Views registered by ``atif_duck.infrastructure.analytics.register_analytics``
 # (parquet-gated; ``session_goals`` / ``conflicts_summary`` /
-# ``perceived_summary`` derive from their upstream view).
+# ``perceived_summary`` derive from their upstream view). ``session_narration``
+# ``session_stories`` and ``subagent_stories`` are the narrate stage's, written
+# only by ``atif-sql analyze --narrate``.
 #
 # Removed 2026-09-27 with the trajectory and structural pipelines:
 # ``message_trajectory``, ``message_clusters``, ``cluster_terms``,
@@ -375,6 +377,9 @@ ANALYTICS_VIEW_NAMES: tuple[str, ...] = (
     "user_friction",
     "perceived_errors",
     "perceived_summary",
+    "session_narration",
+    "session_stories",
+    "subagent_stories",
 )
 
 # Column schema for every analytics view, in DESCRIBE order. Drift-tested by
@@ -439,6 +444,54 @@ ANALYTICS_VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("n_errors", "BIGINT"),
         ("max_severity", "VARCHAR"),
         ("signals", "VARCHAR[]"),
+    ),
+    "session_narration": (
+        ("session_id", "VARCHAR"),
+        ("agent_id", "VARCHAR"),
+        ("window_index", "INTEGER"),
+        ("first_step_uuid", "VARCHAR"),
+        ("last_step_uuid", "VARCHAR"),
+        ("started_at", "TIMESTAMP WITH TIME ZONE"),
+        ("ended_at", "TIMESTAMP WITH TIME ZONE"),
+        ("step_count", "INTEGER"),
+        ("boundary", "VARCHAR"),
+        ("intent", "VARCHAR"),
+        ("actions", "VARCHAR"),
+        ("outcome", "VARCHAR"),
+        ("model_id", "VARCHAR"),
+        ("prompt_digest", "VARCHAR"),
+        ("narrated_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "session_stories": (
+        ("session_id", "VARCHAR"),
+        ("story", "VARCHAR"),
+        ("window_count", "INTEGER"),
+        ("step_count", "INTEGER"),
+        ("subagent_count", "INTEGER"),
+        ("subagent_window_count", "INTEGER"),
+        ("first_step_uuid", "VARCHAR"),
+        ("last_step_uuid", "VARCHAR"),
+        ("started_at", "TIMESTAMP WITH TIME ZONE"),
+        ("ended_at", "TIMESTAMP WITH TIME ZONE"),
+        ("model_id", "VARCHAR"),
+        ("prompt_digest", "VARCHAR"),
+        ("narrated_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "subagent_stories": (
+        ("session_id", "VARCHAR"),
+        ("agent_id", "VARCHAR"),
+        ("story", "VARCHAR"),
+        ("digest", "VARCHAR"),
+        ("returned", "BOOLEAN"),
+        ("window_count", "INTEGER"),
+        ("step_count", "INTEGER"),
+        ("first_step_uuid", "VARCHAR"),
+        ("last_step_uuid", "VARCHAR"),
+        ("started_at", "TIMESTAMP WITH TIME ZONE"),
+        ("ended_at", "TIMESTAMP WITH TIME ZONE"),
+        ("model_id", "VARCHAR"),
+        ("prompt_digest", "VARCHAR"),
+        ("narrated_at", "TIMESTAMP WITH TIME ZONE"),
     ),
 }
 
@@ -586,6 +639,28 @@ DESCRIPTIONS: dict[str, str] = {
     "session_conflicts": "LLM-detected agent/user conflicts per session.",
     "conflicts_summary": "Conflict counts per session.",
     "user_friction": "Labeled user friction moments (correction, confusion, ...).",
+    "session_narration": (
+        "Plain-language narration of a session, one row per window of steps: "
+        "intent, actions, outcome. agent_id is NULL for a main-chain window and "
+        "the subagent's id for a window of a subagent's own steps (join subagents "
+        "on session_id, agent_id); window_index counts within that stream. "
+        "first_step_uuid and last_step_uuid are the step uuids "
+        "(steps.source_uuids[0]) the window covers, boundary says what closed it "
+        "(human_turn, compaction, subagent_start, subagent_end, parent_message, "
+        "size_cap, session_end), and model_id and prompt_digest say what wrote "
+        "it. Order by session_id, agent_id, window_index. Covers every session kind."
+    ),
+    "session_stories": (
+        "One short story per narrated session, folded from its main-chain window "
+        "narrations and its subagents' digests; window_count and step_count say how "
+        "much of the main chain it covers, subagent_count how many subagents."
+    ),
+    "subagent_stories": (
+        "One short story per narrated subagent, folded from the windows of its own "
+        "steps, plus digest (two to four sentences: what it was asked, did and "
+        "returned) and returned (whether the launching transcript shows it coming "
+        "back). Join subagents on session_id, agent_id for its type and launch."
+    ),
     # -- analytics macros ---------------------------------------------------
     "work_mix": "Work-category counts over the last N days.",
     "friction_counts": "Counts per friction label over the last N days (NULL = full corpus).",

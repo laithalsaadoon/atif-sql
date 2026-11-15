@@ -119,6 +119,20 @@ class TestBodyConstruction:
         )
 
 
+class TestOutputCap:
+    def test_the_body_sends_the_specs_cap(self):
+        """A full-output spec puts the model's limit on the wire as ``max_completion_tokens``."""
+        from atif_models.domain.registry import with_full_output
+
+        provider = OpenAiBedrockProvider(with_full_output(resolve("small")), region="us-east-1")
+        body = provider.build_body(system="s", prompt="p", schema=TinyVerdict)
+        assert body["max_completion_tokens"] == 128_000
+        sol = OpenAiBedrockProvider(with_full_output(resolve("medium")), region="us-east-1")
+        assert sol.build_body(system="s", prompt="p", schema=TinyVerdict)[
+            "max_completion_tokens"
+        ] == (131_072)
+
+
 class TestFinishReasonMapping:
     def test_stop_parses_and_validates(self):
         client = MagicMock()

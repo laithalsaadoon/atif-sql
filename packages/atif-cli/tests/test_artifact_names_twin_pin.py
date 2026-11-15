@@ -32,7 +32,11 @@ def test_the_compressed_artifacts_match() -> None:
     assert layout.TRAJECTORY_FILENAME == corpus_reader.TRAJECTORY_FILENAME
     assert layout.TRAJECTORY_FILENAME == corpus_text_rows.TRAJECTORY_FILENAME
     assert layout.EDGES_FILENAME == artifacts.EDGES_JSONL == corpus_reader.EDGES_FILENAME
-    assert layout.SESSION_EVENTS_FILENAME == artifacts.SESSION_EVENTS_JSONL
+    assert (
+        layout.SESSION_EVENTS_FILENAME
+        == artifacts.SESSION_EVENTS_JSONL
+        == corpus_reader.SESSION_EVENTS_FILENAME
+    )
     assert layout.META_FILENAME == artifacts.META_JSON == corpus_reader.META_FILENAME
     assert layout.LOSS_REPORT_FILENAME == artifacts.LOSS_REPORT_JSON
 

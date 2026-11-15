@@ -49,7 +49,7 @@ default, each tool result renders as a one-line size stub and its content never 
 `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` sends the bodies, each clipped to
 `session_text_tool_result_max_chars`.
 
-`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:60-116`
+`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:67-150`
 
 ### AnthropicBedrockProvider
 
@@ -246,7 +246,7 @@ zero. `long_input_tokens` and `long_output_tokens` are the part of the totals fr
 spec's long-context threshold; they bill at the long rates, the rest at the standard rates, and a
 spec without long rates bills them at the standard rates.
 
-`packages/atif-models/src/atif_models/domain/registry.py:180-210`
+`packages/atif-models/src/atif_models/domain/registry.py:270-300`
 
 ### fence_id
 
@@ -257,7 +257,7 @@ def fence_id(text: str) -> str:
 The id a prompt fence around `text` carries: the first 8 hex digits of its SHA-256. It's derived
 from the text, so a prompt is a pure function of its input and a body can't close its own fence.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:732-739`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:997-1004`
 
 ### InvalidSessionInput
 
@@ -279,7 +279,7 @@ Env-driven model selection for the LLM analytics pipelines, and the only place a
 resolved from configuration. Settings load refuses an `llm_family` outside `RUNNABLE_FAMILIES`
 (`openai` and `anthropic`), the families with a wired adapter.
 
-`packages/atif-models/src/atif_models/infrastructure/settings.py:28-82`
+`packages/atif-models/src/atif_models/infrastructure/settings.py:37-124`
 
 ### LlmStructuredProvider
 
@@ -326,7 +326,7 @@ The console-script entry point behind the `atif-sql` command; it replaces loguru
 with WARNING-and-up (`ATIF_SQL_LOG_LEVEL` widens it) so routine reads keep stderr quiet, then hands
 off to the cyclopts app and turns a cyclopts usage error into exit `64`.
 
-`packages/atif-cli/src/atif_cli/app.py:2538-2571`
+`packages/atif-cli/src/atif_cli/app.py:2546-2579`
 
 ### materialize
 
@@ -386,7 +386,7 @@ def message_prompt(message: str) -> str:
 The friction stage's user message: the one human message inside a `<message id="...">` fence whose
 id is `fence_id(message)`, then the `FRICTION_REQUEST` line.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:753-756`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1018-1021`
 
 ### ModelSpec
 
@@ -405,7 +405,14 @@ class ModelSpec:
     long_pricing_in: float | None = None
     long_pricing_out: float | None = None
     chars_per_token: float = 4.0
+    max_output_tokens: int | None = None
 ```
+
+`max_output_tokens` is the model's own output limit (reasoning tokens included), where
+`max_completion_tokens` is the cap a call sends; `with_full_output(spec)` returns the spec with the
+cap raised to the limit, which is what the narrate stage sends. `NAMED_MODELS` holds models that
+sit behind no size alias (`gpt-6.1-terra`); `resolve_model(name)` returns one, and
+`LlmSettings.spec_for` uses it when a pipeline has a `llm_model_<pipeline>` setting.
 
 One concrete model behind a `(family, size)` alias, carrying its Bedrock model id, USD-per-1M-token
 prices that may be `None`, and whether the family supports native strict-JSON structured output.
@@ -414,7 +421,7 @@ and `long_pricing_out`, and `None` means one rate across the window. `chars_per_
 family's measured characters per token on rendered transcripts, which the dry-run plans use to turn
 a prompt length into tokens.
 
-`packages/atif-models/src/atif_models/domain/registry.py:49-85`
+`packages/atif-models/src/atif_models/domain/registry.py:49-102`
 
 ### OpenAiBedrockProvider
 
@@ -495,12 +502,13 @@ def run_analyze(
 ) -> dict[str, Any]:
 ```
 
-Runs the LLM stages in order (classify, conflicts, friction, perceived) over one shared corpus
+Runs the LLM stages in order (classify, conflicts, friction, perceived, and narrate when
+`narrate=True`) over one shared corpus
 reader and one run budget, returning a per-stage summary dict; the `skip_*` flags subtract individual
 stages, and `source` says where session data comes from (atif-cli passes the lake's when the lake
 holds the corpus; the default reads the per-session files).
 
-`packages/atif-analytics/src/atif_analytics/application/analyze.py:37-155`
+`packages/atif-analytics/src/atif_analytics/application/analyze.py:41-163`
 
 ### run_backfill
 
@@ -557,9 +565,9 @@ The user message for the classify, conflicts, and perceived stages: the transcri
 `<transcript id="...">` fence whose id is `fence_id(transcript)`, then the one-line `request`. Each
 stage passes its own request constant, `CLASSIFY_REQUEST`, `CONFLICTS_REQUEST`, or
 `PERCEIVED_REQUEST`, declared at
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:726-728`.
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:989-991`.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:742-750`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1007-1015`
 
 ### VIEW_SCHEMA
 

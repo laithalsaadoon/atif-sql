@@ -1,7 +1,7 @@
 [project]
 name = "atif-analytics"
 version = "0.6.0"
-description = "LLM analytics pipelines over the materialized ATIF corpus: session classification, stance conflicts, user friction, and perceived errors."
+description = "LLM analytics pipelines over the materialized ATIF corpus: session classification, stance conflicts, user friction, perceived errors, and session narration."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

@@ -147,13 +147,14 @@ def test_retry_unknown_pipeline_rejected(db: Path) -> None:
         retry_queue.enqueue(db, pipeline="nope", unit_id="s1", error="e")
 
 
-def test_pipeline_names_are_the_contract_four() -> None:
-    """The four pipelines the checkpoint and retry tables accept."""
+def test_pipeline_names_are_the_contract_five() -> None:
+    """The five pipelines the checkpoint and retry tables accept."""
     assert checkpointer.PIPELINE_NAMES == (
         "classify",
         "conflicts",
         "user_friction",
         "perceived",
+        "narrate",
     )
 
 
