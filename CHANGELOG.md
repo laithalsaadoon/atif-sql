@@ -1,3 +1,9 @@
+## v0.7.0 (2026-11-15)
+
+### Feat
+
+- **analytics**: narrate sessions window by window, subagents included
+
 ## v0.6.0 (2026-11-03)
 
 ### Feat
