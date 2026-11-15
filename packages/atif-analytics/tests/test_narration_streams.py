@@ -278,18 +278,18 @@ def test_the_earliest_sign_of_a_report_wins() -> None:
 
 def test_task_notices_reads_each_notice_once_with_its_status() -> None:
     block = (
-        "<task-notification>\\n<task-id>a52a104e</task-id>\\n<status>completed</status>\\n"
+        "<task-notification>\\n<task-id>a0000001</task-id>\\n<status>completed</status>\\n"
         "<result>found it</result>\\n</task-notification>"
     )
     # A queued-command record holds the notice twice: as the prompt, and as
     # it was shown to the agent.
     body = f'{{"renderedInHumanTurn": [{{"content": "{block}"}}], "prompt": "{block}"}}'
-    assert task_notices(body, "2026-11-09T13:53:41.510Z") == [
-        TaskNotice(ts="2026-11-09T13:53:41.510Z", task_id="a52a104e", status="completed")
+    assert task_notices(body, "2026-01-02T03:04:05.000Z") == [
+        TaskNotice(ts="2026-01-02T03:04:05.000Z", task_id="a0000001", status="completed")
     ]
-    two = block + block.replace("a52a104e", "bshell01").replace("completed", "failed")
+    two = block + block.replace("a0000001", "bshell01").replace("completed", "failed")
     assert [(n.task_id, n.status) for n in task_notices(two, "t")] == [
-        ("a52a104e", "completed"),
+        ("a0000001", "completed"),
         ("bshell01", "failed"),
     ]
     # A queued message that isn't a task notification (the agent was sent a
@@ -299,9 +299,9 @@ def test_task_notices_reads_each_notice_once_with_its_status() -> None:
     # The converter cuts a stored record at 8 KB, so a long report loses its
     # closing tag. The id at its start still names the task.
     cut = block[: block.index("</status>") + len("</status>")] + "<result>a long report that was cu"
-    assert [(n.task_id, n.status) for n in task_notices(cut, "t")] == [("a52a104e", "completed")]
-    assert [n.task_id for n in task_notices(block + cut.replace("a52a104e", "bshell01"), "t")] == [
-        "a52a104e",
+    assert [(n.task_id, n.status) for n in task_notices(cut, "t")] == [("a0000001", "completed")]
+    assert [n.task_id for n in task_notices(block + cut.replace("a0000001", "bshell01"), "t")] == [
+        "a0000001",
         "bshell01",
     ]
 
