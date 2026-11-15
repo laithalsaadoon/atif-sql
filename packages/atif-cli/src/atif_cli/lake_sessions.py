@@ -40,12 +40,14 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from atif_analytics.domain.transcript import StepEvent, step_event
+from atif_analytics.domain.narration import task_notices
+from atif_analytics.domain.transcript import StepEvent, format_step_ts, step_event
 from atif_analytics.infrastructure.corpus_reader import (
     META_FILENAME,
     TrajectoryFileSource,
     complete_session_dirs,
     last_edge_ts,
+    parse_subagents,
     trajectory_mtime,
 )
 from atif_duck.infrastructure.lake_sessions import LakeReadError
@@ -55,6 +57,7 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
+    from atif_analytics.domain.narration import SubagentRef, TaskNotice
     from atif_analytics.domain.ports import SessionBounds
     from atif_duck.infrastructure.lake import LakeLayout, LakeUnavailable
     from atif_duck.infrastructure.lake_sessions import LakeSessionReader, SessionFreshness
@@ -193,7 +196,12 @@ class LakeSessionSource:
         # A fallback parse yields the payloads; the turns memo holds many
         # sessions, so keep it as small as the lake's rows.
         out = {
-            sid: [dataclasses.replace(s, tool_calls=[], tool_results=[]) for s in steps]
+            sid: [
+                dataclasses.replace(
+                    s, tool_calls=[], tool_results=[], tool_call_ids=[], tool_result_errors=[]
+                )
+                for s in steps
+            ]
             for sid, steps in self._files.load_turns(on_disk).items()
         }
         out.update(from_lake)
@@ -202,9 +210,17 @@ class LakeSessionSource:
     def _lake_turns(self, in_lake: list[str]) -> dict[str, list[StepEvent]]:
         errors = self._reader.error_steps(in_lake)
         grouped: dict[str, list[StepEvent]] = defaultdict(list)
-        for sid, step_id, ts, source, message, sidechain, compact, uuids in self._reader.turns(
-            in_lake
-        ):
+        for (
+            sid,
+            step_id,
+            ts,
+            source,
+            message,
+            sidechain,
+            compact,
+            uuids,
+            agent_id,
+        ) in self._reader.turns(in_lake):
             grouped[str(sid)].append(
                 step_event(
                     ts=ts,
@@ -214,6 +230,7 @@ class LakeSessionSource:
                     is_sidechain=bool(sidechain),
                     is_compact_summary=bool(compact),
                     has_error_result=(str(sid), int(step_id)) in errors,
+                    agent_id=agent_id,
                 )
             )
         return {sid: grouped.get(sid, []) for sid in in_lake}
@@ -232,15 +249,25 @@ class LakeSessionSource:
 
     def _lake_steps(self, in_lake: list[str]) -> dict[str, list[StepEvent]]:
         calls: dict[tuple[str, int], list[tuple[str | None, object]]] = defaultdict(list)
-        for sid, step_id, name, tool_input in self._reader.tool_calls(in_lake):
+        call_ids: dict[tuple[str, int], list[str | None]] = defaultdict(list)
+        for sid, step_id, name, tool_input, call_id in self._reader.tool_calls(in_lake):
             calls[(str(sid), int(step_id))].append((name, _json(tool_input)))
+            call_ids[(str(sid), int(step_id))].append(call_id)
         results: dict[tuple[str, int], list[tuple[str | None, object, bool]]] = defaultdict(list)
         for sid, step_id, call_id, content, is_error in self._reader.tool_results(in_lake):
             results[(str(sid), int(step_id))].append((call_id, _json(content), is_error is True))
         grouped: dict[str, list[StepEvent]] = defaultdict(list)
-        for sid, step_id, ts, source, message, sidechain, compact, uuids in self._reader.turns(
-            in_lake
-        ):
+        for (
+            sid,
+            step_id,
+            ts,
+            source,
+            message,
+            sidechain,
+            compact,
+            uuids,
+            agent_id,
+        ) in self._reader.turns(in_lake):
             key = (str(sid), int(step_id))
             grouped[key[0]].append(
                 step_event(
@@ -252,9 +279,39 @@ class LakeSessionSource:
                     is_compact_summary=bool(compact),
                     tool_calls=calls.get(key, ()),
                     tool_results=results.get(key, ()),
+                    agent_id=agent_id,
+                    tool_call_ids=call_ids.get(key, ()),
                 )
             )
         return {sid: grouped.get(sid, []) for sid in in_lake}
+
+    def subagents(self, session_id: str) -> list[SubagentRef]:
+        """The session's declared subagents, from the lake when it holds the session's current rows."""
+        in_lake, _ = self._split([session_id])
+        if in_lake:
+            try:
+                return parse_subagents(_json(self._reader.subagents_json(session_id)))
+            except LakeReadError as exc:
+                self._fail(exc)
+        return self._files.subagents(session_id)
+
+    def task_notices(self, session_id: str) -> list[TaskNotice]:
+        """The session's queued task notifications, from the lake when it holds the session's current rows."""
+        in_lake, _ = self._split([session_id])
+        if in_lake:
+            try:
+                return [
+                    notice
+                    for ts, payload in self._reader.queued_commands(session_id)
+                    for notice in task_notices(payload, format_step_ts(ts))
+                ]
+            except LakeReadError as exc:
+                self._fail(exc)
+        return self._files.task_notices(session_id)
+
+    def tool_result_file(self, session_id: str, path: str) -> str | None:
+        """A saved tool result's text. Always from the session's files: the lake doesn't hold the archive."""
+        return self._files.tool_result_file(session_id, path)
 
     def edges_uuids(self, session_id: str) -> set[str] | None:
         """The session's raw-record uuids, from the lake when it holds the session's current rows."""

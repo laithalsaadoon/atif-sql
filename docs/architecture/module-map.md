@@ -18,16 +18,17 @@ workspace-wide (`pyproject.toml:225`).
 ## atif-analytics
 
 `run_analyze` composes the LLM pipelines in a fixed stage order: classify, conflicts, friction,
-perceived (`packages/atif-analytics/src/atif_analytics/application/analyze.py:37`). Every stage calls
+perceived (`packages/atif-analytics/src/atif_analytics/application/analyze.py:41`), then narrate
+when the caller asks for it. Every stage calls
 a model and honors `dry_run`, which defaults to True as a cost guard so the stages return plan dicts
-instead of spending (`:13`); each plan turns a measured prompt length into tokens at the resolved
+instead of spending (`:14`); each plan turns a measured prompt length into tokens at the resolved
 model's own `chars_per_token`
 (`packages/atif-analytics/src/atif_analytics/domain/costs.py:28`). Every classifier system prompt
 lives in one module, each assembled by joining a task body to shared sections
-(`packages/atif-analytics/src/atif_analytics/application/prompts.py:714-723`), and the same text goes to
+(`packages/atif-analytics/src/atif_analytics/application/prompts.py:974-983`), and the same text goes to
 both model families. The user message comes from the same module: the transcript, or friction's one
-message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:742`,
-`:753`). The pydantic v2
+message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:1007`,
+`:1018`). The pydantic v2
 response schemas they bind against are pure domain models whose field descriptions are themselves
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
 wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
@@ -36,9 +37,9 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py`: the task-framing
   system prompts, public constants assembled at
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:714-723`, the request lines
-  (`:726-729`), and the two user-message builders, `transcript_prompt` (`:742`) and `message_prompt`
-  (`:753`).
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:974-983`, the request lines
+  (`:989-992`), and the two user-message builders, `transcript_prompt` (`:1007`) and `message_prompt`
+  (`:1018`).
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py`: the
   friction tiers behind a human-turn and message-length pre-filter: regex fast path, deterministic
   stamp rules, then the LLM (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:5`).
@@ -56,9 +57,9 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 - `packages/atif-analytics/src/atif_analytics/domain/transcript.py`: `render_session_text`
   renders the transcript a stage sends, each tool result as a one-line stub with the content's
   length, so what a tool returned stays on disk and never reaches Bedrock
-  (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:247`).
+  (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:267`).
   `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
-  characters (`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:94`, `:90`).
+  characters (`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:101`, `:97`).
 - `packages/atif-analytics/src/atif_analytics/domain/models.py`: the response schemas, from
   `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:22`) to
   `PerceivedErrorsResult` (`:355`).
@@ -73,7 +74,7 @@ drift tests assert it column-for-column against `DESCRIBE` and signature-for-sig
 DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The analytics views and
 macros register separately, each only when its backing parquet is populated, because a corpus with no
 `atif-sql analyze` run is the default state
-(`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`). It has `domain/` and
+(`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:148`). It has `domain/` and
 `infrastructure/` but no `application/`, and unlike atif-models, the other member with that shape,
 it carries no layers contract (`pyproject.toml:553`).
 
@@ -102,10 +103,10 @@ it carries no layers contract (`pyproject.toml:553`).
   snapshot expiry.
 - `packages/atif-duck/src/atif_duck/domain/catalog.py`: `VIEW_NAMES`
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`), `MACRO_SIGNATURES` (`:343`), the
-  analytics catalogs (`:370-462`), and one `DESCRIPTIONS` entry per object (`:487`).
+  analytics catalogs (`:372-515`), and one `DESCRIPTIONS` entry per object (`:540`).
 - `packages/atif-duck/src/atif_duck/infrastructure/analytics.py`: the v2 views and macros
   over the analytics parquet outputs, gated on file presence
-  (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:119`).
+  (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:148`).
 - `packages/atif-duck/src/atif_duck/domain/examples.py`: `build_examples` derives one
   runnable query per catalog object from `ARG_EXEMPLARS` rather than hardcoding strings
   (`packages/atif-duck/src/atif_duck/domain/examples.py:191`).
@@ -133,8 +134,8 @@ The composition root: it declares five of its six siblings as `==`-pinned depend
 (`packages/atif-cli/pyproject.toml:32-36`) and wires every cross-package seam: the `ConverterPort`
 adapter, the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:7-9`).
 The commands hang off one cyclopts `App`: `@app.command` functions from `convert`
-(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2464`), plus the `cron`, `lake`, and
-`corpus` sub-apps registered at `:104-109`, with `main` (`:2538`) exposed as the single console
+(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2472`), plus the `cron`, `lake`, and
+`corpus` sub-apps registered at `:104-109`, with `main` (`:2546`) exposed as the single console
 script named `atif-sql` (`pyproject.toml:74`). Heavy imports (duckdb, the ATIF models through
 atif-converter, pydantic through atif-corpus) are deferred into the command bodies that use them so
 `schema`, `--help`, and `--version` stay on a lean import graph that a fresh-interpreter test pins
@@ -351,9 +352,9 @@ instance of that schema out (`packages/atif-models/src/atif_models/domain/ports.
 in-repo consumer is atif-analytics, the single edge the `forbidden` contract leaves open
 (`pyproject.toml:611`), and the registry is the only place in the workspace where a Bedrock model id
 is written down, so a pipeline names a family and a size alias and lets `resolve` pick the id
-(`packages/atif-models/src/atif_models/domain/registry.py:6`, `:162`). Small, medium, and large resolve
+(`packages/atif-models/src/atif_models/domain/registry.py:6`, `:239`). Small, medium, and large resolve
 to the GPT-6 models (`gpt-6-luna`, `gpt-6.1-sol`, `gpt-6-astra`) in the openai family, the default,
-and to Claude Haiku 5.5, Sonnet 5.5, and Opus 5.5 in the anthropic family (`:95`). Both families run:
+and to Claude Haiku 5.5, Sonnet 5.5, and Opus 5.5 in the anthropic family (`:113`). Both families run:
 `build_structured_provider` picks the adapter by the spec's family and imports only that adapter's
 module (`packages/atif-models/src/atif_models/infrastructure/providers.py:20`). The openai adapter
 posts an OpenAI chat-completions body to `invoke_model` in strict `json_schema` mode
@@ -382,9 +383,9 @@ which one pure transform enforces before the schema reaches the wire
 - `packages/atif-models/src/atif_models/domain/registry.py`: `ModelSpec`
   (`packages/atif-models/src/atif_models/domain/registry.py:50`), whose long-context threshold and
   rates price a request over the threshold at the long rates and whose `chars_per_token` is the
-  family's measured characters per token on rendered transcripts; `resolve` (`:162`),
-  `is_long_context` (`:175`), and `estimate_cost` over per-1M-token rates, which bills the
-  long-context share of the tokens at the long rates (`:180`).
+  family's measured characters per token on rendered transcripts; `resolve` (`:239`),
+  `is_long_context` (`:265`), and `estimate_cost` over per-1M-token rates, which bills the
+  long-context share of the tokens at the long rates (`:270`).
 - `packages/atif-models/src/atif_models/domain/ports.py`: the `LlmStructuredProvider`
   Protocol (`packages/atif-models/src/atif_models/domain/ports.py:131`), the
   terminal-versus-retryable error split (`:43-58`), and lock-guarded usage accumulation that keeps the
@@ -399,8 +400,8 @@ which one pure transform enforces before the schema reaches the wire
   `build_runtime_client` (`:88`).
 - `packages/atif-models/src/atif_models/infrastructure/settings.py`: `LlmSettings` carries
   the family, region, concurrency, and per-pipeline size overrides
-  (`packages/atif-models/src/atif_models/infrastructure/settings.py:28`), and settings load refuses
-  a family outside `RUNNABLE_FAMILIES`, openai and anthropic (`:25`).
+  (`packages/atif-models/src/atif_models/infrastructure/settings.py:37`), and settings load refuses
+  a family outside `RUNNABLE_FAMILIES`, openai and anthropic (`:34`).
 - `packages/atif-models/src/atif_models/infrastructure/providers.py`:
   `build_structured_provider`, the factory atif-analytics calls: anthropic gets
   `AnthropicBedrockProvider` and openai gets `OpenAiBedrockProvider`, each module imported only when

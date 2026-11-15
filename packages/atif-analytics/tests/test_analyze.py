@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_analyze orchestration: budget ceilings across the four LLM stages.
+"""run_analyze orchestration: budget ceilings across the LLM stages, and the opt-in narrate stage.
 
 FakeProvider-driven (no boto3 client is ever built): ``build_provider`` is
 monkeypatched at each use-case module's binding so every stage gets a
@@ -32,6 +32,7 @@ _USE_CASE_MODULES = (
     "atif_analytics.application.use_cases.conflicts",
     "atif_analytics.application.use_cases.friction",
     "atif_analytics.application.use_cases.perceived",
+    "atif_analytics.application.use_cases.narrate",
 )
 
 
@@ -49,8 +50,8 @@ def fake_providers(monkeypatch: pytest.MonkeyPatch) -> list[_BillingFakeProvider
     """Patch every stage's ``build_provider`` binding; collect the providers."""
     created: list[_BillingFakeProvider] = []
 
-    def _fake_build(settings: AnalyticsSettings, pipeline: str) -> tuple[Any, Any]:
-        del settings, pipeline
+    def _fake_build(settings: AnalyticsSettings, pipeline: str, **kwargs: Any) -> tuple[Any, Any]:
+        del settings, pipeline, kwargs
         provider = _BillingFakeProvider()
         created.append(provider)
         return provider, SPEC
@@ -164,3 +165,51 @@ def test_streak_survives_a_stage_that_runs_but_exhausts_the_budget(
     assert summary["budget_exhausted"] is True
     assert not isinstance(summary["classify"], dict), "classify ran; it was not skipped outright"
     assert checkpointer.budget_skip_count(state_db, "classify") == 1
+
+
+def test_narrate_is_off_unless_asked_for(settings: AnalyticsSettings) -> None:
+    """An existing unattended ``analyze`` caller doesn't start narrating by upgrading."""
+    summary = run_analyze(settings, dry_run=True, since_days=None)
+    assert "narrate" not in summary
+
+
+def test_narrate_dry_run_plans_last(settings: AnalyticsSettings) -> None:
+    summary = run_analyze(settings, dry_run=True, since_days=None, narrate=True)
+    assert list(summary).index("narrate") > list(summary).index("perceived")
+    plan = summary["narrate"]
+    assert plan["dry_run"] is True
+    # Both fixture sessions are eligible, one main-chain window and one story
+    # each; session one's sidechain step is a third window with its own story.
+    assert (plan["capped_candidates"], plan["windows"], plan["stories"]) == (2, 3, 2)
+    assert (plan["subagent_streams"], plan["subagent_stories"], plan["llm_calls"]) == (1, 1, 6)
+
+
+def test_narrate_runs_after_the_other_stages_under_the_same_budget(
+    settings: AnalyticsSettings, fake_providers: list[_BillingFakeProvider]
+) -> None:
+    # Six narrate calls at $2 each on top of the other stages': give the
+    # run room, so the ceiling isn't what this test is about.
+    roomy = settings.model_copy(update={"llm_max_cost_usd_per_run": 100.0})
+    summary = run_analyze(roomy, dry_run=False, since_days=None, narrate=True)
+    assert summary["narrate"] == 2
+    assert summary["budget_exhausted"] is False
+    state_db = settings.layout().state_db_path
+    assert len(checkpointer.load_as_map(state_db, "narrate")) == 2
+    # The narrate provider was built last and billed into the shared budget.
+    narrator = fake_providers[-1]
+    assert {name for name, _ in narrator.calls} == {
+        "WindowNarration",
+        "SubagentStory",
+        "SessionStory",
+    }
+    assert summary["llm_spent_usd"] == pytest.approx(
+        2.0 * sum(len(provider.calls) for provider in fake_providers)
+    )
+
+
+@pytest.mark.usefixtures("fake_providers")
+def test_narrate_is_budget_skipped_like_any_stage(settings: AnalyticsSettings) -> None:
+    starved = settings.model_copy(update={"llm_max_cost_usd_per_run": 0.0})
+    summary = run_analyze(starved, dry_run=False, since_days=None, narrate=True)
+    assert summary["narrate"] == {"skipped": "budget_exhausted", "consecutive_skips": 1}
+    assert not settings.layout().narration_dir.exists()

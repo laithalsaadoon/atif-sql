@@ -2,16 +2,16 @@
 
 The distribution declares exactly one entry point, the console script
 `atif-sql = "atif_cli.app:main"` (`pyproject.toml:74`), and the `main` it names
-installs a WARNING-and-up loguru sink and hands control to cyclopts (`packages/atif-cli/src/atif_cli/app.py:2538`).
+installs a WARNING-and-up loguru sink and hands control to cyclopts (`packages/atif-cli/src/atif_cli/app.py:2546`).
 Every process below therefore begins as a CLI invocation; there is no HTTP, RPC, or queue surface
 to enter through.
 
 The flows below either produce the corpus or consume it: `materialize` fills
 `<corpus_root>/sessions/` (`:878`), `analyze` fills `<corpus_root>/analytics/` (`:1725`), and
 `query` binds both and runs caller SQL over them (`:1389`). The other commands are subsets of
-these flows: `convert` (`:690`) is one iteration of flow 1's inner loop, `search` (`:2123`)
-re-enters flow 2's registration at `:2226` and adds one kNN statement, `embed` (`:1893`) writes the
-vector store that flow 2 and `search` read, `schema` (`:2464`) and `examples` (`:2372`) answer
+these flows: `convert` (`:690`) is one iteration of flow 1's inner loop, `search` (`:2131`)
+re-enters flow 2's registration at `:2234` and adds one kNN statement, `embed` (`:1901`) writes the
+vector store that flow 2 and `search` read, `schema` (`:2472`) and `examples` (`:2380`) answer
 from static catalog data, and `status` (`:1211`) replays materialize's plan and reads the lake's
 vitals without writing anything.
 
@@ -191,35 +191,35 @@ sequenceDiagram
 
 1. The `analyze` command loads `AnalyticsSettings`, reuses the same corpus-root resolution the
    other commands share, and stamps explicit `--max-sessions` / `--max-cost-usd` ceilings over the
-   env defaults so a crontab line carries its spend cap visibly (`packages/atif-cli/src/atif_cli/app.py:1800-1805`).
+   env defaults so a crontab line carries its spend cap visibly (`packages/atif-cli/src/atif_cli/app.py:1807-1812`).
 2. The command opens the lake's session source when the lake holds the corpus
-   (`packages/atif-cli/src/atif_cli/app.py:1807`, `packages/atif-cli/src/atif_cli/lake_sessions.py:111`),
+   (`packages/atif-cli/src/atif_cli/app.py:1814`, `packages/atif-cli/src/atif_cli/lake_sessions.py:114`),
    and the pipeline runner builds one shared `CorpusReader` over it (or over the file source)
-   for every stage and loops the LLM stages (classify, conflicts, friction, perceived); the
-   `skip_*` flags subtract stages (`packages/atif-analytics/src/atif_analytics/application/analyze.py:62`).
+   for every stage and loops the LLM stages (classify, conflicts, friction, perceived, and narrate on request); the
+   `skip_*` flags subtract stages (`packages/atif-analytics/src/atif_analytics/application/analyze.py:68`).
 3. On the lake, a session whose lake rows match its current `meta.json` is read with batched
-   statements over the step-level tables (`packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:80`),
+   statements over the step-level tables (`packages/atif-duck/src/atif_duck/infrastructure/lake_sessions.py:82`),
    reading ahead in the newest-first walk order, and every other session from its files. Without
    a lake, rows are read with stdlib `json` over `<corpus_root>/sessions/<id>/trajectory.json.zst` (or the plain file on an old-layout session);
    atif-analytics declares no DuckDB dependency, and the `forbidden` import contract puts atif-duck
-   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:238`, `pyproject.toml:614`).
+   out of its reach (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:270`, `pyproject.toml:614`).
    Either way the steps sit behind the reader's bounded memos
-   (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:317`), and the
+   (`packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:472`), and the
    reader labels each session's kind with the same rule `session_outcomes.kind` applies, so
    classify and conflicts can skip `turn_audit` and `one_shot_job` sessions.
 4. Before the first stage starts, one `RunBudget` is constructed from the per-run dollar ceiling
-   (`packages/atif-analytics/src/atif_analytics/application/analyze.py:89`); every stage then goes
+   (`packages/atif-analytics/src/atif_analytics/application/analyze.py:96`); every stage then goes
    through one call site, each receiving the shared reader and that budget, and a stage that finds
-   the budget exhausted is skipped with nothing stamped (`:112`).
+   the budget exhausted is skipped with nothing stamped (`:120`).
 5. A stage drops the sessions whose checkpoint row still matches their mtime and last step
-   timestamp, so a re-run costs nothing for unchanged work (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:137`).
+   timestamp, so a re-run costs nothing for unchanged work (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:138`).
 6. Each call's user message is the session transcript (friction sends one short message instead)
    fenced in a tag pair whose id is a digest of the text, so the text can't close its own fence,
-   then the one-line request (`packages/atif-analytics/src/atif_analytics/application/prompts.py:742`,
-   `:753`). The renderer writes each tool result as a one-line stub with the content's length, so
+   then the one-line request (`packages/atif-analytics/src/atif_analytics/application/prompts.py:1007`,
+   `:1018`). The renderer writes each tool result as a one-line stub with the content's length, so
    what a tool returned stays on disk and never reaches Bedrock;
    `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
-   characters (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:247`).
+   characters (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:267`).
 7. `build_structured_provider` picks the adapter by the resolved spec's family and imports only that
    adapter's module: `OpenAiBedrockProvider` for openai, the default, and `AnthropicBedrockProvider`
    for anthropic (`packages/atif-models/src/atif_models/infrastructure/providers.py:20`). Each
@@ -233,7 +233,7 @@ sequenceDiagram
    the terminal `RefusalError`.
 8. Results land as sharded `part-<ns>.parquet` files under `<corpus_root>/analytics/`
    (`packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`), and each
-   completed session is upserted into the SQLite WAL checkpoint (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:180`).
+   completed session is upserted into the SQLite WAL checkpoint (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:181`).
 
 ```mermaid
 sequenceDiagram

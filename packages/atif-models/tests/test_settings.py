@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from atif_models.domain.registry import REGISTRY
+from atif_models.domain.registry import REGISTRY, resolve
 from atif_models.infrastructure.settings import RUNNABLE_FAMILIES, LlmSettings
 
 
@@ -36,6 +36,7 @@ class TestDefaults:
         assert settings.llm_size_conflicts == "large"
         assert settings.llm_size_friction == "small"
         assert settings.llm_size_perceived == "medium"
+        assert settings.llm_size_narrate == "small"
 
 
 class TestEnvOverrides:
@@ -87,6 +88,13 @@ class TestSpecFor:
         assert settings.spec_for("friction").model_id == "global.openai.gpt-6-luna"
         assert settings.spec_for("perceived").model_id == "global.openai.gpt-6.1-sol"
 
+    def test_narrate_runs_on_the_small_tier_and_takes_an_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        assert _settings().spec_for("narrate").model_id == "global.openai.gpt-6-luna"
+        monkeypatch.setenv("ATIF_SQL_LLM_SIZE_NARRATE", "medium")
+        assert _settings().spec_for("narrate").model_id == "global.openai.gpt-6.1-sol"
+
     def test_perceived_size_env_override(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATIF_SQL_LLM_SIZE_PERCEIVED", "large")
         settings = _settings()
@@ -96,3 +104,49 @@ class TestSpecFor:
         settings = _settings()
         with pytest.raises(KeyError, match="unknown pipeline"):
             settings.size_for("embed")
+
+
+class TestNarrateModelAndEffort:
+    """narrate can name its model and its effort; no other pipeline moves."""
+
+    def test_defaults_are_the_size_alias_and_the_registry_effort(self):
+        spec = _settings().spec_for("narrate")
+        assert (spec.model_id, spec.reasoning_effort) == ("global.openai.gpt-6-luna", "high")
+
+    def test_a_named_model_wins_over_the_size_alias(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATIF_SQL_LLM_MODEL_NARRATE", "gpt-6.1-terra")
+        monkeypatch.setenv("ATIF_SQL_LLM_SIZE_NARRATE", "large")
+        settings = _settings()
+        spec = settings.spec_for("narrate")
+        assert spec.model_id == "global.openai.gpt-6.1-terra"
+        assert (spec.pricing_in, spec.pricing_out, spec.max_output_tokens) == (1.0, 5.0, 128_000)
+        # Every other pipeline still resolves through its size alias.
+        assert settings.spec_for("classify").model_id == "global.openai.gpt-6-luna"
+        assert settings.spec_for("perceived").model_id == "global.openai.gpt-6.1-sol"
+
+    def test_a_named_model_brings_its_own_family(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATIF_SQL_LLM_MODEL_NARRATE", "claude-haiku-5-5")
+        settings = _settings()
+        assert settings.llm_family == "openai"
+        assert settings.spec_for("narrate").family == "anthropic"
+
+    def test_the_effort_setting_moves_narrate_only(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATIF_SQL_LLM_EFFORT_NARRATE", "medium")
+        settings = _settings()
+        assert settings.spec_for("narrate").reasoning_effort == "medium"
+        assert settings.spec_for("narrate").model_id == "global.openai.gpt-6-luna"
+        assert settings.spec_for("classify").reasoning_effort == "high"
+        # The registry entry itself is untouched.
+        assert resolve("small").reasoning_effort == "high"
+
+    def test_an_unknown_model_name_fails_at_load_with_the_choices(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATIF_SQL_LLM_MODEL_NARRATE", "gpt-6.1-tera")
+        with pytest.raises(ValueError, match=r"no model named 'gpt-6.1-tera'.*gpt-6.1-terra"):
+            _settings()
+
+    def test_an_unknown_effort_fails_at_load(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATIF_SQL_LLM_EFFORT_NARRATE", "extreme")
+        with pytest.raises(ValueError, match="llm_effort_narrate"):
+            _settings()

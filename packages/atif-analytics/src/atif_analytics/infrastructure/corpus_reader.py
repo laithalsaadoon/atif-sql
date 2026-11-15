@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,6 +57,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from atif_analytics.domain.config import TranscriptCaps
+from atif_analytics.domain.narration import SubagentRef, TaskNotice, task_notices
 from atif_analytics.domain.transcript import (
     StepEvent,
     render_session_text,
@@ -71,6 +73,7 @@ if TYPE_CHECKING:
 
 TRAJECTORY_FILENAME = "trajectory.json"
 EDGES_FILENAME = "edges.jsonl"
+SESSION_EVENTS_FILENAME = "session_events.jsonl"
 META_FILENAME = "meta.json"
 #: The suffix a compressed artifact carries (twin of atif-corpus's, pinned in
 #: atif-cli's tests).
@@ -115,10 +118,9 @@ def _flatten_message(message: Any) -> str:
 def parse_trajectory_step(step: dict[str, Any]) -> StepEvent:
     """Project one raw ``trajectory.json`` step dict into a :class:`StepEvent`."""
     extra = step.get("extra") or {}
+    raw_calls = [call for call in step.get("tool_calls") or [] if isinstance(call, dict)]
     calls: list[tuple[str | None, object]] = [
-        (call.get("function_name"), call.get("arguments"))
-        for call in step.get("tool_calls") or []
-        if isinstance(call, dict)
+        (call.get("function_name"), call.get("arguments")) for call in raw_calls
     ]
     results: list[tuple[str | None, object, bool]] = []
     observation = step.get("observation") or {}
@@ -138,7 +140,35 @@ def parse_trajectory_step(step: dict[str, Any]) -> StepEvent:
         is_compact_summary=bool(extra.get("is_compact_summary") or False),
         tool_calls=calls,
         tool_results=results,
+        agent_id=extra.get("agent_id"),
+        tool_call_ids=[call.get("tool_call_id") for call in raw_calls],
     )
+
+
+def parse_subagents(declared: object) -> list[SubagentRef]:
+    """The converter's ``trajectory.extra.subagents`` list as :class:`SubagentRef` rows.
+
+    The list atif-duck's ``subagents`` view reads: one entry per subagent,
+    from its ``agent-*.meta.json`` sidecar or the spawning call's own result.
+    An entry without an ``agent_id`` is dropped; anything that isn't a list
+    reads as no subagents.
+    """
+    refs: list[SubagentRef] = []
+    for entry in declared if isinstance(declared, list) else []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("agent_id"), str):
+            continue
+        depth = entry.get("spawn_depth")
+        refs.append(
+            SubagentRef(
+                agent_id=entry["agent_id"],
+                agent_type=entry.get("agent_type") or None,
+                description=entry.get("description") or None,
+                parent_tool_call_id=entry.get("parent_tool_call_id") or None,
+                parent_agent_id=entry.get("parent_agent_id") or None,
+                spawn_depth=depth if isinstance(depth, int) else None,
+            )
+        )
+    return refs
 
 
 def stored_file(session_dir: Path, name: str) -> Path | None:
@@ -150,13 +180,15 @@ def stored_file(session_dir: Path, name: str) -> Path | None:
     return None
 
 
-def _read_bytes(path: Path) -> bytes:
+def _read_bytes(path: Path, *, limit: int | None = None) -> bytes:
+    """``path``'s decompressed bytes; at most ``limit`` of them when one is given."""
     if not path.name.endswith(COMPRESSED_SUFFIX):
-        return path.read_bytes()
+        with path.open("rb") as handle:
+            return handle.read() if limit is None else handle.read(limit)
     import zstandard
 
     with path.open("rb") as handle, zstandard.ZstdDecompressor().stream_reader(handle) as reader:
-        return reader.readall()
+        return reader.readall() if limit is None else reader.read(limit)
 
 
 def _lines(path: Path) -> Iterable[str]:
@@ -235,15 +267,116 @@ def trajectory_mtime(session_dir: Path) -> datetime | None:
     return datetime.fromtimestamp(st.st_mtime, tz=UTC)
 
 
-def read_trajectory_steps(session_dir: Path) -> list[StepEvent]:
-    """Parse one session's stored trajectory steps (empty when unreadable)."""
+def read_trajectory(session_dir: Path) -> tuple[list[StepEvent], list[SubagentRef]]:
+    """One session's stored trajectory: its steps and its declared subagents, from one parse.
+
+    Both are empty when the file is unreadable.
+    """
     path = stored_file(session_dir, TRAJECTORY_FILENAME) or session_dir / TRAJECTORY_FILENAME
     try:
         doc = json.loads(_read_bytes(path))
     except (OSError, ValueError) as exc:
         logger.warning("corpus_reader: unreadable trajectory for {} ({})", session_dir.name, exc)
+        return [], []
+    steps = [parse_trajectory_step(s) for s in (doc.get("steps") or []) if isinstance(s, dict)]
+    extra = doc.get("extra")
+    return steps, parse_subagents(extra.get("subagents") if isinstance(extra, dict) else None)
+
+
+#: Where the corpus keeps a session's raw source archive, and the directory
+#: inside it that holds the tool results the harness saved to files.
+SOURCE_DIRNAME = "source"
+TOOL_RESULTS_DIRNAME = "tool-results"
+
+#: A saved tool result's file name: letters, digits, dots, dashes and
+#: underscores, not starting with a dot. The name comes from transcript text,
+#: so anything else is refused rather than looked for.
+_TOOL_RESULT_NAME_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,199}")
+
+#: Most of a saved tool result that is read. One is tens of kilobytes as a
+#: rule; this bounds the odd multi-megabyte one.
+MAX_TOOL_RESULT_FILE_BYTES = 16 * 1024 * 1024
+
+
+def read_tool_result_file(session_dir: Path, path: str) -> str | None:
+    """The text of a tool result the harness saved to a file, from the session's source archive.
+
+    ``path`` is the path a transcript's ``<persisted-output>`` stub names.
+    Only its file name is used: the file is looked for under the session's
+    own archive (``source/**/tool-results/<name>``, compressed or plain),
+    where materialize put a copy of it. The path itself is never opened: it
+    comes from transcript text, and what's read here is sent to a model
+    provider. ``None`` when the name isn't a plain file name or the archive
+    doesn't hold it.
+    """
+    name = path.replace("\\", "/").rsplit("/", 1)[-1]
+    if not _TOOL_RESULT_NAME_RE.fullmatch(name):
+        return None
+    archive = session_dir / SOURCE_DIRNAME
+    for pattern in (f"*/{TOOL_RESULTS_DIRNAME}", TOOL_RESULTS_DIRNAME):
+        for directory in sorted(archive.glob(pattern)):
+            found = stored_file(directory, name)
+            if found is None or found.is_symlink():
+                continue
+            try:
+                data = _read_bytes(found, limit=MAX_TOOL_RESULT_FILE_BYTES)
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "corpus_reader: unreadable tool result {} for {} ({})",
+                    name,
+                    session_dir.name,
+                    exc,
+                )
+                return None
+            return data.decode("utf-8", errors="replace")
+    return None
+
+
+#: The ``session_events`` rows that carry a queued task notification.
+QUEUED_EVENT_TYPE = "attachment"
+QUEUED_EVENT_SUBTYPE = "queued_command"
+
+
+def read_task_notices(session_dir: Path) -> list[TaskNotice]:
+    """The task notifications queued beside one session's transcript, in file order.
+
+    Read from the session's ``session_events.jsonl``: the converter keeps
+    each ``queued_command`` attachment there, and a background subagent's
+    report arrives as one. Empty when the session has no events file (a
+    corpus older than the artifact) or it's unreadable.
+    """
+    path = stored_file(session_dir, SESSION_EVENTS_FILENAME)
+    if path is None:
         return []
-    return [parse_trajectory_step(s) for s in (doc.get("steps") or []) if isinstance(s, dict)]
+    notices: list[TaskNotice] = []
+    try:
+        for raw_line in _lines(path):
+            line = raw_line.strip()
+            # The cheap test first: most events are hook output and mode
+            # records, and a session can hold thousands of them.
+            if not line or QUEUED_EVENT_SUBTYPE not in line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (
+                isinstance(event, dict)
+                and event.get("event_type") == QUEUED_EVENT_TYPE
+                and event.get("subtype") == QUEUED_EVENT_SUBTYPE
+            ):
+                notices.extend(
+                    task_notices(
+                        json.dumps(event.get("payload"), ensure_ascii=False),
+                        str(event.get("ts") or ""),
+                    )
+                )
+    except OSError as exc:
+        logger.warning(
+            "corpus_reader: unreadable session events for {} ({})", session_dir.name, exc
+        )
+        return []
+    return notices
 
 
 def read_edges_uuids(session_dir: Path) -> set[str] | None:
@@ -285,6 +418,10 @@ class TrajectoryFileSource:
 
     def __init__(self, corpus_root: Path) -> None:
         self._sessions_dir = corpus_root / "sessions"
+        #: The declared subagents of the session parsed last, kept so the
+        #: narrate pipeline's read of them right after its steps costs no
+        #: second parse of a trajectory that can run to tens of megabytes.
+        self._last_subagents: tuple[str, list[SubagentRef]] | None = None
 
     def session_bounds(self) -> SessionBounds:
         """``{session_id: (last_record_ts, trajectory_mtime)}`` over every complete dir."""
@@ -300,11 +437,29 @@ class TrajectoryFileSource:
 
     def load_steps(self, session_ids: Sequence[str]) -> dict[str, list[StepEvent]]:
         """Parse each session's trajectory."""
-        return {sid: read_trajectory_steps(self._sessions_dir / sid) for sid in session_ids}
+        out: dict[str, list[StepEvent]] = {}
+        for sid in session_ids:
+            out[sid], subagents = read_trajectory(self._sessions_dir / sid)
+            self._last_subagents = (sid, subagents)
+        return out
+
+    def subagents(self, session_id: str) -> list[SubagentRef]:
+        """The session's declared subagents (``trajectory.extra.subagents``)."""
+        if self._last_subagents is not None and self._last_subagents[0] == session_id:
+            return self._last_subagents[1]
+        return read_trajectory(self._sessions_dir / session_id)[1]
 
     def load_turns(self, session_ids: Sequence[str]) -> dict[str, list[StepEvent]]:
         """The same as :meth:`load_steps` (a parse yields the payloads anyway)."""
         return self.load_steps(session_ids)
+
+    def task_notices(self, session_id: str) -> list[TaskNotice]:
+        """The task notifications queued beside the session's transcript."""
+        return read_task_notices(self._sessions_dir / session_id)
+
+    def tool_result_file(self, session_id: str, path: str) -> str | None:
+        """A saved tool result's text, from the session's source archive."""
+        return read_tool_result_file(self._sessions_dir / session_id, path)
 
     def edges_uuids(self, session_id: str) -> set[str] | None:
         """Non-null raw-record uuids from the session's ``edges.jsonl``."""
@@ -481,6 +636,41 @@ class CorpusReader:
             self._memoize(self._turns_cache, self._turns_cache_size, sid, list(loaded.get(sid, [])))
         return self._turns_cache[session_id]
 
+    def load_full_steps(self, session_id: str) -> list[StepEvent]:
+        """One session's steps with every tool call and result, memoized.
+
+        What a pipeline that renders part of a session reads (narrate cuts
+        the steps into windows and renders each one). :meth:`load_steps` is
+        the cheaper read for a gate that needs no tool payloads.
+        """
+        return self._full_steps([session_id])[session_id]
+
+    def subagents(self, session_id: str) -> list[SubagentRef]:
+        """The session's declared subagents, as the converter recorded them.
+
+        The rows atif-duck's ``subagents`` view shows: each subagent's id,
+        type, description, and the tool call that launched it. Read right
+        after :meth:`load_full_steps`, the file source answers from the same
+        parse.
+        """
+        return self._source.subagents(session_id)
+
+    def task_notices(self, session_id: str) -> list[TaskNotice]:
+        """The task notifications the harness queued beside the session's transcript.
+
+        How a background subagent's report usually arrives: not as a step,
+        but as a ``session_events`` row.
+        """
+        return self._source.task_notices(session_id)
+
+    def tool_result_file(self, session_id: str, path: str) -> str | None:
+        """The text of a tool result the harness saved to ``path``, or ``None``.
+
+        Read from the corpus's archive of the session's side files, by file
+        name; ``path`` is what the transcript's stub says.
+        """
+        return self._source.tool_result_file(session_id, path)
+
     def session_text(self, session_id: str, *, include_uuids: bool = False) -> str:
         """One assembled transcript per the documented byte-shape contract."""
         return self._render(self._full_steps([session_id])[session_id], include_uuids=include_uuids)
@@ -533,15 +723,24 @@ class CorpusReader:
 __all__ = [
     "DEFAULT_STEPS_CACHE_SIZE",
     "EDGES_FILENAME",
+    "MAX_TOOL_RESULT_FILE_BYTES",
     "META_FILENAME",
+    "QUEUED_EVENT_SUBTYPE",
+    "QUEUED_EVENT_TYPE",
+    "SESSION_EVENTS_FILENAME",
+    "SOURCE_DIRNAME",
+    "TOOL_RESULTS_DIRNAME",
     "TRAJECTORY_FILENAME",
     "CorpusReader",
     "TrajectoryFileSource",
     "complete_session_dirs",
     "last_edge_ts",
+    "parse_subagents",
     "parse_trajectory_step",
     "parse_ts",
     "read_edges_uuids",
-    "read_trajectory_steps",
+    "read_task_notices",
+    "read_tool_result_file",
+    "read_trajectory",
     "trajectory_mtime",
 ]

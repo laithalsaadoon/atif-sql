@@ -130,6 +130,14 @@ class StepEvent:
     :func:`~atif_analytics.domain.authorship.step_author` label for a user
     step (``harness`` for a compaction summary) and ``None`` for any other
     role; left unset, it is derived from ``role`` and ``text``.
+
+    ``agent_id`` names the subagent a sidechain step belongs to (the step's
+    ``extra.agent_id``; ``None`` on the main chain and on a sidechain step
+    converted before the id was recorded). ``tool_call_ids`` runs parallel to
+    ``tool_calls`` and ``tool_result_errors`` parallel to ``tool_results``:
+    the id of each call (what a subagent's ``parent_tool_call_id`` names) and
+    whether each result failed. The gates and the whole-session renderer read
+    neither; the narrate pipeline does.
     """
 
     ts: str
@@ -142,6 +150,9 @@ class StepEvent:
     tool_calls: list[tuple[str, str]] = field(default_factory=list)
     tool_results: list[tuple[str, str]] = field(default_factory=list)
     author: str | None = None
+    agent_id: str | None = None
+    tool_call_ids: list[str] = field(default_factory=list)
+    tool_result_errors: list[bool] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Derive ``author`` for a user step the caller did not label."""
@@ -179,6 +190,8 @@ def step_event(
     tool_calls: Iterable[tuple[str | None, object]] = (),
     tool_results: Iterable[tuple[str | None, object, bool]] = (),
     has_error_result: bool = False,
+    agent_id: str | None = None,
+    tool_call_ids: Iterable[str | None] = (),
 ) -> StepEvent:
     """Project one ATIF step's values into a :class:`StepEvent`: the rules both sources share.
 
@@ -195,6 +208,8 @@ def step_event(
     * the step carries an error when any of its results says so, or when the
       caller says so without handing the results over (``has_error_result``).
     * the author label is derived in :class:`StepEvent` from the role and text.
+    * ``agent_id`` is kept when it is a non-empty string, and ``tool_call_ids``
+      (one per call, in call order) spell an absent id as ``""``.
     """
     uuids = source_uuids if isinstance(source_uuids, list) else []
     uuid = uuids[0] if uuids and isinstance(uuids[0], str) else None
@@ -207,10 +222,12 @@ def step_event(
         for name, args in tool_calls
     ]
     results: list[tuple[str, str]] = []
+    result_errors: list[bool] = []
     has_error = has_error_result
     for call_id, content, is_error in tool_results:
         content_str = content if isinstance(content, str) else json.dumps(content, default=str)
         results.append((str(call_id or ""), content_str or ""))
+        result_errors.append(bool(is_error))
         has_error = has_error or is_error
     return StepEvent(
         ts=format_step_ts(ts),
@@ -222,6 +239,9 @@ def step_event(
         has_error_result=has_error,
         tool_calls=calls,
         tool_results=results,
+        agent_id=agent_id if isinstance(agent_id, str) and agent_id else None,
+        tool_call_ids=[str(call_id or "") for call_id in tool_call_ids],
+        tool_result_errors=result_errors,
     )
 
 
@@ -251,6 +271,8 @@ def render_session_text(
     tool_result_max_chars: int = 50_000,
     tool_result_bodies: bool = False,
     include_uuids: bool = False,
+    tool_input_max_chars: int = TOOL_INPUT_PREVIEW_CHARS,
+    full_text_authors: frozenset[str] = frozenset(),
 ) -> str:
     """Render one session's steps as a single newline-separated transcript.
 
@@ -278,6 +300,13 @@ def render_session_text(
 
     A user step a human did not write renders under its ``author`` label
     with its body clipped to :data:`NON_HUMAN_PREVIEW_CHARS`.
+
+    ``tool_input_max_chars`` is the length each tool call's arguments are
+    previewed at. The default is what the judgment pipelines' prompts are
+    tuned on; narrate passes a larger one. ``full_text_authors`` names
+    author labels whose bodies aren't clipped: a subagent's instructions
+    arrive in the user role under narrate's own label, and they're the
+    subagent's task, not harness chatter.
     """
     chain = main_chain(steps)
     events_total = sum(
@@ -294,14 +323,15 @@ def render_session_text(
             text = step.text
             if role == "user" and step.author not in (None, "human"):
                 role = step.author or role
-                text = tool_result_preview(text, NON_HUMAN_PREVIEW_CHARS)
+                if role not in full_text_authors:
+                    text = tool_result_preview(text, NON_HUMAN_PREVIEW_CHARS)
             body = escape_uuid_headers(text)
             if include_uuids and step.uuid:
                 candidates.append(f"[uuid={step.uuid} {role} {step.ts}] {body}")
             else:
                 candidates.append(f"[{role} {step.ts}] {body}")
         for name, args_json in step.tool_calls:
-            preview = escape_uuid_headers(tool_input_preview(args_json))
+            preview = escape_uuid_headers(tool_input_preview(args_json, tool_input_max_chars))
             candidates.append(f"[tool_use:{name or 'tool'} {step.ts}] {preview}")
         failed = ", the step has a failed result" if step.has_error_result else ""
         for call_id, content in step.tool_results:

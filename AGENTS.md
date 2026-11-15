@@ -61,11 +61,43 @@ wheel bundles every member; members under `packages/*`):
   embedding model's default). Layered: `infrastructure` > `domain`.
 - `packages/atif-analytics`: the LLM pipelines that spend money at
   Bedrock and are checkpointed per session (classify, conflicts, friction,
-  perceived; see `PIPELINE_NAMES` in
+  perceived, narrate; see `PIPELINE_NAMES` in
   `infrastructure/sqlite_state/checkpointer.py`, which spells friction
-  `user_friction`). They read human turns only
+  `user_friction`). The first four read human turns only
   (`domain.authorship`), and classify and conflicts skip automated review
-  (`turn_audit`) and one-shot-job sessions. Session data comes through the
+  (`turn_audit`) and one-shot-job sessions. Narrate describes instead of
+  judging, and takes every session kind. It reads a session as streams
+  (`domain.narration.split_streams`): the main chain, and one per subagent,
+  keyed by the `agent_id` its sidechain steps carry and linked to the call
+  that launched it from the converter's declared list (the `subagents`
+  view's rows). Each stream is cut into windows
+  (`domain.narration.plan_windows`, pure and property-tested) and gets one
+  `session_narration` row per window (intent, actions, outcome, the first
+  and last step uuid, the model id and a prompt digest). Subagents go
+  first, deepest first: each is folded into a `subagent_stories` row with a
+  short digest, and the window where its work ends is shown that digest
+  (a window that only launched it is told it's still running). The
+  report of a background subagent can arrive as a queued notification that
+  isn't a step; narrate reads those from `session_events`
+  (`domain.narration.task_notices`) to place the return. Each call is told
+  what closed its window and whether the session goes on after it. A
+  session then gets one `session_stories` row.
+  Each call carries the previous window's narration and its last raw steps,
+  sees tool arguments at 1,200 characters and the opening of each tool
+  result (bounds of its own; the other pipelines still read 400 and a
+  size). A result the harness saved to a file is marked
+  `[persisted to PATH, SIZE]` and cut from the copy in the session's source
+  archive, found by filename only: the path in the transcript is never
+  opened. The call sends the model's own output limit as its cap
+  (`atif_models.domain.registry.with_full_output`), so a narration isn't cut
+  short; a call that stops on length writes no row.
+  `ATIF_SQL_LLM_MODEL_NARRATE` and `ATIF_SQL_LLM_EFFORT_NARRATE` pick a
+  named model (`atif_models.domain.registry.NAMED_MODELS`) and a reasoning
+  effort for narrate alone. The caches are
+  append-only and a stream's read position is its last window row, so a
+  session that resumes continues each stream from there. It runs only
+  under `atif-sql analyze --narrate`, so an unattended `analyze` doesn't
+  start paying for it. Session data comes through the
   `SessionSource` port (`domain.ports`): the default reads each session's
   `trajectory.json` and `edges.jsonl`, and atif-cli plugs in the lake's
   (`atif_cli.lake_sessions`). Both build steps through

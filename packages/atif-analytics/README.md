@@ -14,6 +14,24 @@ The v2 analytics pipelines over the materialized ATIF corpus:
   The transcripts carry user and agent turns and tool calls with their
   arguments; each tool result is a size stub unless
   `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true`.
+* **Narrate** — `narrate` writes a plain-language account of every session
+  (`analyze --narrate`; off by default). `atif_analytics.domain.narration`
+  splits a session into streams (the main chain, and one per subagent by
+  `agent_id`) and cuts each into windows at human turns, compactions,
+  subagent launches and returns, and a size cap; each window gets one
+  `session_narration` row (intent, actions, outcome, first and last step
+  uuid, model id, prompt digest), each subagent one `subagent_stories` row
+  with a digest shown to the window where its work ends (a queued task
+  notification in `session_events` counts as the return), and each session
+  one `session_stories` row. A call carries the previous window's narration and
+  its last raw steps, and sees tool arguments at 1,200 characters and the
+  opening of each tool result (its own bounds; the other pipelines are
+  unchanged); a result the harness saved to a file is marked and read from
+  the session's source archive. Each call is told what closed its window. Every session kind is eligible, the size is small
+  (`ATIF_SQL_LLM_MODEL_NARRATE` and `ATIF_SQL_LLM_EFFORT_NARRATE` name a
+  model and an effort for this stage alone), the output
+  cap is the model's own limit, and a session that resumes continues each
+  stream from its last narrated step.
 * **Authorship** — `atif_analytics.domain.authorship` decides who wrote a
   user step (`human`, `stop_hook`, `task_notification`, `harness`,
   `audit_prompt`). It's a twin of `atif_duck.domain.authorship`, pinned by
