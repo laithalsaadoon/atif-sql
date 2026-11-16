@@ -34,7 +34,9 @@ from loguru import logger
 from atif_analytics.application.use_cases.classify import classify_sessions
 from atif_analytics.application.use_cases.conflicts import detect_conflicts
 from atif_analytics.application.use_cases.friction import detect_user_friction
+from atif_analytics.application.use_cases.narrate import narrate_sessions
 from atif_analytics.application.use_cases.perceived import detect_perceived_errors
+from atif_analytics.domain.narration import TaskNotice
 from atif_analytics.infrastructure.corpus_reader import CorpusReader, TrajectoryFileSource
 from atif_analytics.infrastructure.settings import AnalyticsSettings
 from atif_cli.app import analyze, materialize
@@ -56,6 +58,7 @@ _USE_CASE_MODULES = (
     "atif_analytics.application.use_cases.conflicts",
     "atif_analytics.application.use_cases.friction",
     "atif_analytics.application.use_cases.perceived",
+    "atif_analytics.application.use_cases.narrate",
 )
 
 _PIPELINES = {
@@ -63,6 +66,7 @@ _PIPELINES = {
     "conflicts": detect_conflicts,
     "friction": detect_user_friction,
     "perceived": detect_perceived_errors,
+    "narrate": narrate_sessions,
 }
 
 
@@ -185,6 +189,26 @@ def write_rich_session(source_root: Path, session_id: str, day: int) -> None:
             {"role": "user", "content": [{"type": "text", "text": "undo that"}]},
         ),
         _assistant(session_id, 10, f"{stamp}:10.000Z", [{"type": "text", "text": "Undone."}]),
+        # A background task's completion notice, the way Claude Code writes
+        # one: an attachment record, not a message. The converter keeps it as
+        # a session event, and narrate reads it from there.
+        {
+            "type": "attachment",
+            "uuid": f"{session_id[:8]}-notice",
+            "parentUuid": f"{session_id[:8]}-10",
+            "sessionId": session_id,
+            "timestamp": f"{stamp}:10.500Z",
+            "cwd": "/work/proj",
+            "isSidechain": False,
+            "attachment": {
+                "type": "queued_command",
+                "commandMode": "task-notification",
+                "prompt": (
+                    f"<task-notification>\n<task-id>bg{session_id[:6]}</task-id>\n"
+                    "<status>completed</status>\n</task-notification>"
+                ),
+            },
+        },
     ]
     main = project / f"{session_id}.jsonl"
     main.write_text(
@@ -234,8 +258,8 @@ def fake_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every stage's provider is a stub: a dry run reads only the spec's prices."""
     spec = resolve("medium")
 
-    def _build(settings: AnalyticsSettings, pipeline: str) -> tuple[Any, Any]:
-        del settings, pipeline
+    def _build(settings: AnalyticsSettings, pipeline: str, **kwargs: Any) -> tuple[Any, Any]:
+        del settings, pipeline, kwargs
         return object(), spec
 
     for module in _USE_CASE_MODULES:
@@ -266,12 +290,29 @@ class TestTheLakeReadsWhatTheFilesHold:
         full = files.load_steps(ids)
         assert lake_source.load_steps(ids) == full
         turns = {
-            sid: [dataclasses.replace(s, tool_calls=[], tool_results=[]) for s in steps]
+            sid: [
+                dataclasses.replace(
+                    s, tool_calls=[], tool_results=[], tool_call_ids=[], tool_result_errors=[]
+                )
+                for s in steps
+            ]
             for sid, steps in full.items()
         }
+        # The narrate pipeline reads these two off each step: every call's id
+        # (what a subagent's launch is found by) and each result's own flag.
+        assert any(s.tool_call_ids for steps in full.values() for s in steps)
+        assert any(any(s.tool_result_errors) for steps in full.values() for s in steps)
         assert lake_source.load_turns(ids) == turns
         for sid in ids:
             assert lake_source.edges_uuids(sid) == files.edges_uuids(sid)
+            assert lake_source.subagents(sid) == files.subagents(sid)
+            assert lake_source.task_notices(sid) == files.task_notices(sid)
+        # The rich sessions each hold one queued notice, stamped as the
+        # transcript stamps it, whichever source reads it.
+        assert files.task_notices(RICH_A) == [
+            TaskNotice(ts="2026-08-20T09:00:10.500Z", task_id=f"bg{RICH_A[:6]}", status="completed")
+        ]
+        assert files.task_notices(PLAIN) == []
 
     def test_every_transcript_renders_the_same(
         self, built: tuple[Path, Path, Path], lake_source: LakeSessionSource
@@ -334,6 +375,24 @@ class TestAnalyzeCommand:
         assert on_files.pop("session_source") == "files"
         assert "sessions_read_from_files" not in on_files
         assert on_lake == on_files
+
+    def test_narrate_is_opt_in_and_plans_the_same_from_either_source(
+        self,
+        built: tuple[Path, Path, Path],
+        fake_provider: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        del fake_provider
+        assert "narrate" not in self._analyze(built, capsys)
+        on_lake = self._analyze(built, capsys, narrate=True)
+        on_files = self._analyze(built, capsys, narrate=True, lake=False)
+        plan = on_lake["narrate"]
+        assert plan["pipeline"] == "narrate"
+        assert plan["dry_run"] is True
+        # Every session is eligible, whatever its kind.
+        assert plan["capped_candidates"] == 3
+        assert plan["windows"] >= 3
+        assert on_files["narrate"] == plan
 
     def test_without_a_lake_analyze_warns_once_and_reads_the_files(
         self,
@@ -416,7 +475,9 @@ class TestALaggingLakeNeverServesAnOldWrite:
             )
             for sid in ids:
                 assert on_lake.load_steps(sid) == [
-                    dataclasses.replace(s, tool_calls=[], tool_results=[])
+                    dataclasses.replace(
+                        s, tool_calls=[], tool_results=[], tool_call_ids=[], tool_result_errors=[]
+                    )
                     for s in on_files.load_steps(sid)
                 ]
             assert list(on_lake.session_texts(ids, include_uuids=True)) == [

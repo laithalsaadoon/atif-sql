@@ -135,6 +135,19 @@ class TestBodyConstruction:
         )
 
 
+class TestOutputCap:
+    def test_the_body_sends_the_specs_cap(self):
+        """A full-output spec puts the model's limit on the wire as ``max_tokens``."""
+        from atif_models.domain.registry import with_full_output
+
+        for size in ("small", "medium", "large"):
+            provider = AnthropicBedrockProvider(
+                with_full_output(resolve(size, "anthropic")), region="us-east-1"
+            )
+            body = provider.build_body(system="s", prompt="p", schema=TinyVerdict)
+            assert body["max_tokens"] == 128_000
+
+
 class TestStopReasonMapping:
     def test_end_turn_parses_the_text_block_after_a_thinking_block(self):
         client = MagicMock()

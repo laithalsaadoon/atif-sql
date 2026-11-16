@@ -51,11 +51,11 @@ LAST_EDGE_TS_SQL: SqlFragment = SqlFragment(
 
 #: Every step of a batch of sessions without its tool payloads (params:
 #: corpus, ids): ``(session_id, step_id, ts, source, message, is_sidechain,
-#: is_compact_summary, source_uuids)``.
+#: is_compact_summary, source_uuids, agent_id)``.
 TURNS_SQL: SqlFragment = SqlFragment(
     "SELECT "  # noqa: S608  # nosec B608 - constants only; corpus and ids are bound
     f"{SESSION_KEY}, step_id, ts, source, message, is_sidechain, is_compact_summary, "
-    f"CAST(source_uuids AS VARCHAR) FROM {LAKE_ALIAS}.steps WHERE {_SCOPE} {_ORDER}"
+    f"CAST(source_uuids AS VARCHAR), agent_id FROM {LAKE_ALIAS}.steps WHERE {_SCOPE} {_ORDER}"
 )
 
 #: ``(session_id, step_id)`` of every step with an error result in a batch
@@ -66,10 +66,19 @@ ERROR_STEPS_SQL: SqlFragment = SqlFragment(
 )
 
 #: Every tool call of a batch, in source order (params: corpus, ids):
-#: ``(session_id, step_id, tool_name, tool_input)`` with the input as JSON text.
+#: ``(session_id, step_id, tool_name, tool_input, tool_use_id)`` with the input
+#: as JSON text.
 TOOL_CALLS_SQL: SqlFragment = SqlFragment(
-    f"SELECT {SESSION_KEY}, step_id, tool_name, CAST(tool_input AS VARCHAR) "  # noqa: S608  # nosec B608 - constants only; corpus and ids are bound
+    f"SELECT {SESSION_KEY}, step_id, tool_name, CAST(tool_input AS VARCHAR), tool_use_id "  # noqa: S608  # nosec B608 - constants only; corpus and ids are bound
     f"FROM {LAKE_ALIAS}.tool_calls WHERE {_SCOPE} {_ORDER}"
+)
+
+#: The declared subagents of one session (params: corpus, session id): the
+#: ``subagents`` member of the trajectory's ``extra``, as JSON text (NULL when
+#: the session declared none). The list the ``subagents`` view unnests.
+SUBAGENTS_SQL: SqlFragment = SqlFragment(
+    "SELECT CAST(json_extract(extra, '$.subagents') AS VARCHAR) "  # noqa: S608  # nosec B608 - constants only; corpus and the id are bound
+    f"FROM {LAKE_ALIAS}.sessions WHERE {CORPUS_COLUMN} = ? AND {SESSION_KEY} = ?"
 )
 
 #: Every tool result of a batch, in source order (params: corpus, ids):
@@ -78,6 +87,15 @@ TOOL_CALLS_SQL: SqlFragment = SqlFragment(
 TOOL_RESULTS_SQL: SqlFragment = SqlFragment(
     f"SELECT {SESSION_KEY}, step_id, tool_use_id, CAST(content AS VARCHAR), is_error "  # noqa: S608  # nosec B608 - constants only; corpus and ids are bound
     f"FROM {LAKE_ALIAS}.tool_results WHERE {_SCOPE} {_ORDER}"
+)
+
+#: The queued-command events of one session, in source order (params: corpus,
+#: session id): ``(ts, payload)`` with the payload as JSON text. A background
+#: task's completion notice is one of these.
+QUEUED_COMMANDS_SQL: SqlFragment = SqlFragment(
+    f"SELECT ts, CAST(payload AS VARCHAR) FROM {LAKE_ALIAS}.session_events "  # noqa: S608  # nosec B608 - constants only; corpus and the id are bound
+    f"WHERE {CORPUS_COLUMN} = ? AND {SESSION_KEY} = ? "
+    "AND event_type = 'attachment' AND subtype = 'queued_command' ORDER BY seq"
 )
 
 #: The non-empty raw-record uuids of one session (params: corpus, session id).
@@ -90,7 +108,9 @@ __all__ = [
     "EDGE_UUIDS_SQL",
     "ERROR_STEPS_SQL",
     "LAST_EDGE_TS_SQL",
+    "QUEUED_COMMANDS_SQL",
     "SESSION_FRESHNESS_SQL",
+    "SUBAGENTS_SQL",
     "TOOL_CALLS_SQL",
     "TOOL_RESULTS_SQL",
     "TURNS_SQL",

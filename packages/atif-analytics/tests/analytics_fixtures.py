@@ -33,7 +33,10 @@ from atif_analytics.domain.models import (
     PerceivedError,
     PerceivedErrorsResult,
     SessionClassification,
+    SessionStory,
+    SubagentStory,
     UserFrictionSignal,
+    WindowNarration,
 )
 from atif_models.domain.ports import ProviderUnavailable, RefusalError, UsageAccumulator
 
@@ -384,5 +387,16 @@ class FakeProvider:
                     ),
                 ]
             )
+        if schema in (WindowNarration, SessionStory, SubagentStory):
+            return self._narration(schema)
         msg = f"unexpected schema {schema!r}"
         raise AssertionError(msg)
+
+    def _narration(self, schema: type) -> Any:
+        """A narration or story numbered by call, so a test can tell which call wrote which row."""
+        n = sum(1 for name, _ in self.calls if name == schema.__name__)
+        if schema is SessionStory:
+            return SessionStory(story=f"story {n}")
+        if schema is SubagentStory:
+            return SubagentStory(story=f"subagent story {n}", digest=f"digest {n}")
+        return WindowNarration(intent=f"intent {n}", actions=f"actions {n}", outcome=f"outcome {n}")

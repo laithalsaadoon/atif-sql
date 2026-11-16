@@ -29,6 +29,12 @@ Column semantics worth stating once (repeated per macro below):
 * ``conflicts_over_time``'s ``root_session_id`` equals ``session_id``: harbor
   INLINES subagent transcripts (fidelity gap 4), so one conversation is one
   session and there is no parent session to collapse onto.
+* ``session_narration`` holds one row per narrated window, ``session_stories``
+  one story per session and ``subagent_stories`` one per subagent.
+  ``first_step_uuid`` and ``last_step_uuid`` are step uuids
+  (``source_uuids[0]``), so a window joins back to the steps it covers, and
+  ``agent_id`` is the subagent a window belongs to (NULL on the main chain,
+  as in ``steps``), so ``(session_id, agent_id)`` joins ``subagents``.
 * ``friction_rate`` / ``perceived_rate`` count their user-message
   denominator from ``human_turns``: main-chain user steps a HUMAN wrote, so
   Stop hook feedback, task notifications and harness text are not in it.
@@ -63,6 +69,9 @@ _ANALYTICS_SOURCES: dict[str, str] = {
     "session_conflicts": "session_conflicts",
     "user_friction": "user_friction",
     "perceived_errors": "perceived_errors",
+    "session_narration": "session_narration",
+    "session_stories": "session_stories",
+    "subagent_stories": "subagent_stories",
 }
 
 #: Per-view projections; a view absent here selects ``*``.
@@ -79,6 +88,26 @@ _VIEW_PROJECTIONS: dict[str, str] = {
         "session_id, work_category, goal, confidence, classified_at, "
         "CAST(NULL AS VARCHAR) AS autonomy_tier, CAST(NULL AS VARCHAR) AS success, "
         "work_category AS category"
+    ),
+}
+
+#: Per-view row filters, appended after the reader; a view absent here keeps
+#: every row.
+#:
+#: ``session_stories`` and ``subagent_stories`` are append-only, and a story is
+#: written again each time the windows under it grow, so each view keeps the
+#: newest story per session (or per subagent): the one covering the most
+#: windows. Over every corpus of the lake, a session id two corpora share (a
+#: copied corpus) keeps one story between them. ``session_narration`` needs no
+#: filter: a window row is written once.
+_VIEW_ROW_FILTERS: dict[str, str] = {
+    "session_stories": (
+        "QUALIFY row_number() OVER (PARTITION BY session_id "
+        "ORDER BY window_count + subagent_window_count DESC, narrated_at DESC) = 1"
+    ),
+    "subagent_stories": (
+        "QUALIFY row_number() OVER ("
+        "PARTITION BY session_id, agent_id ORDER BY window_count DESC, narrated_at DESC) = 1"
     ),
 }
 
@@ -146,6 +175,7 @@ def register_analytics(
             )
             continue
         projection = _VIEW_PROJECTIONS.get(view_name, "*")
+        row_filter = _VIEW_ROW_FILTERS.get(view_name, "")
         reader = f"{_ANALYTICS_READER_PREFIX}{view_name}"
         try:
             # The parquet paths never enter SQL text: the relation API takes
@@ -160,12 +190,12 @@ def register_analytics(
             con.read_parquet([str(p) for p in parts], union_by_name=True).create_view(
                 reader, replace=True
             )
-            # View name and projection are module constants (_ANALYTICS_SOURCES /
-            # _VIEW_PROJECTIONS); the reader name is a constant prefix plus that
-            # view name.
+            # View name, projection and row filter are module constants (the
+            # three dicts above); the reader name is a constant prefix plus
+            # that view name.
             con.execute(
                 f"CREATE OR REPLACE VIEW {view_name} AS "  # noqa: S608  # nosec B608 - constants only; paths are bound into the reader relation
-                f"SELECT {projection} FROM {reader};"
+                f"SELECT {projection} FROM {reader} {row_filter};"
             )
             logger.debug("Registered analytics view: {}", view_name)
             registered.add(view_name)

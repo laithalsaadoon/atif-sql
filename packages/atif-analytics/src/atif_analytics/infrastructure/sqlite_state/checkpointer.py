@@ -39,6 +39,7 @@ PIPELINE_NAMES: tuple[str, ...] = (
     "conflicts",
     "user_friction",
     "perceived",
+    "narrate",
 )
 
 _CREATE_TABLES_SQL = """

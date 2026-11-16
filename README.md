@@ -108,7 +108,7 @@ the only thing documented as installable is the `atif-sql` CLI above.
 | `atif-corpus` | Corpus materialization: discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | DuckDB views + macros over the materialized corpus (core surface plus the v2 analytics surface) |
 | `atif-models` | Model alias registry + structured-output LLM clients for GPT-6 and Claude 5.5 on Bedrock; no other package hardcodes an LLM model id |
-| `atif-analytics` | the LLM pipelines `atif-sql analyze` runs: classify, conflicts, friction, and perceived |
+| `atif-analytics` | the LLM pipelines `atif-sql analyze` runs: classify, conflicts, friction, and perceived, plus narrate with `--narrate` |
 | `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine + a Lance vector store written through DuckDB's lance extension + embedding backfill |
 | `atif-cli` | the composition root, and the source of the `atif-sql` command (see [What you can do](#what-you-can-do)) |
 

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-use-case plumbing shared by the four LLM pipelines.
+"""Cross-use-case plumbing shared by the five LLM pipelines.
 
-The four are ``PIPELINE_NAMES`` in
+The five are ``PIPELINE_NAMES`` in
 :mod:`atif_analytics.infrastructure.sqlite_state.checkpointer`: classify,
-conflicts, user_friction, perceived.
+conflicts, user_friction, perceived, narrate.
 
 The provider factory + per-pipeline usage/cost logging (one provider
 instance per pipeline run, usage accumulated in the provider's
@@ -34,30 +34,39 @@ if TYPE_CHECKING:
 
 
 def build_provider(
-    settings: AnalyticsSettings, pipeline: str
+    settings: AnalyticsSettings, pipeline: str, *, full_output: bool = False
 ) -> tuple[LlmStructuredProvider, ModelSpec]:
     """One provider per pipeline run, sized per atif-models settings.
 
     Size assignments (atif-models ``LlmSettings``): classify=small,
-    conflicts=large, friction=small, perceived=medium — all resolved through
+    conflicts=large, friction=small, perceived=medium, narrate=small — all resolved through
     the atif-models registry (no model id is written down here), and the
     adapter is the one atif-models wires for the spec's family.
+
+    ``full_output`` sends the model's own output limit as the cap on every
+    call instead of the registry's default (narrate asks for it, so a
+    narration is never cut short by a cap we chose).
     """
+    from atif_models.domain.registry import with_full_output
     from atif_models.infrastructure.providers import build_structured_provider
 
     llm = settings.llm()
     spec = llm.spec_for(pipeline)
+    if full_output:
+        spec = with_full_output(spec)
     provider = build_structured_provider(
         spec,
         region=llm.llm_region,
         concurrency=llm.llm_concurrency,
     )
     logger.info(
-        "{}: provider={} model={} concurrency={}",
+        "{}: provider={} model={} concurrency={} max_output_tokens={} effort={}",
         pipeline,
         getattr(provider, "provider", spec.family),
         spec.model_id,
         llm.llm_concurrency,
+        spec.max_completion_tokens,
+        spec.reasoning_effort,
     )
     return provider, spec
 

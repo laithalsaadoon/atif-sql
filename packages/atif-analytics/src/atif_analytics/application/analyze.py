@@ -9,10 +9,14 @@ atif-embed's, so neither appears here):
 2. conflicts   (large tier; interactive sessions only)
 3. friction    (small tier; human turns only)
 4. perceived   (medium tier; >= 2 human-AI pairs)
+5. narrate     (small tier; every session; runs only when asked for)
 
 Every stage honors ``dry_run``, which defaults to True (cost guard): the
 stages then return plan dicts instead of running. ``skip_*`` flags opt out
-per stage.
+per stage. Narrate is the one stage that is off unless ``narrate=True``: it
+makes a model call per window of every session, the other four included, so
+a caller that already runs ``analyze`` unattended (the nightly refresh lane)
+doesn't start paying for it by upgrading.
 
 The trajectory pipeline and the three structural ones (cluster, terms,
 community) were removed on 2026-09-27: no program read their output, the
@@ -44,11 +48,13 @@ def run_analyze(
     skip_conflicts: bool = False,
     skip_friction: bool = False,
     skip_perceived: bool = False,
+    narrate: bool = False,
     source: SessionSource | None = None,
 ) -> dict[str, Any]:
     """Run the LLM analytics stages; return a per-stage summary dict.
 
-    ``skip_*`` flags subtract individual stages. ``source`` is where session
+    ``skip_*`` flags subtract individual stages, and ``narrate`` adds the
+    narrate stage after them. ``source`` is where session
     data comes from (atif-cli passes the lake's when the lake holds the
     corpus); the default reads the per-session files. The summary's
     ``session_source`` names which one ran.
@@ -66,6 +72,7 @@ def run_analyze(
     from atif_analytics.application.use_cases.classify import classify_sessions
     from atif_analytics.application.use_cases.conflicts import detect_conflicts
     from atif_analytics.application.use_cases.friction import detect_user_friction
+    from atif_analytics.application.use_cases.narrate import narrate_sessions
     from atif_analytics.application.use_cases.perceived import detect_perceived_errors
 
     # THE BUDGET CEILING (unattended-cron money guard). Two independent
@@ -105,6 +112,7 @@ def run_analyze(
         ("conflicts", detect_conflicts, skip_conflicts),
         ("friction", detect_user_friction, skip_friction),
         ("perceived", detect_perceived_errors, skip_perceived),
+        ("narrate", narrate_sessions, not narrate),
     ]
     for name, fn, skip in stages:
         if skip:

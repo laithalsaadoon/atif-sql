@@ -375,11 +375,122 @@ class PerceivedErrorsResult(BaseModel):
     )
 
 
+#: Length ceiling of one narration field. The prompt asks for at most six
+#: sentences; the ceiling is well above that so a slightly long answer still
+#: validates instead of failing a call that was already paid for.
+NARRATION_FIELD_MAX_CHARS = 2_000
+
+#: Length ceiling of a session story (the prompt asks for one short paragraph).
+STORY_MAX_CHARS = 2_400
+
+
+class WindowNarration(BaseModel):
+    """A plain-language account of one window of a session.
+
+    One row per window in the ``session_narration`` parquet cache. Two
+    readers use it: a person debugging a run, and a later review pipeline
+    that reads narration first and opens raw steps only where it needs them.
+    It describes; it doesn't judge whether the work was correct.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str = Field(
+        ...,
+        min_length=1,
+        max_length=NARRATION_FIELD_MAX_CHARS,
+        description=(
+            "What the agent was trying to do in this window, and who asked for it "
+            "(the human, a scheduled job's prompt, or the agent's own plan). One to "
+            "three plain sentences."
+        ),
+    )
+    actions: str = Field(
+        ...,
+        min_length=1,
+        max_length=NARRATION_FIELD_MAX_CHARS,
+        description=(
+            "The main things the agent did, in order: the files it read or changed, "
+            "the commands it ran, the subagents it launched, and any change of "
+            "approach or correction from the human. Three to six plain sentences that "
+            "name the files, commands and errors that mattered; fewer for a short window."
+        ),
+    )
+    outcome: str = Field(
+        ...,
+        min_length=1,
+        max_length=NARRATION_FIELD_MAX_CHARS,
+        description=(
+            "Where things stood when the window ended: what was finished, what "
+            "failed and with which error, and what was left open. One to three plain "
+            "sentences. State what the transcript shows, not whether it was right."
+        ),
+    )
+
+
+#: Length ceiling of a subagent's digest (the prompt asks for two to four sentences).
+DIGEST_MAX_CHARS = 1_400
+
+
+class SubagentStory(BaseModel):
+    """A short account of one subagent's work, folded from its window narrations.
+
+    ``digest`` is what the launching agent's window narration is shown in
+    place of the subagent's steps, and what the session story is shown for
+    each subagent.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    story: str = Field(
+        ...,
+        min_length=1,
+        max_length=STORY_MAX_CHARS,
+        description=(
+            "The subagent's work from start to finish in one short paragraph of three "
+            "to six plain sentences: what it was asked to do, the main things it did, "
+            "and what it handed back."
+        ),
+    )
+    digest: str = Field(
+        ...,
+        min_length=1,
+        max_length=DIGEST_MAX_CHARS,
+        description=(
+            "The same account in two to four plain sentences that stand alone: what the "
+            "subagent was asked, what it did, and what it returned."
+        ),
+    )
+
+
+class SessionStory(BaseModel):
+    """One short account of a whole session, folded from its window narrations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    story: str = Field(
+        ...,
+        min_length=1,
+        max_length=STORY_MAX_CHARS,
+        description=(
+            "The session from start to finish in one short paragraph of three to six "
+            "plain sentences: what was asked, the main turns the work took (changes "
+            "of approach and corrections included), and where it ended."
+        ),
+    )
+
+
 __all__ = [
+    "DIGEST_MAX_CHARS",
+    "NARRATION_FIELD_MAX_CHARS",
+    "STORY_MAX_CHARS",
     "ConflictPair",
     "ConflictsResult",
     "PerceivedError",
     "PerceivedErrorsResult",
     "SessionClassification",
+    "SessionStory",
+    "SubagentStory",
     "UserFrictionSignal",
+    "WindowNarration",
 ]

@@ -26,6 +26,13 @@ CLASSIFICATIONS_DIRNAME = "session_classifications"
 CONFLICTS_DIRNAME = "session_conflicts"
 USER_FRICTION_DIRNAME = "user_friction"
 PERCEIVED_ERRORS_DIRNAME = "perceived_errors"
+#: The narrate pipeline's two caches: one row per narrated window, and one row
+#: per session story (a new row each time a session's windows are folded again).
+NARRATION_DIRNAME = "session_narration"
+STORIES_DIRNAME = "session_stories"
+#: One row per subagent story (a new row each time a subagent's windows are
+#: folded again).
+SUBAGENT_STORIES_DIRNAME = "subagent_stories"
 
 #: Refusal audit sidecar: a durable parquet record of a refusal-skip rather
 #: than a log line that ages out. Pipelines whose in-band schema can't hold a
@@ -73,6 +80,21 @@ class AnalyticsLayout:
         return self.analytics_dir / PERCEIVED_ERRORS_DIRNAME
 
     @property
+    def narration_dir(self) -> Path:
+        """Sharded cache for the narrate pipeline's window rows."""
+        return self.analytics_dir / NARRATION_DIRNAME
+
+    @property
+    def stories_dir(self) -> Path:
+        """Sharded cache for the narrate pipeline's session stories."""
+        return self.analytics_dir / STORIES_DIRNAME
+
+    @property
+    def subagent_stories_dir(self) -> Path:
+        """Sharded cache for the narrate pipeline's subagent stories."""
+        return self.analytics_dir / SUBAGENT_STORIES_DIRNAME
+
+    @property
     def refusals_dir(self) -> Path:
         """Sharded refusal-audit sidecar (see :data:`REFUSALS_DIRNAME`)."""
         return self.analytics_dir / REFUSALS_DIRNAME
@@ -86,9 +108,12 @@ class AnalyticsLayout:
 __all__ = [
     "CLASSIFICATIONS_DIRNAME",
     "CONFLICTS_DIRNAME",
+    "NARRATION_DIRNAME",
     "PERCEIVED_ERRORS_DIRNAME",
     "REFUSALS_DIRNAME",
     "STATE_DB_FILENAME",
+    "STORIES_DIRNAME",
+    "SUBAGENT_STORIES_DIRNAME",
     "USER_FRICTION_DIRNAME",
     "AnalyticsLayout",
 ]

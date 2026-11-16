@@ -32,7 +32,9 @@ from atif_duck.domain.lake_sessions import (
     EDGE_UUIDS_SQL,
     ERROR_STEPS_SQL,
     LAST_EDGE_TS_SQL,
+    QUEUED_COMMANDS_SQL,
     SESSION_FRESHNESS_SQL,
+    SUBAGENTS_SQL,
     TOOL_CALLS_SQL,
     TOOL_RESULTS_SQL,
     TURNS_SQL,
@@ -162,7 +164,7 @@ class LakeSessionReader:
         return {str(sid): _utc(ts) for sid, ts in rows}
 
     def turns(self, session_ids: Sequence[str]) -> list[tuple[Any, ...]]:
-        """``(session_id, step_id, ts, source, message, is_sidechain, is_compact_summary, source_uuids)``.
+        """``(session_id, step_id, ts, source, message, is_sidechain, is_compact_summary, source_uuids, agent_id)``.
 
         In session, then step order; ``source_uuids`` is JSON text.
         """
@@ -173,12 +175,22 @@ class LakeSessionReader:
         return {(str(sid), int(step)) for sid, step in self._batch(ERROR_STEPS_SQL, session_ids)}
 
     def tool_calls(self, session_ids: Sequence[str]) -> list[tuple[Any, ...]]:
-        """``(session_id, step_id, tool_name, tool_input)`` in source order (input as JSON text)."""
+        """``(session_id, step_id, tool_name, tool_input, tool_use_id)`` in source order (input as JSON text)."""
         return self._batch(TOOL_CALLS_SQL, session_ids)
 
     def tool_results(self, session_ids: Sequence[str]) -> list[tuple[Any, ...]]:
         """``(session_id, step_id, tool_use_id, content, is_error)`` in source order (content as JSON text)."""
         return self._batch(TOOL_RESULTS_SQL, session_ids)
+
+    def subagents_json(self, session_id: str) -> str | None:
+        """The session's declared subagents as JSON text (``trajectory.extra.subagents``), or ``None``."""
+        rows = self._fetch(SUBAGENTS_SQL, [self._corpus, session_id])
+        return None if not rows or rows[0][0] is None else str(rows[0][0])
+
+    def queued_commands(self, session_id: str) -> list[tuple[datetime | None, str]]:
+        """``(ts, payload)`` of the session's queued-command events, in source order (payload as JSON text)."""
+        rows = self._fetch(QUEUED_COMMANDS_SQL, [self._corpus, session_id])
+        return [(_utc(ts), "" if payload is None else str(payload)) for ts, payload in rows]
 
     def edge_uuids(self, session_id: str) -> set[str]:
         """The session's non-empty raw-record uuids."""

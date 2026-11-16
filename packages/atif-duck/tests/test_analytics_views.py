@@ -28,10 +28,20 @@ from atif_duck.infrastructure.analytics import (
 )
 from atif_duck.infrastructure.registry import register
 
-#: The four views the pipelines' parquets back directly.
+#: The views the pipelines' parquets back row for row. ``session_stories`` is
+#: backed by a parquet too, but it keeps one row per session, so it isn't in
+#: the every-corpus row count below.
 _ANALYTICS_SOURCE_VIEWS = frozenset(
-    {"session_classifications", "session_conflicts", "user_friction", "perceived_errors"}
+    {
+        "session_classifications",
+        "session_conflicts",
+        "user_friction",
+        "perceived_errors",
+        "session_narration",
+    }
 )
+#: The two story views keep one row per session (or subagent) out of several
+#: on disk.
 
 
 def _write_parquet(con: duckdb.DuckDBPyConnection, sql: str, path: Path) -> None:
@@ -111,6 +121,92 @@ def _populate_analytics(corpus_root: Path) -> None:
         """,
         a / "perceived_errors" / "part-1.parquet",
     )
+    # Narrate: two windows of session one, written by one run.
+    _write_parquet(
+        scratch,
+        f"""
+        SELECT * FROM (VALUES
+            ('{s0}', CAST(NULL AS VARCHAR), CAST(0 AS INTEGER), 'u-1', 'a-3',
+             TIMESTAMPTZ '2026-08-20 10:00:00+00', TIMESTAMPTZ '2026-08-20 10:02:00+00',
+             CAST(3 AS INTEGER), 'human_turn',
+             'The user asked for the flaky test to be fixed.',
+             'The agent read tests/test_auth.py and ran pytest, which failed.',
+             'Three tests were still failing.',
+             'global.openai.gpt-6-luna', '0123456789abcdef',
+             TIMESTAMPTZ '2026-08-22 02:00:00+00'),
+            ('{s0}', CAST(NULL AS VARCHAR), CAST(1 AS INTEGER), 'u-2', 'a-9',
+             TIMESTAMPTZ '2026-08-20 10:03:00+00', TIMESTAMPTZ '2026-08-20 10:09:00+00',
+             CAST(5 AS INTEGER), 'session_end',
+             'The user asked the agent to undo the change.',
+             'The agent reverted the file and reran the suite.',
+             'The suite passed.',
+             'global.openai.gpt-6-luna', '0123456789abcdef',
+             TIMESTAMPTZ '2026-08-22 02:00:01+00'),
+            ('{s0}', 'agent-r1', CAST(0 AS INTEGER), 'su-1', 'sa-1',
+             TIMESTAMPTZ '2026-08-20 10:00:25+00', TIMESTAMPTZ '2026-08-20 10:00:27+00',
+             CAST(2 AS INTEGER), 'session_end',
+             'The launching agent asked the subagent to survey the repo.',
+             'The subagent listed the tests directory.',
+             'It reported what it found.',
+             'global.openai.gpt-6-luna', '0123456789abcdef',
+             TIMESTAMPTZ '2026-08-22 02:00:02+00')
+        ) t(session_id, agent_id, window_index, first_step_uuid, last_step_uuid, started_at,
+            ended_at, step_count, boundary, intent, actions, outcome, model_id, prompt_digest,
+            narrated_at)
+        """,
+        a / "session_narration" / "part-1.parquet",
+    )
+    # Two stories for session one: the session was narrated to one window,
+    # resumed, and folded again over two. The view keeps the second.
+    # The third version covers no more main-chain windows than the second:
+    # only a subagent grew. It's still the newest story.
+    for part, (story, windows, steps, sub_windows, last_uuid, ended, told) in enumerate(
+        (
+            ("An early story.", 1, 3, 0, "a-3", "10:02:00", "02:00:02"),
+            ("The whole story.", 2, 8, 0, "a-9", "10:09:00", "03:00:00"),
+            ("The whole story, with the subagent.", 2, 8, 1, "a-9", "10:09:00", "02:30:00"),
+        ),
+        start=1,
+    ):
+        _write_parquet(
+            scratch,
+            f"""
+            SELECT * FROM (VALUES
+                ('{s0}', '{story}', CAST({windows} AS INTEGER), CAST({steps} AS INTEGER),
+                 CAST({min(sub_windows, 1)} AS INTEGER), CAST({sub_windows} AS INTEGER),
+                 'u-1', '{last_uuid}',
+                 TIMESTAMPTZ '2026-08-20 10:00:00+00', TIMESTAMPTZ '2026-08-20 {ended}+00',
+                 'global.openai.gpt-6-luna', 'fedcba9876543210',
+                 TIMESTAMPTZ '2026-08-22 {told}+00')
+            ) t(session_id, story, window_count, step_count, subagent_count,
+                subagent_window_count, first_step_uuid, last_step_uuid, started_at, ended_at,
+                model_id, prompt_digest, narrated_at)
+            """,
+            a / "session_stories" / f"part-{part}.parquet",
+        )
+    # Two stories for the one subagent: told over one window, then over two.
+    for part, (story, digest, windows, steps) in enumerate(
+        (
+            ("An early subagent story.", "An early digest.", 1, 2),
+            ("The subagent surveyed the repo.", "It listed the tests and reported back.", 2, 4),
+        ),
+        start=1,
+    ):
+        _write_parquet(
+            scratch,
+            f"""
+            SELECT * FROM (VALUES
+                ('{s0}', 'agent-r1', '{story}', '{digest}', true,
+                 CAST({windows} AS INTEGER), CAST({steps} AS INTEGER), 'su-1', 'sa-1',
+                 TIMESTAMPTZ '2026-08-20 10:00:25+00', TIMESTAMPTZ '2026-08-20 10:00:27+00',
+                 'global.openai.gpt-6-luna', 'aaaabbbbccccdddd',
+                 TIMESTAMPTZ '2026-08-22 02:0{part}:00+00')
+            ) t(session_id, agent_id, story, digest, returned, window_count, step_count,
+                first_step_uuid, last_step_uuid, started_at, ended_at, model_id, prompt_digest,
+                narrated_at)
+            """,
+            a / "subagent_stories" / f"part-{part}.parquet",
+        )
     scratch.close()
 
 
@@ -228,6 +324,74 @@ def test_perceived_macros_bind_and_run(analytics_con: duckdb.DuckDBPyConnection)
         analytics_con.execute("SELECT * FROM perceived_examples('rejected_action', 5)").fetchall()
         == []
     )
+
+
+def test_session_narration_lists_a_sessions_windows_in_order(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    rows = analytics_con.execute(
+        "SELECT window_index, first_step_uuid, last_step_uuid, step_count, boundary "
+        "FROM session_narration WHERE session_id = ? AND agent_id IS NULL ORDER BY window_index",
+        [SESSION_IDS[0]],
+    ).fetchall()
+    assert rows == [(0, "u-1", "a-3", 3, "human_turn"), (1, "u-2", "a-9", 5, "session_end")]
+
+
+def test_a_subagents_windows_join_the_subagents_view(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    """``agent_id`` is the key ``steps`` and ``subagents`` already use for a subagent."""
+    rows = analytics_con.execute(
+        "SELECT n.agent_id, n.window_index, n.intent, s.agent_type, s.parent_tool_call_id "
+        "FROM session_narration n JOIN subagents s USING (session_id, agent_id)"
+    ).fetchall()
+    assert rows == [
+        (
+            "agent-r1",
+            0,
+            "The launching agent asked the subagent to survey the repo.",
+            "general-purpose",
+            "toolu_02",
+        )
+    ]
+    # The window's step uuids are that subagent's steps.
+    covered = analytics_con.execute(
+        "SELECT count(*) FROM subagent_steps st JOIN session_narration n "
+        "ON st.session_id = n.session_id AND st.agent_id = n.agent_id "
+        "WHERE CAST(st.source_uuids AS VARCHAR) LIKE '%' || n.first_step_uuid || '%'"
+    ).fetchone()
+    assert covered == (1,)
+
+
+def test_subagent_stories_keeps_the_newest_story_per_subagent(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    rows = analytics_con.execute(
+        "SELECT session_id, agent_id, story, digest, returned, window_count FROM subagent_stories"
+    ).fetchall()
+    assert rows == [
+        (
+            SESSION_IDS[0],
+            "agent-r1",
+            "The subagent surveyed the repo.",
+            "It listed the tests and reported back.",
+            True,
+            2,
+        )
+    ]
+
+
+def test_session_stories_keeps_the_story_covering_the_most_windows(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    """The cache is append-only; a session folded twice still reads as one story."""
+    rows = analytics_con.execute(
+        "SELECT session_id, story, window_count, step_count, subagent_count, "
+        "subagent_window_count, last_step_uuid FROM session_stories"
+    ).fetchall()
+    # Three versions on disk. The newest by narrated_at is the second, but
+    # the third covers more (a subagent's window), so it's the one kept.
+    assert rows == [(SESSION_IDS[0], "The whole story, with the subagent.", 2, 8, 1, 1, "a-9")]
 
 
 def test_macros_skip_when_views_missing(corpus_root: Path) -> None:
