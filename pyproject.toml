@@ -471,7 +471,7 @@ unused-ignore-comment = "warn"
 include = ["fuzz/fuzz_*.py"]
 
 [tool.ty.overrides.rules]
-unresolved-import = "ignore"
+import-not-found = "ignore"
 
 # ---------------------------------------------------------------------------
 # pytest — one run over every member's tests/ tree.

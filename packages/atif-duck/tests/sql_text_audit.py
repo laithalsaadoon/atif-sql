@@ -393,9 +393,8 @@ class ModuleAudit:
                     and isinstance(node.func.value, ast.Name)
                     and node.func.value.id == name
                     and node.func.attr in {"append", "extend", "insert", "update", "add"}
-                ):
-                    if not all(self.trusted(arg, fn, {}) for arg in node.args):
-                        return False
+                ) and not all(self.trusted(arg, fn, {}) for arg in node.args):
+                    return False
             return bindings > 0
         finally:
             self._in_progress.discard(key)
