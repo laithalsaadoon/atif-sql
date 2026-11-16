@@ -58,7 +58,7 @@ jobs:
           # and `mise run security:vex:check` (inside `mise run check`) fails when this set and
           # the ledger's differ in either direction, or when a ledger npm version is not the one
           # site/pnpm-lock.yaml locks, which puts the version scoping back.
-          allow-ghsas: GHSA-ch52-4w7c-c8xp, GHSA-vfj7-8cjw-p6xm
+          allow-ghsas: GHSA-vfj7-8cjw-p6xm
           # Strong copyleft cannot enter an Apache-2.0 distribution. LGPL is deliberately
           # absent (weak copyleft, linkable) and so is MPL-2.0, which
           # `mise run security:licenses` already allows by name for certifi, pathspec, and
