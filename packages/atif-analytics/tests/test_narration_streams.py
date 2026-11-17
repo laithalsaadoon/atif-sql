@@ -380,17 +380,19 @@ def test_a_short_result_is_shown_whole() -> None:
 def test_a_long_result_keeps_its_opening() -> None:
     content = "HEAD" + "x" * 996 + "TAIL"
     excerpt = result_excerpt(content, failed=False, head_chars=100, failed_tail_chars=100)
-    assert excerpt == content[:100] + "\n…(truncated, 904 chars dropped)"
+    assert excerpt == content[:100] + "\n…(+904 chars not shown here)"
 
 
 def test_a_long_failed_result_keeps_its_opening_and_its_ending() -> None:
     content = "HEAD" + "x" * 996 + "TAIL"
     excerpt = result_excerpt(content, failed=True, head_chars=100, failed_tail_chars=50)
-    assert excerpt == "[failed] " + content[:100] + "\n…(854 chars omitted)…\n" + content[-50:]
+    assert (
+        excerpt == "[failed] " + content[:100] + "\n…(+854 chars not shown here)\n" + content[-50:]
+    )
     # With no tail asked for, a failed result is cut like any other.
     assert (
         result_excerpt(content, failed=True, head_chars=100, failed_tail_chars=0)
-        == "[failed] " + content[:100] + "\n…(truncated, 904 chars dropped)"
+        == "[failed] " + content[:100] + "\n…(+904 chars not shown here)"
     )
 
 
@@ -404,7 +406,7 @@ def test_excerpts_follow_each_results_own_flag() -> None:
         has_error_result=True,
     )
     shown = excerpt_results(step, head_chars=20, failed_tail_chars=10)
-    assert shown.tool_results[0] == ("c1", "y" * 20 + "\n…(truncated, 480 chars dropped)")
+    assert shown.tool_results[0] == ("c1", "y" * 20 + "\n…(+480 chars not shown here)")
     assert shown.tool_results[1][1].startswith("[failed] ")
     assert shown.tool_results[1][1].endswith("y" * 10)
     # The step itself isn't changed, and a step with no results is handed back.
@@ -416,7 +418,7 @@ def test_excerpts_follow_each_results_own_flag() -> None:
 def test_a_step_built_without_flags_reads_as_not_failed() -> None:
     step = _main("old shape", tool_results=[("c1", "z" * 100)])
     assert excerpt_results(step, head_chars=10, failed_tail_chars=10).tool_results == [
-        ("c1", "z" * 10 + "\n…(truncated, 90 chars dropped)")
+        ("c1", "z" * 10 + "\n…(+90 chars not shown here)")
     ]
 
 
@@ -502,7 +504,7 @@ def test_a_persisted_result_is_marked_and_cut_from_the_saved_file() -> None:
     # The ending of the file is kept even though the call didn't fail: the
     # last lines of a long output are where it says how it went.
     assert shown.endswith(" FILE-TAIL")
-    assert "…(1990 chars omitted)…" in shown
+    assert "…(+1990 chars not shown here)" in shown
     assert "PREVIEW-HEAD" not in shown
 
 

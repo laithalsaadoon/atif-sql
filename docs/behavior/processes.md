@@ -162,7 +162,7 @@ Entry point: `packages/atif-cli/src/atif_cli/app.py:1725`
 
 ### Related
 
-- `packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:67`
+- `packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:68`
 - `packages/atif-analytics/src/atif_analytics/domain/layout.py:52`
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36`
 - `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`
@@ -205,7 +205,7 @@ turns, the main-chain user steps whose author is `human`.
    The rendered transcript carries each tool result as a size stub,
    `[tool_result <id> <ts>] (N chars omitted)`, unless
    `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES` turns the bodies on:
-   `packages/atif-analytics/src/atif_analytics/domain/transcript.py:338-341`.
+   `packages/atif-analytics/src/atif_analytics/domain/transcript.py:375-380`.
 6. Dispatch each write chunk in budget-checked sub-batches of
    `BUDGET_CHECK_BATCH`, advancing the cursor by what was actually sent so a
    mid-chunk budget stop leaves the remainder unstamped rather than silently
@@ -213,7 +213,7 @@ turns, the main-chain user steps whose author is `human`.
    holding the fenced transcript followed by the one-line request:
    `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:169`,
    `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:218`,
-   `packages/atif-analytics/src/atif_analytics/application/prompts.py:1007`,
+   `packages/atif-analytics/src/atif_analytics/application/prompts.py:1083`,
    `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:149`,
    `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:185`.
 7. Route each result: a `RefusalError` is terminal and writes the documented

@@ -97,25 +97,51 @@ def escape_uuid_headers(text: str) -> str:
 NON_HUMAN_PREVIEW_CHARS: int = 300
 
 
+@dataclass(frozen=True, slots=True)
+class ClipWording:
+    """How the renderer words a cut it made itself.
+
+    ``dropped`` closes a body cut to its opening and ``arguments`` a tool
+    call's cut arguments; ``{n}`` is the number of characters left out. The
+    defaults are the wording the judgment pipelines' prompts are tuned on.
+    A pipeline whose model repeats the wording as a fact about the session
+    passes its own (narrate does: "truncated" read as the transcript's word
+    for it, not as this renderer's).
+    """
+
+    dropped: str = "…(truncated, {n} chars dropped)"
+    arguments: str = "…(truncated)"
+
+
+#: The wording every pipeline but narrate reads.
+DEFAULT_CLIPS = ClipWording()
+
+
 def tool_input_preview(
-    tool_input_json: str | None, max_chars: int = TOOL_INPUT_PREVIEW_CHARS
+    tool_input_json: str | None,
+    max_chars: int = TOOL_INPUT_PREVIEW_CHARS,
+    *,
+    clips: ClipWording = DEFAULT_CLIPS,
 ) -> str:
     """Truncate a ``tool_input`` JSON blob to the first ``max_chars``."""
     if not tool_input_json:
         return ""
     s = str(tool_input_json)
-    return s if len(s) <= max_chars else s[:max_chars] + "…(truncated)"
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars] + clips.arguments.format(n=len(s) - max_chars)
 
 
-def tool_result_preview(content: str | None, max_chars: int) -> str:
+def tool_result_preview(
+    content: str | None, max_chars: int, *, clips: ClipWording = DEFAULT_CLIPS
+) -> str:
     """Truncate a ``tool_result`` content blob with a "chars dropped" footer."""
     if not content:
         return ""
     s = str(content)
     if len(s) <= max_chars:
         return s
-    dropped = len(s) - max_chars
-    return s[:max_chars] + "\n…(truncated, " + str(dropped) + " chars dropped)"
+    return s[:max_chars] + "\n" + clips.dropped.format(n=len(s) - max_chars)
 
 
 @dataclass(slots=True)
@@ -273,6 +299,9 @@ def render_session_text(
     include_uuids: bool = False,
     tool_input_max_chars: int = TOOL_INPUT_PREVIEW_CHARS,
     full_text_authors: frozenset[str] = frozenset(),
+    human_label: str = "user",
+    non_human_max_chars: int = NON_HUMAN_PREVIEW_CHARS,
+    clips: ClipWording = DEFAULT_CLIPS,
 ) -> str:
     """Render one session's steps as a single newline-separated transcript.
 
@@ -299,7 +328,11 @@ def render_session_text(
     ``[uuid=`` header and a body cannot forge one.
 
     A user step a human did not write renders under its ``author`` label
-    with its body clipped to :data:`NON_HUMAN_PREVIEW_CHARS`.
+    with its body clipped to ``non_human_max_chars``
+    (:data:`NON_HUMAN_PREVIEW_CHARS` by default). A step a human wrote
+    renders under ``human_label``: ``user``, the label the judgment
+    prompts read, unless the caller names another. ``clips`` words every
+    cut this function makes (:class:`ClipWording`).
 
     ``tool_input_max_chars`` is the length each tool call's arguments are
     previewed at. The default is what the judgment pipelines' prompts are
@@ -324,19 +357,25 @@ def render_session_text(
             if role == "user" and step.author not in (None, "human"):
                 role = step.author or role
                 if role not in full_text_authors:
-                    text = tool_result_preview(text, NON_HUMAN_PREVIEW_CHARS)
+                    text = tool_result_preview(text, non_human_max_chars, clips=clips)
+            elif role == "user":
+                role = human_label
             body = escape_uuid_headers(text)
             if include_uuids and step.uuid:
                 candidates.append(f"[uuid={step.uuid} {role} {step.ts}] {body}")
             else:
                 candidates.append(f"[{role} {step.ts}] {body}")
         for name, args_json in step.tool_calls:
-            preview = escape_uuid_headers(tool_input_preview(args_json, tool_input_max_chars))
+            preview = escape_uuid_headers(
+                tool_input_preview(args_json, tool_input_max_chars, clips=clips)
+            )
             candidates.append(f"[tool_use:{name or 'tool'} {step.ts}] {preview}")
         failed = ", the step has a failed result" if step.has_error_result else ""
         for call_id, content in step.tool_results:
             if tool_result_bodies:
-                body = escape_uuid_headers(tool_result_preview(content, tool_result_max_chars))
+                body = escape_uuid_headers(
+                    tool_result_preview(content, tool_result_max_chars, clips=clips)
+                )
             else:
                 body = f"({len(content)} chars omitted{failed})"
             candidates.append(f"[tool_result {call_id or '?'} {step.ts}] {body}")
@@ -383,9 +422,11 @@ def human_ai_pair_count(steps: list[StepEvent]) -> int:
 
 
 __all__ = [
+    "DEFAULT_CLIPS",
     "NON_HUMAN_PREVIEW_CHARS",
     "TOOL_INPUT_PREVIEW_CHARS",
     "UUID_HEADER_ESCAPE",
+    "ClipWording",
     "StepEvent",
     "escape_uuid_headers",
     "format_step_ts",

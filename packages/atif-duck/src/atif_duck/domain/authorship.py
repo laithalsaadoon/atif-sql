@@ -76,6 +76,10 @@ AUTHOR_PREFIX_RULES: tuple[tuple[str, str], ...] = (
     ("harness", "<fork-boilerplate>"),
     ("harness", "Another Claude session sent a message"),
     ("harness", "The coordinator sent a message"),
+    # Claude Code's /goal: the notice that its Stop hook is armed, and the
+    # periodic check-in that restates the goal while background work runs.
+    ("harness", "A session-scoped Stop hook is now active"),
+    ("harness", "Goal check-in:"),
     # Slash-command and local-shell wrappers.
     ("harness", "<command-name>"),
     ("harness", "<command-message>"),

@@ -80,12 +80,18 @@ wheel bundles every member; members under `packages/*`):
   report of a background subagent can arrive as a queued notification that
   isn't a step; narrate reads those from `session_events`
   (`domain.narration.task_notices`) to place the return. Each call is told
-  what closed its window and whether the session goes on after it. A
+  what closed its window and whether the session goes on after it, in the
+  request and on the transcript's first and last lines
+  (`application.prompts.window_frame`); the last window is called the
+  last recorded so far, because a resumed session keeps its rows. A window's
+  transcript labels a person's lines `human` and every machine-written
+  user-role line with its source (`domain.narration.narration_source`). A
   session then gets one `session_stories` row.
   Each call carries the previous window's narration and its last raw steps,
-  sees tool arguments at 1,200 characters and the opening of each tool
-  result (bounds of its own; the other pipelines still read 400 and a
-  size). A result the harness saved to a file is marked
+  sees tool arguments at 1,200 characters and the opening and ending of
+  each tool result (bounds of its own; the other pipelines still read 400
+  and a size). Narrate words its own cuts as text not shown here
+  (`domain.narration.NARRATE_CLIPS`) and never as truncated. A result the harness saved to a file is marked
   `[persisted to PATH, SIZE]` and cut from the copy in the session's source
   archive, found by filename only: the path in the transcript is never
   opened. The call sends the model's own output limit as its cap

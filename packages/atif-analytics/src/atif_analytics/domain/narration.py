@@ -57,9 +57,23 @@ declared subagent list (:class:`SubagentRef`, the rows of atif-duck's
 ``subagents`` view) rather than from guesses about step order, since
 parallel subagents interleave in the flat step list.
 
+Who wrote a line. A window's transcript labels every user-role step with
+its source (:func:`narration_source`): ``human`` for a person, and for
+machine-written text the harness delivered in the user role one of
+``stop_hook``, ``task_notification``, ``goal_checkin``, ``queued_command``,
+``harness``, ``audit_prompt`` or ``parent_agent``. The narrator is told that
+only ``human`` lines are a person, so a check-in or a notification isn't
+narrated as something the human asked.
+
+What this renderer leaves out. Every cut narrate makes is worded
+:data:`NARRATE_CLIPS` (``…(+N chars not shown here)``), not "truncated": a
+narrator shown "truncated" reports the session's output as truncated, which
+it wasn't.
+
 Tool results. :func:`excerpt_results` replaces each result with a bounded
-opening (and, for a failed result, its ending too), which is what lets a
-narration say whether a step worked. A result the harness saved to a file
+opening and a shorter ending (a longer one for a failed result), which is
+what lets a narration say whether a step worked and what its last lines
+reported. A result the harness saved to a file
 is marked as that, and its excerpt comes from the saved file when the
 corpus holds it. It's narrate's own bound: the other
 pipelines keep rendering a result as its size.
@@ -74,6 +88,7 @@ from typing import TYPE_CHECKING, Literal, cast, get_args
 
 from atif_analytics.domain.transcript import (
     TOOL_INPUT_PREVIEW_CHARS,
+    ClipWording,
     StepEvent,
     is_human_turn,
     main_chain,
@@ -109,6 +124,46 @@ _TASK_NOTIFICATION = "task_notification"
 #: :data:`~atif_analytics.domain.authorship.AUTHOR_VALUES`, which describe the
 #: main chain; a subagent's stream is narrate's own reading of the steps.
 PARENT_AUTHOR = "parent_agent"
+
+#: The label a window's transcript gives a step a person wrote. The judgment
+#: pipelines read ``user``; narrate says ``human``, the word its prompt uses
+#: for the one source whose words are a person's.
+HUMAN_LABEL = "human"
+
+#: Narrate's own labels for two machine sources the authorship rules file
+#: under a broader one. A goal check-in restates the session's goal while
+#: background work runs, and reads like an instruction; a queued command is
+#: a message another agent or session queued for this one.
+GOAL_CHECKIN = "goal_checkin"
+QUEUED_COMMAND = "queued_command"
+
+#: Openings of a goal check-in delivered as its own step, and the summary
+#: line of one delivered inside a task notification.
+_GOAL_CHECKIN_PREFIX = "Goal check-in:"
+_GOAL_CHECKIN_NOTICE_RE = re.compile(r"<summary>\s*Goal check-in", re.IGNORECASE)
+
+#: Openings of a message another agent or session queued for this one.
+_QUEUED_COMMAND_PREFIXES: tuple[str, ...] = (
+    "Another Claude session sent a message",
+    "The coordinator sent a message",
+)
+
+#: How much of a notification's opening is searched for its summary line.
+_NOTICE_HEAD_CHARS = 600
+
+#: How narrate words a cut it made itself. "Truncated" is what a harness
+#: says of output it cut, so a narrator shown that word reports the output
+#: as truncated; this says the text exists and this view leaves it out.
+NARRATE_CLIPS = ClipWording(
+    dropped="…(+{n} chars not shown here)",
+    arguments="…(+{n} chars not shown here)",
+)
+
+#: Default body budget for machine-written user-role text in a narration
+#: call. The judgment pipelines show 300 characters, which stops a task
+#: notification inside its file path, before the status and summary a
+#: narration needs; 1,200 shows those and the opening of the result.
+DEFAULT_MACHINE_TEXT_CHARS: int = 1_200
 
 #: Stream key for sidechain steps that carry no agent id (sessions converted
 #: before the converter recorded one). They're narrated as one stream.
@@ -149,6 +204,13 @@ _ASYNC_LAUNCH_MARKER = "Async agent launched"
 #: last lines, where the cause usually is.
 DEFAULT_RESULT_HEAD_CHARS: int = 300
 DEFAULT_RESULT_FAILED_TAIL_CHARS: int = 300
+
+#: Default ending shown of a result that didn't fail. A command's last lines
+#: are where its summary is ("41 passed", "exit=0", the commit it made), and
+#: a narrator shown only the opening wrote that no final result appeared.
+#: Shorter than a failed result's ending: one or two summary lines, not a
+#: traceback.
+DEFAULT_RESULT_TAIL_CHARS: int = 200
 
 #: Default tool-call argument preview for narration. The judgment pipelines
 #: read 400 characters. A sizable share of tool calls, most of them Bash
@@ -276,6 +338,29 @@ class SubagentLink:
     def back(self) -> int | None:
         """The launching stream's step where the subagent's work is over, as far as the transcript says."""
         return self.returned if self.returned is not None else self.ended
+
+
+def narration_source(step: StepEvent) -> str | None:
+    """The label a window's transcript gives ``step``'s text: who wrote it.
+
+    ``None`` for a step that isn't in the user role. For one that is: its
+    ``author`` (``human``, ``stop_hook``, ``task_notification``, ``harness``,
+    ``audit_prompt``, or :data:`PARENT_AUTHOR` in a subagent's stream),
+    except that a goal check-in is :data:`GOAL_CHECKIN` and a message queued
+    by another agent or session is :data:`QUEUED_COMMAND`, whichever author
+    the rules filed them under.
+    """
+    if step.role != "user":
+        return None
+    text = step.text.lstrip()
+    if text.startswith(_GOAL_CHECKIN_PREFIX) or (
+        step.author == _TASK_NOTIFICATION
+        and _GOAL_CHECKIN_NOTICE_RE.search(text[:_NOTICE_HEAD_CHARS])
+    ):
+        return GOAL_CHECKIN
+    if text.startswith(_QUEUED_COMMAND_PREFIXES):
+        return QUEUED_COMMAND
+    return step.author or "harness"
 
 
 def split_streams(steps: Sequence[StepEvent]) -> dict[str | None, list[StepEvent]]:
@@ -481,24 +566,41 @@ def result_excerpt(
     head_chars: int,
     failed_tail_chars: int,
     keep_tail: bool = False,
+    tail_chars: int = 0,
 ) -> str:
     """One tool result cut to what a narration call is shown.
 
-    The opening ``head_chars`` characters, with the renderer's "chars
-    dropped" footer when more followed. A failed result opens with
+    The opening ``head_chars`` characters, closed by :data:`NARRATE_CLIPS`'
+    "not shown here" line when more followed. A failed result opens with
     ``[failed]`` and keeps its last ``failed_tail_chars`` characters too,
-    with the count of what was left out between them; ``keep_tail`` keeps
-    the ending of a result that didn't fail.
+    with the count of what was left out between them. A result that didn't
+    fail keeps its last ``tail_chars`` characters the same way (none by
+    default), or ``failed_tail_chars`` of them with ``keep_tail``, which a
+    result read back from its saved file asks for.
     """
     mark = "[failed] " if failed else ""
-    tailed = failed or keep_tail
-    if tailed and failed_tail_chars > 0 and len(content) > head_chars + failed_tail_chars:
-        omitted = len(content) - head_chars - failed_tail_chars
-        return (
-            f"{mark}{content[:head_chars]}\n…({omitted} chars omitted)…\n"
-            f"{content[-failed_tail_chars:]}"
-        )
-    return mark + tool_result_preview(content, head_chars)
+    tail = failed_tail_chars if failed or keep_tail else tail_chars
+    if tail > 0 and len(content) > head_chars + tail:
+        ending = _from_line_start(content, tail)
+        omitted = len(content) - head_chars - len(ending)
+        return f"{mark}{content[:head_chars]}\n{NARRATE_CLIPS.dropped.format(n=omitted)}\n{ending}"
+    return mark + tool_result_preview(content, head_chars, clips=NARRATE_CLIPS)
+
+
+def _from_line_start(content: str, tail_chars: int) -> str:
+    """The last ``tail_chars`` characters of ``content``, begun at a line start when one is in reach.
+
+    An ending that opens in the middle of a line opens in the middle of a
+    value: the last half of a hash reads as a different hash, and a narrator
+    reported the two as not matching. When the ending holds a line break
+    with text after it, the partial first line is left out. An ending that
+    is one long line is kept as it is.
+    """
+    ending = content[-tail_chars:]
+    if content[-tail_chars - 1] == "\n":
+        return ending
+    _, newline, rest = ending.partition("\n")
+    return rest if newline and rest.strip() else ending
 
 
 def excerpt_results(
@@ -507,8 +609,11 @@ def excerpt_results(
     head_chars: int,
     failed_tail_chars: int,
     load: Callable[[str], str | None] | None = None,
+    tail_chars: int = 0,
 ) -> StepEvent:
     """``step`` with each tool result replaced by its :func:`result_excerpt`.
+
+    ``tail_chars`` is the ending kept of a result that didn't fail.
 
     A result the harness saved to a file (:func:`persisted_output`) is
     marked ``[persisted to PATH, SIZE]``, and its excerpt is cut from the
@@ -532,6 +637,7 @@ def excerpt_results(
                 failed=failed[position],
                 head_chars=head_chars,
                 failed_tail_chars=failed_tail_chars,
+                tail_chars=tail_chars,
             )
         else:
             body = load(saved.path) if load is not None else None
@@ -547,6 +653,7 @@ def excerpt_results(
                     head_chars=head_chars,
                     failed_tail_chars=failed_tail_chars,
                     keep_tail=body is not None,
+                    tail_chars=tail_chars,
                 )
                 if body is None:
                     shown += (
@@ -578,13 +685,13 @@ def clip_step(step: StepEvent, max_text_chars: int) -> StepEvent:
     A scheduled job's prompt or a pasted document can be several windows
     long on its own. The renderer's whole-transcript cap drops a line that
     doesn't fit, which for a window made of that one step would leave
-    nothing to narrate, so the body is cut here instead and ends with the
-    renderer's ``…(truncated, N chars dropped)`` footer. A step within the
-    limit is returned as it is.
+    nothing to narrate, so the body is cut here instead and ends with
+    :data:`NARRATE_CLIPS`' "not shown here" line. A step within the limit is
+    returned as it is.
     """
     if len(step.text) <= max_text_chars:
         return step
-    return replace(step, text=tool_result_preview(step.text, max_text_chars))
+    return replace(step, text=tool_result_preview(step.text, max_text_chars, clips=NARRATE_CLIPS))
 
 
 def _mark_before(step: StepEvent, previous: StepEvent) -> BoundaryKind | None:
@@ -703,21 +810,33 @@ def render_window(
     tool_result_max_chars: int = 50_000,
     tool_result_bodies: bool = False,
     tool_input_max_chars: int = TOOL_INPUT_PREVIEW_CHARS,
+    machine_text_max_chars: int = DEFAULT_MACHINE_TEXT_CHARS,
 ) -> str:
-    """One window's transcript text, in the shape every prompt reads.
+    """One window's transcript text, as a narration call reads it.
 
-    The same renderer as a whole session, over the window's steps only, so
-    the role labels, the result stubs and the header escaping are the ones
-    the other pipelines' prompts are tuned on. ``total_max_chars`` is a
-    backstop: the renderer stops at the first line that would cross it.
+    The whole-session renderer over the window's steps only, with narrate's
+    own labels and wording: every user-role line carries its
+    :func:`narration_source` (a person's lines read ``human``), machine
+    text is shown to ``machine_text_max_chars``, and each cut is worded
+    :data:`NARRATE_CLIPS`. ``total_max_chars`` is a backstop: the renderer
+    stops at the first line that would cross it.
     """
+    labeled = [
+        step
+        if (source := narration_source(step)) is None or source == step.author
+        else replace(step, author=source)
+        for step in steps
+    ]
     return render_session_text(
-        list(steps),
+        labeled,
         total_max_chars=total_max_chars,
         tool_result_max_chars=tool_result_max_chars,
         tool_result_bodies=tool_result_bodies,
         tool_input_max_chars=tool_input_max_chars,
         full_text_authors=frozenset({PARENT_AUTHOR}),
+        human_label=HUMAN_LABEL,
+        non_human_max_chars=machine_text_max_chars,
+        clips=NARRATE_CLIPS,
     )
 
 
@@ -749,12 +868,18 @@ def carry_tail(
 
 __all__ = [
     "BOUNDARY_KINDS",
+    "DEFAULT_MACHINE_TEXT_CHARS",
     "DEFAULT_RESULT_FAILED_TAIL_CHARS",
     "DEFAULT_RESULT_HEAD_CHARS",
+    "DEFAULT_RESULT_TAIL_CHARS",
     "DEFAULT_TOOL_INPUT_CHARS",
     "DEFAULT_WINDOW_MAX_CHARS",
     "DEFAULT_WINDOW_MIN_CHARS",
+    "GOAL_CHECKIN",
+    "HUMAN_LABEL",
+    "NARRATE_CLIPS",
     "PARENT_AUTHOR",
+    "QUEUED_COMMAND",
     "SUBAGENT_TOOL_NAMES",
     "UNATTRIBUTED_AGENT_ID",
     "BoundaryKind",
@@ -769,6 +894,7 @@ __all__ = [
     "launches_subagent",
     "link_subagents",
     "narratable_chain",
+    "narration_source",
     "persisted_output",
     "plan_windows",
     "render_window",

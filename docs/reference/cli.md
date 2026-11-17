@@ -188,17 +188,29 @@ Every session is eligible, `one_shot_job` and `turn_audit` sessions included.
   never outlasts is said to be still running.
 - Window ends. Each call is told what closed its window (the human speaks next, a compaction, a
   subagent launch or return, the size limit) and that the session goes on after it, or that the
-  window is the last one. The last window of a subagent and its story are told whether the
-  transcript shows the launching agent receiving the report.
+  window is the last one recorded so far. The window's transcript says the same on its first and
+  last lines. No narration is asked to say the session or the transcript ended: the rows are
+  append-only, so a session resumed after its last window was narrated keeps that row. The last
+  window of a subagent and its story are told whether the transcript shows the launching agent
+  receiving the report.
+- Who wrote a line. A window's transcript labels a person's messages `human` and every other
+  user-role message with its source: `stop_hook`, `task_notification`, `goal_checkin` (the harness
+  restating a session's goal while background work runs), `queued_command` (a message another
+  agent or session queued), `audit_prompt`, `harness`, or `parent_agent` in the steps a subagent
+  took. The prompt says that only `human` lines are a person. Machine-written messages are shown to
+  1,200 characters (the other stages show 300), enough for a notification's status and summary.
 - Carry-over. Each model call gets the previous window's narration and the last
   `ATIF_SQL_NARRATE_CARRY_STEPS` raw steps of that window (default 6, at most
   `ATIF_SQL_NARRATE_CARRY_MAX_CHARS` characters, default 4000), then the new window. No call reads
   older steps again.
 - What a call is shown. Tool arguments are previewed at `ATIF_SQL_NARRATE_TOOL_INPUT_CHARS`
   characters (default 1200; the other stages read 400). Each tool result is shown as its opening
-  `ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS` characters (default 300), and a failed result also keeps
-  its last `ATIF_SQL_NARRATE_TOOL_RESULT_FAILED_TAIL_CHARS` (default 300) and opens with `[failed]`.
-  A head of 0 shows a result as its size only. A result the harness saved to a file (Claude Code
+  `ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS` characters (default 300) and its last
+  `ATIF_SQL_NARRATE_TOOL_RESULT_TAIL_CHARS` (default 200), where a command's summary lines are. A
+  failed result keeps its last `ATIF_SQL_NARRATE_TOOL_RESULT_FAILED_TAIL_CHARS` (default 300)
+  instead and opens with `[failed]`. A head of 0 shows a result as its size only. Each cut reads
+  `…(+N chars not shown here)`, and the prompt says the text was whole in the session, so a
+  narration doesn't report the output as truncated. A result the harness saved to a file (Claude Code
   replaces a large output with a `<persisted-output>` stub and a preview, and an MCP result over
   the token limit with an error line that names the file) is marked
   `[persisted to PATH, SIZE]`, and its opening and ending are cut from the copy of that file in the

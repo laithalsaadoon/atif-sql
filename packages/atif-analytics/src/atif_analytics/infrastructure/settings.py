@@ -26,6 +26,7 @@ from atif_analytics.domain.layout import AnalyticsLayout
 from atif_analytics.domain.narration import (
     DEFAULT_RESULT_FAILED_TAIL_CHARS,
     DEFAULT_RESULT_HEAD_CHARS,
+    DEFAULT_RESULT_TAIL_CHARS,
     DEFAULT_TOOL_INPUT_CHARS,
     DEFAULT_WINDOW_MAX_CHARS,
     DEFAULT_WINDOW_MIN_CHARS,
@@ -113,13 +114,16 @@ class AnalyticsSettings(BaseSettings):
     #: ``ATIF_SQL_NARRATE_CARRY_STEPS`` / ``ATIF_SQL_NARRATE_CARRY_MAX_CHARS``.
     narrate_carry_steps: int = Field(default=6, ge=0)
     narrate_carry_max_chars: int = Field(default=4_000, ge=0)
-    #: How much of each tool result a narration call is shown: its opening,
-    #: and for a failed result its ending as well. 0 for the head shows a
-    #: result as its size only, the way the other pipelines read one. These
-    #: are narrate's own bounds; ``session_text_tool_result_bodies`` doesn't
-    #: apply to it. Env: ``ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS`` /
+    #: How much of each tool result a narration call is shown: its opening
+    #: and its ending, with a longer ending for a failed result. 0 for the
+    #: head shows a result as its size only, the way the other pipelines
+    #: read one. These are narrate's own bounds;
+    #: ``session_text_tool_result_bodies`` doesn't apply to it. Env:
+    #: ``ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS`` /
+    #: ``ATIF_SQL_NARRATE_TOOL_RESULT_TAIL_CHARS`` /
     #: ``ATIF_SQL_NARRATE_TOOL_RESULT_FAILED_TAIL_CHARS``.
     narrate_tool_result_head_chars: int = Field(default=DEFAULT_RESULT_HEAD_CHARS, ge=0)
+    narrate_tool_result_tail_chars: int = Field(default=DEFAULT_RESULT_TAIL_CHARS, ge=0)
     narrate_tool_result_failed_tail_chars: int = Field(
         default=DEFAULT_RESULT_FAILED_TAIL_CHARS, ge=0
     )

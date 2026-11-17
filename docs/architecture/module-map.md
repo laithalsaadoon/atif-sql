@@ -25,10 +25,10 @@ instead of spending (`:14`); each plan turns a measured prompt length into token
 model's own `chars_per_token`
 (`packages/atif-analytics/src/atif_analytics/domain/costs.py:28`). Every classifier system prompt
 lives in one module, each assembled by joining a task body to shared sections
-(`packages/atif-analytics/src/atif_analytics/application/prompts.py:974-983`), and the same text goes to
+(`packages/atif-analytics/src/atif_analytics/application/prompts.py:1050-1059`), and the same text goes to
 both model families. The user message comes from the same module: the transcript, or friction's one
-message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:1007`,
-`:1018`). The pydantic v2
+message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:1083`,
+`:1094`). The pydantic v2
 response schemas they bind against are pure domain models whose field descriptions are themselves
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
 wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
@@ -37,9 +37,9 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py`: the task-framing
   system prompts, public constants assembled at
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:974-983`, the request lines
-  (`:989-992`), and the two user-message builders, `transcript_prompt` (`:1007`) and `message_prompt`
-  (`:1018`).
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1050-1059`, the request lines
+  (`:1065-1068`), and the two user-message builders, `transcript_prompt` (`:1083`) and `message_prompt`
+  (`:1094`).
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py`: the
   friction tiers behind a human-turn and message-length pre-filter: regex fast path, deterministic
   stamp rules, then the LLM (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:5`).
@@ -57,9 +57,9 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 - `packages/atif-analytics/src/atif_analytics/domain/transcript.py`: `render_session_text`
   renders the transcript a stage sends, each tool result as a one-line stub with the content's
   length, so what a tool returned stays on disk and never reaches Bedrock
-  (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:267`).
+  (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:293`).
   `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
-  characters (`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:101`, `:97`).
+  characters (`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:102`, `:98`).
 - `packages/atif-analytics/src/atif_analytics/domain/models.py`: the response schemas, from
   `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:22`) to
   `PerceivedErrorsResult` (`:355`).

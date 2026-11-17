@@ -401,8 +401,9 @@ class WindowNarration(BaseModel):
         max_length=NARRATION_FIELD_MAX_CHARS,
         description=(
             "What the agent was trying to do in this window, and who asked for it "
-            "(the human, a scheduled job's prompt, or the agent's own plan). One to "
-            "three plain sentences."
+            "(the human, a scheduled job's prompt, a machine source such as a goal "
+            "check-in or a notification, or the agent's own plan). One to three plain "
+            "sentences."
         ),
     )
     actions: str = Field(
@@ -423,7 +424,8 @@ class WindowNarration(BaseModel):
         description=(
             "Where things stood when the window ended: what was finished, what "
             "failed and with which error, and what was left open. One to three plain "
-            "sentences. State what the transcript shows, not whether it was right."
+            "sentences. State what the transcript shows, not whether it was right, and "
+            "never that the session or the transcript ended."
         ),
     )
 

@@ -215,11 +215,11 @@ sequenceDiagram
    timestamp, so a re-run costs nothing for unchanged work (`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:138`).
 6. Each call's user message is the session transcript (friction sends one short message instead)
    fenced in a tag pair whose id is a digest of the text, so the text can't close its own fence,
-   then the one-line request (`packages/atif-analytics/src/atif_analytics/application/prompts.py:1007`,
-   `:1018`). The renderer writes each tool result as a one-line stub with the content's length, so
+   then the one-line request (`packages/atif-analytics/src/atif_analytics/application/prompts.py:1083`,
+   `:1094`). The renderer writes each tool result as a one-line stub with the content's length, so
    what a tool returned stays on disk and never reaches Bedrock;
    `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
-   characters (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:267`).
+   characters (`packages/atif-analytics/src/atif_analytics/domain/transcript.py:293`).
 7. `build_structured_provider` picks the adapter by the resolved spec's family and imports only that
    adapter's module: `OpenAiBedrockProvider` for openai, the default, and `AnthropicBedrockProvider`
    for anthropic (`packages/atif-models/src/atif_models/infrastructure/providers.py:20`). Each
