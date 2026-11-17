@@ -9,8 +9,8 @@ so can a review pipeline, opening raw steps only where the narration points.
 
 Transcript text is sent to a third-party model provider on this path: each
 window's rendered steps leave this machine, tool arguments included, and
-with them the opening of every tool result (and the ending of a failed
-one) unless ``ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS`` is 0.
+with them the opening and the ending of every tool result unless
+``ATIF_SQL_NARRATE_TOOL_RESULT_HEAD_CHARS`` is 0.
 
 Streams. A session is narrated as several streams
 (:func:`~atif_analytics.domain.narration.split_streams`): the main chain,
@@ -55,13 +55,26 @@ session's side files (never from the path itself). A background subagent's
 report arrives as a queued task notification, not a step; it's read from
 the session's events and is what places the subagent's return.
 
+Who wrote a line, and where a window sits. Every user-role line of a
+window's transcript carries its source
+(:func:`~atif_analytics.domain.narration.narration_source`): ``human`` for a
+person, and a machine label (a stop hook, a task notification, a goal
+check-in, a queued command, other harness text) for the rest, and the prompt
+says that only ``human`` lines are a person. The transcript opens and closes
+with a line that says whether the window is the last of its stream and what
+comes next (:func:`~atif_analytics.application.prompts.window_frame`), and
+the last window is called the last recorded so far: a resumed session keeps
+the rows it has, so no narration says the session or the transcript ended.
+
 What a call is shown. A tool call's arguments are previewed at
 ``narrate_tool_input_chars`` (1,200; the judgment pipelines read 400), and
-each tool result as its opening ``narrate_tool_result_head_chars`` (300),
-plus the last ``narrate_tool_result_failed_tail_chars`` (300) of a failed
-one. These are narrate's own bounds; the other pipelines still read a result
+each tool result as its opening ``narrate_tool_result_head_chars`` (300)
+plus its last ``narrate_tool_result_tail_chars`` (200), or the last
+``narrate_tool_result_failed_tail_chars`` (300) of a failed one. These are narrate's own bounds; the other pipelines still read a result
 as its size. A step whose text is longer than a window is cut to its
-opening.
+opening. Every cut is worded "…(+N chars not shown here)": the text was
+whole in the session, and "truncated" is narrated as a fact about the
+output.
 
 The output cap. Each call sends the model's own output limit as its cap
 (:func:`atif_models.domain.registry.with_full_output`), because reasoning
@@ -173,6 +186,7 @@ from atif_analytics.application.prompts import (
     subagent_note,
     subagent_report_note,
     window_end_note,
+    window_frame,
 )
 from atif_analytics.application.use_cases._shared import (
     RunBudget,
@@ -187,6 +201,8 @@ from atif_analytics.domain.costs import estimate_cost_tokens, tokens_for_chars
 from atif_analytics.domain.models import SessionStory, SubagentStory, WindowNarration
 from atif_analytics.domain.narration import (
     BOUNDARY_KINDS,
+    HUMAN_LABEL,
+    NARRATE_CLIPS,
     SubagentLink,
     Window,
     carry_tail,
@@ -300,6 +316,15 @@ def narrate_prompt_digest() -> str:
             "w", window_index=1, previous_narration="n", previous_steps="s", subagents="a"
         ),
         narration_prompt("w", window_index=0, subagent_stream=True),
+        *(
+            line
+            for kind in BOUNDARY_KINDS
+            for stream in (False, True)
+            for line in window_frame(0, kind, subagent_stream=stream)
+        ),
+        NARRATE_CLIPS.dropped,
+        NARRATE_CLIPS.arguments,
+        HUMAN_LABEL,
         subagent_note(agent_type="t", description="d", digest="g", status="s"),
         *(window_end_note(kind) for kind in BOUNDARY_KINDS),
         *(
@@ -431,7 +456,7 @@ def _window_status(link: SubagentLink, window: Window) -> str | None:
     if not launched and not back:
         return None
     if link.back is None:
-        return "launched in this window; the transcript ends before it finishes"
+        return "launched in this window; no recorded step shows it finishing"
     if launched and not back:
         return "launched in this window, still running when it ended"
     # Its work is over in this window. A step shows the report coming back,
@@ -469,7 +494,7 @@ def _story_status(link: SubagentLink) -> str:
         return "returned"
     if link.ended is not None:
         return f"finished; {_NO_RETURN_STEP}"
-    return "still running when the transcript ended"
+    return "still running at the last recorded step"
 
 
 class _Narrator:
@@ -524,6 +549,7 @@ class _Narrator:
                     shown,
                     head_chars=head,
                     failed_tail_chars=settings.narrate_tool_result_failed_tail_chars,
+                    tail_chars=settings.narrate_tool_result_tail_chars,
                     load=lambda path: self.reader.tool_result_file(session_id, path),
                 )
             prepared.append(shown)
@@ -751,6 +777,7 @@ class _Narrator:
                         previous_steps=previous_steps,
                         subagents=self._notes(session, key, window),
                         subagent_stream=key is not None,
+                        boundary=window.boundary,
                         closes=window_end_note(
                             window.boundary,
                             subagent_stream=key is not None,

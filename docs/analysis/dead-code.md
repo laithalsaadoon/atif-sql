@@ -109,7 +109,7 @@ entry.
 
 | Symbol | Path | Last modified |
 | --- | --- | --- |
-| `is_interrupt` | `packages/atif-analytics/src/atif_analytics/domain/authorship.py:125` | 2026-09-27 |
+| `is_interrupt` | `packages/atif-analytics/src/atif_analytics/domain/authorship.py:131` | 2026-09-27 |
 | `codex_edge_ids` | `packages/atif-converter/src/atif_converter/domain/codex_edges.py:175` | 2026-09-11 |
 | `CODEX_CONVERTIBLE_RECORD_TYPES` | `packages/atif-converter/src/atif_converter/domain/codex_fidelity.py:47` | 2026-09-11 |
 | `is_claude_session_event` | `packages/atif-converter/src/atif_converter/domain/session_events.py:206` | 2026-09-27 |
@@ -127,7 +127,7 @@ intra-module use site is named after the table.
 
 | Symbol | Path | Last modified |
 | --- | --- | --- |
-| `session_kind` | `packages/atif-analytics/src/atif_analytics/domain/authorship.py:130` | 2026-09-27 |
+| `session_kind` | `packages/atif-analytics/src/atif_analytics/domain/authorship.py:136` | 2026-09-27 |
 | `CHARS_PER_TOKEN` | `packages/atif-analytics/src/atif_analytics/domain/costs.py:25` | 2026-10-12 |
 | `CLASSIFICATIONS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:25` | 2026-08-28 |
 | `CONFLICTS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:26` | 2026-08-28 |
@@ -215,7 +215,7 @@ more than once, the citation carries the first site and the remaining line
 numbers follow it as plain numbers.
 
 - `session_kind` is called at
-  `packages/atif-analytics/src/atif_analytics/domain/authorship.py:153`. The
+  `packages/atif-analytics/src/atif_analytics/domain/authorship.py:159`. The
   other `session_kind` matches are a function of the same name in
   `transcript.py` and a reader method.
 - `CHARS_PER_TOKEN` is the default `chars_per_token` argument of `tokens_for_chars` at

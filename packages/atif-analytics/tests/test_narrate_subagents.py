@@ -590,13 +590,16 @@ def test_a_failed_subagent_call_stops_the_session_and_keeps_what_was_written(roo
 # ---------------------------------------------------------------------------
 
 
-def test_a_call_sees_the_opening_of_each_tool_result(root: Path) -> None:
+def test_a_call_sees_the_opening_and_the_ending_of_each_tool_result(root: Path) -> None:
     provider = FakeProvider()
     _run(_settings(root), provider)
     search = _prompt(provider, "Searching.")
     assert "RESULT-HEAD " + "r" * 288 in search
-    assert "RESULT-TAIL" not in search
-    assert "…(truncated, 624 chars dropped)" in search
+    # The ending is where a command's summary line is.
+    assert "r" * 188 + " RESULT-TAIL" in search
+    assert "…(+424 chars not shown here)" in search
+    # The cut is this view's, so it isn't worded as a truncation.
+    assert "truncated" not in search
     # A short result is shown whole.
     assert "[Subagent hand-back] Vendor A costs $5." in _prompt(
         provider, "Launching a researcher for vendor A."
@@ -609,7 +612,17 @@ def test_a_failed_result_keeps_its_ending_too(root: Path) -> None:
     fetch = _prompt(provider, "Fetching vendor C's site.")
     assert "[failed] ERR-HEAD " in fetch
     assert "ERR-TAIL" in fetch
-    assert "…(318 chars omitted)…" in fetch
+    assert "…(+318 chars not shown here)" in fetch
+
+
+def test_tail_zero_shows_only_the_opening_of_a_result_that_did_not_fail(root: Path) -> None:
+    provider = FakeProvider()
+    _run(_settings(root, narrate_tool_result_tail_chars=0), provider)
+    search = _prompt(provider, "Searching.")
+    assert "RESULT-TAIL" not in search
+    assert "…(+624 chars not shown here)" in search
+    # A failed result's ending has its own setting.
+    assert "ERR-TAIL" in _prompt(provider, "Fetching vendor C's site.")
 
 
 def test_head_zero_shows_results_as_sizes_like_the_other_pipelines(root: Path) -> None:
@@ -642,7 +655,8 @@ def test_tool_arguments_are_shown_at_narrates_own_length(root: Path) -> None:
     _run(_settings(clipped_root, narrate_tool_input_chars=400), short)
     fetch = _prompt(short, "Fetching vendor C's site.")
     assert "CMD-END" not in fetch
-    assert "…(truncated)" in fetch
+    assert "chars not shown here)" in fetch
+    assert "…(truncated)" not in fetch
 
 
 # ---------------------------------------------------------------------------
@@ -721,8 +735,8 @@ def test_a_queued_report_is_the_subagents_return(root: Path) -> None:
     # The subagent's own last window and its story are told the report got back.
     c_window = _prompt(provider, "Fetching vendor C's site.")
     assert c_window.rstrip().endswith(
-        "This is the last window of the subagent's steps. The launching agent received the "
-        "subagent's report: its last message is what it handed back."
+        "This is the last window of the subagent's steps recorded so far. The launching agent "
+        "received the subagent's report: its last message is what it handed back."
     )
     (c_request,) = [
         p for n, p in provider.calls if n == "SubagentStory" and "intent: intent 2" in p
@@ -740,8 +754,8 @@ def test_with_no_report_on_record_a_subagent_is_told_so(root: Path) -> None:
     _run(_settings(root), provider)
     c_window = _prompt(provider, "Fetching vendor C's site.")
     assert c_window.rstrip().endswith(
-        "This is the last window of the subagent's steps. No record shows the launching agent "
-        "receiving a report from it."
+        "This is the last window of the subagent's steps recorded so far. No record shows the "
+        "launching agent receiving a report from it."
     )
 
 
@@ -751,21 +765,28 @@ def test_each_window_is_told_what_closed_it(root: Path) -> None:
     _run(_settings(root), provider)
     endings = {
         "research vendor pricing and write the report": (
-            "The window closes because the agent launches a subagent next; the session goes on "
-            "after it."
+            "This isn't the last window: it closes because the agent launches a subagent next, "
+            "and the session goes on after it. Say where things stood when the window ended."
         ),
         "Launching two background researchers.": (
-            "The window closes because the human speaks next; the session goes on after it."
+            "This isn't the last window: it closes because the human speaks next, and the "
+            "session goes on after it. Say where things stood when the window ended."
         ),
         "Still waiting on vendors B and C.": (
-            "The window closes because a subagent's work comes back at this point; the session "
-            "goes on after it."
+            "This isn't the last window: it closes because a subagent's work comes back at this "
+            "point, and the session goes on after it. Say where things stood when the window "
+            "ended."
         ),
-        "Writing the report.": "This is the last window: the transcript holds no steps after it.",
+        "Writing the report.": (
+            "This is the last window recorded so far: no later steps are in the record. Say "
+            "where things stood at its end. A session can be resumed, so don't say that the "
+            "session or the transcript ended."
+        ),
         # Inside agent-a: its first window closes at the nested launch.
         "Searching.": (
-            "The window closes because the agent launches a subagent next; the subagent's steps "
-            "go on after it."
+            "This isn't the last window: it closes because the agent launches a subagent next, "
+            "and the subagent's steps go on after it. Say where things stood when the window "
+            "ended."
         ),
     }
     for text, ending in endings.items():
@@ -775,6 +796,13 @@ def test_each_window_is_told_what_closed_it(root: Path) -> None:
         p for n, p in provider.calls if n == "WindowNarration" and "This is the last window" in p
     ]
     assert len(lasts) == 5  # the main chain and the four subagents
+    # The transcript says it too, at both ends of the steps.
+    for prompt in lasts:
+        assert "; the last window recorded so far]\n" in prompt
+        assert "; no later steps are recorded]\n</transcript id=" in prompt
+    middle = _prompt(provider, "Launching two background researchers.")
+    assert " of the session; not the last window: more steps follow it]\n" in middle
+    assert "; next, not shown: the human speaks]\n</transcript id=" in middle
 
 
 # ---------------------------------------------------------------------------

@@ -930,9 +930,9 @@ rather than skipping a file that no longer contains the current version; the gua
   than a column because reading it must not require the table.
 - **The user-step authorship rule table**: `AUTHOR_VALUES`, `AUTHOR_STRIP_CHARS`,
   `AUTHOR_PREFIX_RULES`, and `INTERRUPT_PREFIXES` at
-  `packages/atif-duck/src/atif_duck/domain/authorship.py:37-102`, which the `step_author` macro and
+  `packages/atif-duck/src/atif_duck/domain/authorship.py:37-108`, which the `step_author` macro and
   the `user_steps`, `human_turns`, and `session_outcomes` views compile from. atif-analytics can't
-  import atif-duck, so `packages/atif-analytics/src/atif_analytics/domain/authorship.py:37-102`
+  import atif-duck, so `packages/atif-analytics/src/atif_analytics/domain/authorship.py:37-108`
   carries a twin that its pipelines and transcript renderer read. The twin is pinned as source
   text by `packages/atif-duck/tests/test_authorship_twin_pin.py:64`, and
   `packages/atif-cli/tests/test_authorship_parity.py:53` runs the SQL and the Python over the same

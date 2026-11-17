@@ -242,7 +242,10 @@ def test_narrate_prompt_structure_and_substance() -> None:
     assert "Don't judge whether the work was correct" in NARRATE_SYSTEM_PROMPT
     assert "Don't judge" in STORY_SYSTEM_PROMPT
     # Hook and harness text is not the user.
-    assert "Don't treat hook or harness text as the user." in NARRATE_SYSTEM_PROMPT
+    assert (
+        "Don't treat hook, check-in, notification or harness text as the human."
+        in NARRATE_SYSTEM_PROMPT
+    )
     # The carry-over is context, not material.
     assert "Narrate only this." in NARRATE_SYSTEM_PROMPT
     assert "Don't narrate the earlier window again." in NARRATE_SYSTEM_PROMPT
@@ -319,10 +322,10 @@ def test_narrate_prompt_covers_subagents_and_tool_results() -> None:
     assert "no human is in it" in NARRATE_SYSTEM_PROMPT
     # Tool results are shown in part, so the narrator can say what worked
     # and must not guess past the cut.
-    assert "Say whether a step worked when the result\n  shows it" in NARRATE_SYSTEM_PROMPT
+    assert "Say whether a step worked\n  when the result shows it" in NARRATE_SYSTEM_PROMPT
     assert "[failed]" in NARRATE_SYSTEM_PROMPT
-    assert "don't guess\n  what the rest held" in NARRATE_SYSTEM_PROMPT
-    assert "chars omitted" in NARRATE_SYSTEM_PROMPT
+    assert "don't conclude\n  anything from the part you can't see" in NARRATE_SYSTEM_PROMPT
+    assert "chars not shown here" in NARRATE_SYSTEM_PROMPT
     # The stories say what subagents contributed, and a subagent's story
     # hands back a digest.
     assert "Say what the subagents contributed" in STORY_SYSTEM_PROMPT
@@ -391,15 +394,20 @@ class TestWindowEndLabels:
         for kind in BOUNDARY_KINDS:
             note = window_end_note(kind)
             if kind == "session_end":
-                assert note == "This is the last window: the transcript holds no steps after it."
+                assert note.startswith(
+                    "This is the last window recorded so far: no later steps are in the record."
+                )
+                # A session can be resumed after its last window was narrated.
+                assert note.endswith("don't say that the session or the transcript ended.")
             else:
-                assert note.startswith("The window closes because ")
-                assert note.endswith("; the session goes on after it.")
-                assert "last window" not in note
+                assert note.startswith("This isn't the last window: it closes because ")
+                assert ", and the session goes on after it." in note
+                assert note.endswith("Say where things stood when the window ended.")
 
     def test_each_closing_reason_is_named(self) -> None:
         assert window_end_note("size_cap") == (
-            "The window closes because it reached its size limit; the session goes on after it."
+            "This isn't the last window: it closes because it reached its size limit, and the "
+            "session goes on after it. Say where things stood when the window ended."
         )
         assert "the human speaks next" in window_end_note("human_turn")
         assert "the agent's context is compacted next" in window_end_note("compaction")
@@ -408,19 +416,20 @@ class TestWindowEndLabels:
         assert "sends a further message next" in window_end_note("parent_message")
 
     def test_a_subagents_windows_speak_of_the_subagents_steps(self) -> None:
-        assert window_end_note("size_cap", subagent_stream=True).endswith(
-            "; the subagent's steps go on after it."
+        assert ", and the subagent's steps go on after it." in window_end_note(
+            "size_cap", subagent_stream=True
         )
         last = {
             state: window_end_note("session_end", subagent_stream=True, report=state)
             for state in ("received", "none", "running")
         }
         assert all(
-            n.startswith("This is the last window of the subagent's steps. ") for n in last.values()
+            n.startswith("This is the last window of the subagent's steps recorded so far. ")
+            for n in last.values()
         )
         assert "received the subagent's report" in last["received"]
         assert "No record shows the launching agent receiving a report" in last["none"]
-        assert "ends before the subagent finishes" in last["running"]
+        assert "No recorded step shows the subagent finishing" in last["running"]
         assert len(set(last.values())) == 3
         assert last["received"].endswith(subagent_report_note("received"))
 
@@ -431,8 +440,11 @@ class TestWindowEndLabels:
         assert prompt.index("</transcript id=") < prompt.index(label)
 
     def test_the_system_prompt_says_how_to_read_the_label(self) -> None:
-        assert "The request says what closed the window." in NARRATE_SYSTEM_PROMPT
-        assert "never that the\n  session or the transcript ended" in NARRATE_SYSTEM_PROMPT
+        assert "closes with a line that says what comes next" in NARRATE_SYSTEM_PROMPT
+        assert (
+            "Never write that the session or the\n  transcript ended, stopped or was cut off"
+            in NARRATE_SYSTEM_PROMPT
+        )
         assert "don't say no handoff\n  is shown" in NARRATE_SYSTEM_PROMPT
         assert "whether the launching agent received the subagent's" in SUBAGENT_STORY_SYSTEM_PROMPT
 

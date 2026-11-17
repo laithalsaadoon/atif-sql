@@ -172,7 +172,7 @@ def test_each_call_carries_the_previous_window_and_nothing_older(job_root: Path)
     # The first window has nothing before it.
     assert "<previous_narration" not in first
     assert "<previous_steps" not in first
-    assert "[user 2026-08-22T08:00:00.000Z] fix the export job" in first
+    assert "[human 2026-08-22T08:00:00.000Z] fix the export job" in first
     assert "first window of the session" in first
 
     # The second carries the first's narration and the end of its steps.
@@ -289,7 +289,7 @@ def test_an_oversized_step_is_narrated_from_its_opening(tmp_path: Path) -> None:
     first = _narration_prompts(provider)[0]
     assert "OPENING run the nightly bench." in first
     assert "CLOSING" not in first
-    assert "chars dropped)" in first
+    assert "chars not shown here)" in first
     assert "session truncated" not in first
     rows = _windows(settings, sid)
     assert (rows[0]["first_step_uuid"], rows[0]["step_count"]) == ("cdcd-1", 1)
@@ -447,7 +447,7 @@ def test_an_exhausted_budget_starts_nothing(job_root: Path) -> None:
 def test_a_failed_call_keeps_the_windows_before_it_and_queues_the_session(job_root: Path) -> None:
     settings = _settings(job_root)
     # The third window's transcript is the only one holding this text.
-    provider = FakeProvider(fail_prompts_containing="[user 2026-08-22T08:05:00.000Z]")
+    provider = FakeProvider(fail_prompts_containing="[human 2026-08-22T08:05:00.000Z]")
     assert _run(settings, provider) == 0
     assert [r["window_index"] for r in _windows(settings)] == [0, 1]
     state_db = settings.layout().state_db_path
@@ -484,7 +484,9 @@ def test_a_refused_window_is_written_in_band_and_the_session_completes(job_root:
     # One carried step, so the refused window's human turn (the marker) isn't
     # also in the next call's carry-over.
     settings = _settings(job_root, narrate_carry_steps=1)
-    provider = FakeProvider(refuse_prompts_containing="[user 2026-08-22T08:03:00.000Z] add the key")
+    provider = FakeProvider(
+        refuse_prompts_containing="[human 2026-08-22T08:03:00.000Z] add the key"
+    )
     assert _run(settings, provider) == 1
     rows = _windows(settings)
     assert [r["window_index"] for r in rows] == [0, 1, 2]

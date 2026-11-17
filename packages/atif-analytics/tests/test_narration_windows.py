@@ -189,7 +189,7 @@ def test_clip_step_keeps_the_opening_of_an_oversized_body() -> None:
     assert clip_step(short, 100) is short
     long = _human("x" * 250 + "TAIL", uuid="u-2")
     clipped = clip_step(long, 100)
-    assert clipped.text == "x" * 100 + "\n…(truncated, 154 chars dropped)"
+    assert clipped.text == "x" * 100 + "\n…(+154 chars not shown here)"
     # Everything else about the step is kept: it's still that human turn.
     assert (clipped.uuid, clipped.role, clipped.author, clipped.ts) == (
         "u-2",

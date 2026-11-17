@@ -138,7 +138,7 @@ Sources, in dispatch order:
   call dispatched at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:218`, its user
   message the fenced transcript and request line built by
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1007`.
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1083`.
 - provider adapter: built once per stage by
   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36` through
   `build_structured_provider` at

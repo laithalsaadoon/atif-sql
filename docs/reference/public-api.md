@@ -49,7 +49,7 @@ default, each tool result renders as a one-line size stub and its content never 
 `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` sends the bodies, each clipped to
 `session_text_tool_result_max_chars`.
 
-`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:67-150`
+`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:68-154`
 
 ### AnthropicBedrockProvider
 
@@ -257,7 +257,7 @@ def fence_id(text: str) -> str:
 The id a prompt fence around `text` carries: the first 8 hex digits of its SHA-256. It's derived
 from the text, so a prompt is a pure function of its input and a body can't close its own fence.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:997-1004`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1073-1080`
 
 ### InvalidSessionInput
 
@@ -386,7 +386,7 @@ def message_prompt(message: str) -> str:
 The friction stage's user message: the one human message inside a `<message id="...">` fence whose
 id is `fence_id(message)`, then the `FRICTION_REQUEST` line.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:1018-1021`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1094-1097`
 
 ### ModelSpec
 
@@ -565,9 +565,9 @@ The user message for the classify, conflicts, and perceived stages: the transcri
 `<transcript id="...">` fence whose id is `fence_id(transcript)`, then the one-line `request`. Each
 stage passes its own request constant, `CLASSIFY_REQUEST`, `CONFLICTS_REQUEST`, or
 `PERCEIVED_REQUEST`, declared at
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:989-991`.
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1065-1067`.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:1007-1015`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1083-1091`
 
 ### VIEW_SCHEMA
 
