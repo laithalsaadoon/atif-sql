@@ -32,6 +32,8 @@ from atif_analytics.domain.models import (
     ConflictsResult,
     PerceivedError,
     PerceivedErrorsResult,
+    ReviewFindings,
+    ReviewTriage,
     SessionClassification,
     SessionStory,
     SubagentStory,
@@ -316,7 +318,13 @@ class FakeProvider:
         *,
         fail_prompts_containing: str | None = None,
         refuse_prompts_containing: str | None = None,
+        triage: ReviewTriage | None = None,
+        findings: ReviewFindings | None = None,
     ) -> None:
+        #: What a review's triage call and review call answer. The defaults
+        #: name no window and report nothing.
+        self.triage = triage if triage is not None else ReviewTriage()
+        self.findings = findings if findings is not None else ReviewFindings()
         self.usage = UsageAccumulator()
         self.calls: list[tuple[str, str]] = []  # (schema name, prompt)
         self._fail_marker = fail_prompts_containing
@@ -387,13 +395,20 @@ class FakeProvider:
                     ),
                 ]
             )
-        if schema in (WindowNarration, SessionStory, SubagentStory):
+        if schema in (WindowNarration, SessionStory, SubagentStory, ReviewTriage, ReviewFindings):
             return self._narration(schema)
         msg = f"unexpected schema {schema!r}"
         raise AssertionError(msg)
 
     def _narration(self, schema: type) -> Any:
-        """A narration or story numbered by call, so a test can tell which call wrote which row."""
+        """A narration or story numbered by call, so a test can tell which call wrote which row.
+
+        A review call gets the answer the test handed the fake.
+        """
+        if schema is ReviewTriage:
+            return self.triage
+        if schema is ReviewFindings:
+            return self.findings
         n = sum(1 for name, _ in self.calls if name == schema.__name__)
         if schema is SessionStory:
             return SessionStory(story=f"story {n}")

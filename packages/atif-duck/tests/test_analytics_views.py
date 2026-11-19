@@ -38,6 +38,7 @@ _ANALYTICS_SOURCE_VIEWS = frozenset(
         "user_friction",
         "perceived_errors",
         "session_narration",
+        "session_reviews",
     }
 )
 #: The two story views keep one row per session (or subagent) out of several
@@ -206,6 +207,56 @@ def _populate_analytics(corpus_root: Path) -> None:
                 narrated_at)
             """,
             a / "subagent_stories" / f"part-{part}.parquet",
+        )
+    # The same finding reported by two reviews of session one (same session,
+    # heading and anchor step, so the same key), and a second finding from the
+    # later review only. The view keeps the newer row of the repeated one.
+    for part, (key, anchor, actual, digest, told) in enumerate(
+        (
+            ("00000000000000aa", "u-1", "First wording.", "1111111111111111", "04:00:00"),
+            ("00000000000000aa", "u-1", "Second wording.", "2222222222222222", "05:00:00"),
+            ("00000000000000bb", "a-1", "Another fault.", "2222222222222222", "05:00:00"),
+        ),
+        start=1,
+    ):
+        _write_parquet(
+            scratch,
+            f"""
+            SELECT * FROM (VALUES
+                ('{s0}', CAST(NULL AS VARCHAR), CAST(0 AS INTEGER), '{anchor}', 'a-1',
+                 'tool_results', 'Report the failing test.', '{actual}',
+                 ['{anchor}', 'a-1'], ['1 failed, 12 passed', 'All tests pass.'],
+                 '{key}', 'narration', 'global.anthropic.claude-sonnet-5-5', '{digest}',
+                 'cccccccccccccccc', TIMESTAMPTZ '2026-08-22 {told}+00')
+            ) t(session_id, agent_id, window_index, first_step_uuid, last_step_uuid, heading,
+                expected, actual, evidence_step_uuids, evidence_quotes, finding_key, route,
+                model_id, prompt_digest, rubric_digest, reviewed_at)
+            """,
+            a / "session_findings" / f"part-{part}.parquet",
+        )
+    # Two reviews of session one and one of session two, which found nothing.
+    for part, (sid, findings, dropped, reasons, told) in enumerate(
+        (
+            (s0, 1, 1, '{"quote_not_found": 1}', "04:00:00"),
+            (s0, 2, 0, "{}", "05:00:00"),
+            (s1, 0, 0, "{}", "05:00:00"),
+        ),
+        start=1,
+    ):
+        _write_parquet(
+            scratch,
+            f"""
+            SELECT * FROM (VALUES
+                ('{sid}', 'narration', 'reviewed', CAST(2 AS INTEGER), CAST(2 AS INTEGER),
+                 CAST(8 AS INTEGER), CAST(2 AS INTEGER), CAST({findings} AS INTEGER),
+                 CAST({dropped} AS INTEGER), '{reasons}', 'u-1', 'a-9',
+                 'global.anthropic.claude-sonnet-5-5', '2222222222222222', 'cccccccccccccccc',
+                 TIMESTAMPTZ '2026-08-22 {told}+00')
+            ) t(session_id, route, status, windows_offered, windows_opened, steps_read, calls,
+                findings, dropped, dropped_reasons, first_step_uuid, last_step_uuid, model_id,
+                prompt_digest, rubric_digest, reviewed_at)
+            """,
+            a / "session_reviews" / f"part-{part}.parquet",
         )
     scratch.close()
 
@@ -392,6 +443,63 @@ def test_session_stories_keeps_the_story_covering_the_most_windows(
     # Three versions on disk. The newest by narrated_at is the second, but
     # the third covers more (a subagent's window), so it's the one kept.
     assert rows == [(SESSION_IDS[0], "The whole story, with the subagent.", 2, 8, 1, 1, "a-9")]
+
+
+def test_session_findings_keeps_the_newest_row_per_finding_key(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    rows = analytics_con.execute(
+        "SELECT finding_key, actual, prompt_digest, evidence_step_uuids, evidence_quotes "
+        "FROM session_findings ORDER BY finding_key"
+    ).fetchall()
+    # Three rows on disk, two findings: the repeated one reads as its later row.
+    assert rows == [
+        (
+            "00000000000000aa",
+            "Second wording.",
+            "2222222222222222",
+            ["u-1", "a-1"],
+            ["1 failed, 12 passed", "All tests pass."],
+        ),
+        (
+            "00000000000000bb",
+            "Another fault.",
+            "2222222222222222",
+            ["a-1", "a-1"],
+            ["1 failed, 12 passed", "All tests pass."],
+        ),
+    ]
+
+
+def test_a_finding_joins_the_steps_it_quotes(analytics_con: duckdb.DuckDBPyConnection) -> None:
+    """``evidence_step_uuids`` holds step keys: each one is a step's first source uuid."""
+    row = analytics_con.execute(
+        "SELECT count(*) FROM (SELECT session_id, unnest(evidence_step_uuids) AS uuid "
+        "FROM session_findings WHERE finding_key = '00000000000000aa') f "
+        "JOIN steps st ON st.session_id = f.session_id AND st.source_uuids->>0 = f.uuid"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == 2
+
+
+def test_session_reviews_keeps_every_review_so_a_clean_read_is_visible(
+    analytics_con: duckdb.DuckDBPyConnection,
+) -> None:
+    s0, s1 = SESSION_IDS
+    rows = analytics_con.execute(
+        "SELECT session_id, findings, dropped, dropped_reasons FROM session_reviews "
+        "ORDER BY reviewed_at, session_id"
+    ).fetchall()
+    assert rows == [
+        (s0, 1, 1, '{"quote_not_found": 1}'),
+        (s0, 2, 0, "{}"),
+        (s1, 0, 0, "{}"),
+    ]
+    # Session two was read and nothing was found: a review row and no finding.
+    clean = analytics_con.execute(
+        "SELECT r.session_id FROM session_reviews r ANTI JOIN session_findings f USING (session_id)"
+    ).fetchall()
+    assert clean == [(s1,)]
 
 
 def test_macros_skip_when_views_missing(corpus_root: Path) -> None:

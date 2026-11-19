@@ -10,13 +10,17 @@ atif-embed's, so neither appears here):
 3. friction    (small tier; human turns only)
 4. perceived   (medium tier; >= 2 human-AI pairs)
 5. narrate     (small tier; every session; runs only when asked for)
+6. review      (another vendor's medium tier; every session but turn audits;
+                reads the narrations; runs only when asked for)
 
 Every stage honors ``dry_run``, which defaults to True (cost guard): the
 stages then return plan dicts instead of running. ``skip_*`` flags opt out
-per stage. Narrate is the one stage that is off unless ``narrate=True``: it
-makes a model call per window of every session, the other four included, so
-a caller that already runs ``analyze`` unattended (the nightly refresh lane)
-doesn't start paying for it by upgrading.
+per stage. Narrate and review are off unless ``narrate=True`` or
+``review=True``: narrate makes a model call per window of every session and
+review reads every session's narrations and some of its steps, so a caller
+that already runs ``analyze`` unattended (the nightly refresh lane) doesn't
+start paying for either by upgrading. Review runs after narrate because it
+reads what narrate wrote.
 
 The trajectory pipeline and the three structural ones (cluster, terms,
 community) were removed on 2026-09-27: no program read their output, the
@@ -49,12 +53,14 @@ def run_analyze(
     skip_friction: bool = False,
     skip_perceived: bool = False,
     narrate: bool = False,
+    review: bool = False,
     source: SessionSource | None = None,
 ) -> dict[str, Any]:
     """Run the LLM analytics stages; return a per-stage summary dict.
 
-    ``skip_*`` flags subtract individual stages, and ``narrate`` adds the
-    narrate stage after them. ``source`` is where session
+    ``skip_*`` flags subtract individual stages, ``narrate`` adds the
+    narrate stage after them, and ``review`` adds the review stage after
+    that. ``source`` is where session
     data comes from (atif-cli passes the lake's when the lake holds the
     corpus); the default reads the per-session files. The summary's
     ``session_source`` names which one ran.
@@ -74,6 +80,7 @@ def run_analyze(
     from atif_analytics.application.use_cases.friction import detect_user_friction
     from atif_analytics.application.use_cases.narrate import narrate_sessions
     from atif_analytics.application.use_cases.perceived import detect_perceived_errors
+    from atif_analytics.application.use_cases.review import review_sessions
 
     # THE BUDGET CEILING (unattended-cron money guard). Two independent
     # caps, both settings-driven (ATIF_SQL_LLM_MAX_SESSIONS_PER_RUN /
@@ -113,6 +120,7 @@ def run_analyze(
         ("friction", detect_user_friction, skip_friction),
         ("perceived", detect_perceived_errors, skip_perceived),
         ("narrate", narrate_sessions, not narrate),
+        ("review", review_sessions, not review),
     ]
     for name, fn, skip in stages:
         if skip:

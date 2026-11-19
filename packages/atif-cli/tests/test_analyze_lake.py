@@ -59,6 +59,7 @@ _USE_CASE_MODULES = (
     "atif_analytics.application.use_cases.friction",
     "atif_analytics.application.use_cases.perceived",
     "atif_analytics.application.use_cases.narrate",
+    "atif_analytics.application.use_cases.review",
 )
 
 _PIPELINES = {
@@ -393,6 +394,23 @@ class TestAnalyzeCommand:
         assert plan["capped_candidates"] == 3
         assert plan["windows"] >= 3
         assert on_files["narrate"] == plan
+
+    def test_review_is_opt_in_and_plans_the_same_from_either_source(
+        self,
+        built: tuple[Path, Path, Path],
+        fake_provider: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        del fake_provider
+        assert "review" not in self._analyze(built, capsys, narrate=True)
+        on_lake = self._analyze(built, capsys, review=True)
+        on_files = self._analyze(built, capsys, review=True, lake=False)
+        plan = on_lake["review"]
+        assert (plan["pipeline"], plan["route"], plan["dry_run"]) == ("review", "narration", True)
+        # No session is narrated in this corpus, so each one waits for narrate.
+        assert (plan["capped_candidates"], plan["llm_calls"]) == (0, 0)
+        assert plan["unnarrated"] >= 2
+        assert on_files["review"] == plan
 
     def test_without_a_lake_analyze_warns_once_and_reads_the_files(
         self,

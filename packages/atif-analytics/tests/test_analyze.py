@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""run_analyze orchestration: budget ceilings across the LLM stages, and the opt-in narrate stage.
+"""run_analyze orchestration: budget ceilings across the LLM stages, and the opt-in narrate and review stages.
 
 FakeProvider-driven (no boto3 client is ever built): ``build_provider`` is
 monkeypatched at each use-case module's binding so every stage gets a
@@ -33,6 +33,7 @@ _USE_CASE_MODULES = (
     "atif_analytics.application.use_cases.friction",
     "atif_analytics.application.use_cases.perceived",
     "atif_analytics.application.use_cases.narrate",
+    "atif_analytics.application.use_cases.review",
 )
 
 
@@ -213,3 +214,44 @@ def test_narrate_is_budget_skipped_like_any_stage(settings: AnalyticsSettings) -
     summary = run_analyze(starved, dry_run=False, since_days=None, narrate=True)
     assert summary["narrate"] == {"skipped": "budget_exhausted", "consecutive_skips": 1}
     assert not settings.layout().narration_dir.exists()
+
+
+def test_review_is_off_unless_asked_for(settings: AnalyticsSettings) -> None:
+    """An existing unattended ``analyze`` caller doesn't start reviewing by upgrading."""
+    summary = run_analyze(settings, dry_run=True, since_days=None, narrate=True)
+    assert "review" not in summary
+
+
+def test_review_dry_run_plans_after_narrate(settings: AnalyticsSettings) -> None:
+    summary = run_analyze(settings, dry_run=True, since_days=None, narrate=True, review=True)
+    assert list(summary).index("review") > list(summary).index("narrate")
+    plan = summary["review"]
+    assert (plan["dry_run"], plan["route"]) == (True, "narration")
+    # Nothing is narrated yet in a dry run, so both sessions wait.
+    assert (plan["capped_candidates"], plan["unnarrated"], plan["llm_calls"]) == (0, 2, 0)
+
+
+def test_review_runs_after_narrate_and_reads_what_it_wrote(
+    settings: AnalyticsSettings, fake_providers: list[_BillingFakeProvider]
+) -> None:
+    roomy = settings.model_copy(update={"llm_max_cost_usd_per_run": 100.0})
+    summary = run_analyze(roomy, dry_run=False, since_days=None, narrate=True, review=True)
+    # Narrate ran first in the same run, so both sessions had narrations to read.
+    assert summary["narrate"] == 2
+    assert summary["review"] == 2
+    reviewer = fake_providers[-1]
+    assert {name for name, _ in reviewer.calls} == {"ReviewTriage", "ReviewFindings"}
+    assert all("<narrations id=" in prompt for _, prompt in reviewer.calls)
+    state_db = settings.layout().state_db_path
+    assert len(checkpointer.load_as_map(state_db, "review")) == 2
+    assert summary["llm_spent_usd"] == pytest.approx(
+        2.0 * sum(len(provider.calls) for provider in fake_providers)
+    )
+
+
+@pytest.mark.usefixtures("fake_providers")
+def test_review_is_budget_skipped_like_any_stage(settings: AnalyticsSettings) -> None:
+    starved = settings.model_copy(update={"llm_max_cost_usd_per_run": 0.0})
+    summary = run_analyze(starved, dry_run=False, since_days=None, review=True)
+    assert summary["review"] == {"skipped": "budget_exhausted", "consecutive_skips": 1}
+    assert not settings.layout().reviews_dir.exists()

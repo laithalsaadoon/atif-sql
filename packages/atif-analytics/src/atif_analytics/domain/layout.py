@@ -33,6 +33,10 @@ STORIES_DIRNAME = "session_stories"
 #: One row per subagent story (a new row each time a subagent's windows are
 #: folded again).
 SUBAGENT_STORIES_DIRNAME = "subagent_stories"
+#: The review pipeline's two caches: one row per finding, and one row per
+#: review of a session (a new row each time a session is reviewed again).
+FINDINGS_DIRNAME = "session_findings"
+REVIEWS_DIRNAME = "session_reviews"
 
 #: Refusal audit sidecar: a durable parquet record of a refusal-skip rather
 #: than a log line that ages out. Pipelines whose in-band schema can't hold a
@@ -95,6 +99,16 @@ class AnalyticsLayout:
         return self.analytics_dir / SUBAGENT_STORIES_DIRNAME
 
     @property
+    def findings_dir(self) -> Path:
+        """Sharded cache for the review pipeline's findings."""
+        return self.analytics_dir / FINDINGS_DIRNAME
+
+    @property
+    def reviews_dir(self) -> Path:
+        """Sharded cache for the review pipeline's per-session review records."""
+        return self.analytics_dir / REVIEWS_DIRNAME
+
+    @property
     def refusals_dir(self) -> Path:
         """Sharded refusal-audit sidecar (see :data:`REFUSALS_DIRNAME`)."""
         return self.analytics_dir / REFUSALS_DIRNAME
@@ -108,9 +122,11 @@ class AnalyticsLayout:
 __all__ = [
     "CLASSIFICATIONS_DIRNAME",
     "CONFLICTS_DIRNAME",
+    "FINDINGS_DIRNAME",
     "NARRATION_DIRNAME",
     "PERCEIVED_ERRORS_DIRNAME",
     "REFUSALS_DIRNAME",
+    "REVIEWS_DIRNAME",
     "STATE_DB_FILENAME",
     "STORIES_DIRNAME",
     "SUBAGENT_STORIES_DIRNAME",

@@ -135,8 +135,8 @@ every one of them; atif-models reaches it through atif-analytics, which imports 
 `docs/CONTRACT.md:17-19` leaves VSS/`semantic_search` and the analytics pipelines to
 `docs/CONTRACT-V2.md` rather than ruling them out; both are shipped commands (the `atif-analytics`
 and `atif-embed` pins at `packages/atif-cli/pyproject.toml:32` and `:36`, plus the `analyze`,
-`embed`, and `search` commands at `packages/atif-cli/src/atif_cli/app.py:1725`, `:1901`, and
-`:2131`). Read `docs/CONTRACT.md:22-60` as authoritative for the layout (that's the part the
+`embed`, and `search` commands at `packages/atif-cli/src/atif_cli/app.py:1725`, `:1912`, and
+`:2142`). Read `docs/CONTRACT.md:22-60` as authoritative for the layout (that's the part the
 packages actually implement) and the manifests as authoritative for who imports whom.
 
 **Drift risk:** a new artifact, a renamed file, or a new `meta.json` key must be applied in every
@@ -156,18 +156,18 @@ write side. Any layout change starts there and then greps the reader modules nam
 
 **Consumers:**
 
-- `packages/atif-cli/src/atif_cli/app.py:2472-2524`: the `schema` command reads `VIEW_SCHEMA`,
+- `packages/atif-cli/src/atif_cli/app.py:2483-2535`: the `schema` command reads `VIEW_SCHEMA`,
   `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES`, tags each object
   with its `requires` value, and answers with no DuckDB connection.
 - `packages/atif-duck/src/atif_duck/domain/examples.py:35-44`: the examples generator imports every
   catalog and derives one runnable query per object.
-- `packages/atif-cli/src/atif_cli/app.py:2431`: the `examples` command calls
+- `packages/atif-cli/src/atif_cli/app.py:2442`: the `examples` command calls
   `build_examples()`.
 - `packages/atif-duck/tests/test_duck_views.py:51` and `:67`: the `DESCRIBE`-vs-`VIEW_SCHEMA` and
   DDL-vs-`MACRO_SIGNATURES` drift tests.
 - `packages/atif-duck/tests/test_examples.py:208`, `:218`, and `:227`: `DESCRIPTIONS` coverage,
   `ARG_EXEMPLARS` coverage, and the `AS TABLE` set drift test.
-- `packages/atif-duck/tests/test_analytics_views.py:424` and `:406`: the analytics-side drift
+- `packages/atif-duck/tests/test_analytics_views.py:532` and `:514`: the analytics-side drift
   tests.
 - `packages/atif-cli/tests/test_app.py:136`: asserts the CLI's JSON payload keys equal the
   catalog keys.
@@ -213,7 +213,7 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
   `SELECT * FROM name(args)` for a member and `SELECT name(args)` otherwise, so a macro whose DDL
   gains or loses `AS TABLE` breaks every derived example, pinned by the regex test at
   `packages/atif-duck/tests/test_examples.py:227`.
-- **The catalog is answerable without a corpus.** `packages/atif-cli/src/atif_cli/app.py:2481-2483` states the sub-50 ms,
+- **The catalog is answerable without a corpus.** `packages/atif-cli/src/atif_cli/app.py:2492-2494` states the sub-50 ms,
   no-DuckDB-bind guarantee the `schema` command rests on; a runtime `DESCRIBE` would violate it.
 - **The raw readers are deliberately NOT in `VIEW_NAMES`** (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:141-142`), so a
   consumer enumerating `VIEW_NAMES` does not see `v_raw_trajectories` and friends.
@@ -329,7 +329,7 @@ either a `layers` contract or a place in the `independence` list in the same com
   `AnthropicBedrockProvider`, the anthropic-family adapter.
 - `packages/atif-models/tests/test_models_ports.py:29-38`: binds `OpenAiBedrockProvider` to the
   port by annotation, `isinstance`, and a member sweep.
-- `packages/atif-analytics/tests/analytics_fixtures.py:303`: the deterministic double.
+- `packages/atif-analytics/tests/analytics_fixtures.py:305`: the deterministic double.
 
 **Shape:**
 
@@ -360,12 +360,12 @@ class LlmStructuredProvider(Protocol):
   `ProviderUnavailable`
   (`packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:44-63`).
 - **The Protocol says nothing about token accounting, yet every consumer reads it off the concrete
-  provider.** `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:84` and `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:141` both reach for `getattr(provider, "usage", None)` because
+  provider.** `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:85` and `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:142` both reach for `getattr(provider, "usage", None)` because
   `usage` is not on the port; a conforming adapter without that attribute silently reports zero
   spend and the `RunBudget` ceiling never trips.
 - **`CallUsage` counts are PER CALL, and some of them are subsets of others.**
   `reasoning_tokens` is a subset of `output_tokens` and `cached_tokens` a subset of `input_tokens`
-  (`packages/atif-models/src/atif_models/domain/ports.py:65-71`), so `estimate_cost` at `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:87-93` prices `input_tokens` and
+  (`packages/atif-models/src/atif_models/domain/ports.py:65-71`), so `estimate_cost` at `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:88-94` prices `input_tokens` and
   `output_tokens` and never adds `reasoning_tokens` or `cached_tokens`, which would double-charge.
   `long_input_tokens` / `long_output_tokens` are subsets too: the accumulator adds a long-context call's tokens to both
   the totals and the long split (`packages/atif-models/src/atif_models/domain/ports.py:107-109`),
@@ -380,7 +380,7 @@ class LlmStructuredProvider(Protocol):
 - **`UsageAccumulator` must be thread-safe, not task-safe.** The lock is a `threading.Lock`
   (`packages/atif-models/src/atif_models/domain/ports.py:90`) because adapters dispatch blocking `invoke_model` through `anyio.to_thread`,
   reasoning stated at `packages/atif-models/src/atif_models/domain/ports.py:16-22`.
-- **The budget is a stop-dispatch trigger, not a cap.** `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:117-124` documents the
+- **The budget is a stop-dispatch trigger, not a cap.** `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:118-125` documents the
   overshoot bound as `max_cost_usd` plus at most `BUDGET_CHECK_BATCH` units in flight; a consumer
   treating `max_cost_usd` as a hard ceiling is wrong.
 - **`pricing_in` / `pricing_out` on `ModelSpec` are USD per 1,000,000 tokens**, stated at
@@ -550,7 +550,7 @@ class TextRowsPort(Protocol):
   yielded with `replaces_existing=True` (`packages/atif-embed/src/atif_embed/domain/ports.py:108-111`), and the caller must delete before
   appending or the uuid fans out to two vectors
   (`packages/atif-embed/src/atif_embed/application/embed.py:219-226`).
-- **The CLI injects only the text-rows port.** `packages/atif-cli/src/atif_cli/app.py:2040-2046` calls
+- **The CLI injects only the text-rows port.** `packages/atif-cli/src/atif_cli/app.py:2051-2057` calls
   `run_backfill` with `corpus_root`, `settings`, `text_rows` (`DuckDbTextRows`, wrapped in
   `LakeTextRows` unless `--no-lake` is passed), `limit`, and `dry_run`; the use case constructs the
   default store and embedder itself under deferred imports (`packages/atif-embed/src/atif_embed/application/embed.py:114-117`, `packages/atif-embed/src/atif_embed/application/embed.py:173-176`),
@@ -667,7 +667,7 @@ the contract, not as a redundant smoke test), and
 ## Token semantics and the pricing table
 
 **Producer:** `packages/atif-duck/src/atif_duck/infrastructure/registry.py:73-76` (the semantics)
-and `packages/atif-duck/src/atif_duck/domain/catalog.py:687` (`DEFAULT_PRICING`)
+and `packages/atif-duck/src/atif_duck/domain/catalog.py:748` (`DEFAULT_PRICING`)
 
 **Consumers:**
 
@@ -677,7 +677,7 @@ and `packages/atif-duck/src/atif_duck/domain/catalog.py:687` (`DEFAULT_PRICING`)
   the pricing override against `DEFAULT_PRICING`.
 - `packages/atif-duck/src/atif_duck/domain/catalog.py:85-88`: the `steps` view schema publishes
   `prompt_tokens`, `completion_tokens`, `cached_tokens`, `cache_creation` to every SQL consumer.
-- `packages/atif-duck/src/atif_duck/domain/catalog.py:610-616`: the agent-facing `cost_estimate`
+- `packages/atif-duck/src/atif_duck/domain/catalog.py:650-656`: the agent-facing `cost_estimate`
   description carries the trust condition.
 
 **Shape:**
@@ -706,15 +706,15 @@ DEFAULT_PRICING: dict[str, tuple[float, float]] = {
   (`packages/atif-duck/src/atif_duck/infrastructure/projections.py:96-97`). `cost_estimate` therefore prices `prompt_tokens - cached_tokens` and
   documents that identity at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2004-2007`; cache reads are charged nothing.
 - **`in_rate` / `out_rate` are USD per 1,000,000 tokens.** The unit appears in neither name: only
-  the comment at `packages/atif-duck/src/atif_duck/domain/catalog.py:677` and the `/ 1e6` at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2032` carry it.
+  the comment at `packages/atif-duck/src/atif_duck/domain/catalog.py:738` and the `/ 1e6` at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2032` carry it.
 - **`est_cost_usd` is USD and covers the PRICED steps only.** It is meaningful only when
-  `unpriced_steps = 0`, stated in each of these places: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2014-2019`, `packages/atif-duck/src/atif_duck/domain/catalog.py:610-616`, and the
+  `unpriced_steps = 0`, stated in each of these places: `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2014-2019`, `packages/atif-duck/src/atif_duck/domain/catalog.py:650-656`, and the
   `LEFT JOIN` shape itself at `packages/atif-duck/src/atif_duck/infrastructure/registry.py:2040`.
 - **`unpriced_steps` counts only steps with a non-NULL `model_name`**, because user steps carry no
   model and cost nothing
   (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2021-2024`). Counting them would put every conversation
   above zero and mask real pricing gaps.
-- **Cache write and read multipliers are NOT modelled.** `packages/atif-duck/src/atif_duck/domain/catalog.py:684-686` states that the 1.25x
+- **Cache write and read multipliers are NOT modelled.** `packages/atif-duck/src/atif_duck/domain/catalog.py:745-747` states that the 1.25x
   / 2x / 0.1x tiers are out of scope, so `est_cost_usd` under-reports a cache-heavy session.
 - **A step's `model_name` matches a pricing row by exact name once a trailing `-YYYYMMDD` is stripped**
   (`packages/atif-duck/src/atif_duck/infrastructure/registry.py:2041`), so `claude-haiku-4-5-20251001` prices as `claude-haiku-4-5`.
@@ -938,10 +938,10 @@ rather than skipping a file that no longer contains the current version; the gua
   `packages/atif-cli/tests/test_authorship_parity.py:53` runs the SQL and the Python over the same
   steps.
 - **The analytics parquet layout**: the artifact names at
-  `packages/atif-analytics/src/atif_analytics/domain/layout.py:25-48`, of which atif-duck pins the
-  pipeline directories as `_ANALYTICS_SOURCES` (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:67-75`).
-  `REFUSALS_DIRNAME` (`packages/atif-analytics/src/atif_analytics/domain/layout.py:46`) has no view, as its own comment says
-  (`packages/atif-analytics/src/atif_analytics/domain/layout.py:42-45`), so the refusal audit has no name in `atif-sql schema` and a
+  `packages/atif-analytics/src/atif_analytics/domain/layout.py:25-52`, of which atif-duck pins the
+  pipeline directories as `_ANALYTICS_SOURCES` (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:67-77`).
+  `REFUSALS_DIRNAME` (`packages/atif-analytics/src/atif_analytics/domain/layout.py:50`) has no view, as its own comment says
+  (`packages/atif-analytics/src/atif_analytics/domain/layout.py:46-49`), so the refusal audit has no name in `atif-sql schema` and a
   reader has to `read_parquet` its shard files directly.
 - **The CLI exit-code taxonomy**: `EXIT_CODES` at
   `packages/atif-cli/src/atif_cli/errors.py:30-66`, consumed at many sites in

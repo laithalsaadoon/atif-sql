@@ -89,8 +89,8 @@ Sources, in dispatch order:
   `lock_configuration` are issued against it at `packages/atif-cli/src/atif_cli/app.py:597-606`.
 - corpus artifacts: on the per-session path, session globs read through `read_json` at
   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:754-769`; the analytics parquets bind
-  through `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:148`, with the analytics
-  macros at `:266`.
+  through `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:159`, with the analytics
+  macros at `:277`.
 - Lance store: written by atif-embed and read here, both through DuckDB's lance extension;
   `packages/atif-duck/src/atif_duck/infrastructure/registry.py:1703-1722` loads it and ATTACHes the
   store (installing it is `install_lance_extension` at `:1626`, behind `atif-sql embed`); the
@@ -125,20 +125,20 @@ sequenceDiagram
 
 Sources, in dispatch order:
 
-- CLI analyze: `packages/atif-cli/src/atif_cli/app.py:1725`; settings resolved at `:1798-1805`,
-  `run_analyze` called at `:1816`.
-- run_analyze: `packages/atif-analytics/src/atif_analytics/application/analyze.py:41`; the
-  `stages` list at `:110-116`, each stage invoked at `:137`.
+- CLI analyze: `packages/atif-cli/src/atif_cli/app.py:1725`; settings resolved at `:1808-1815`,
+  `run_analyze` called at `:1826`.
+- run_analyze: `packages/atif-analytics/src/atif_analytics/application/analyze.py:45`; the
+  `stages` list at `:117-124`, each stage invoked at `:145`.
 - CorpusReader: `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:469`,
   constructed once per run at
-  `packages/atif-analytics/src/atif_analytics/application/analyze.py:68`; `session_text` at
+  `packages/atif-analytics/src/atif_analytics/application/analyze.py:74`; `session_text` at
   `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:674`.
 - LLM stages: the classify exemplar at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:374`; structured
   call dispatched at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:218`, its user
   message the fenced transcript and request line built by
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1083`.
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1086`.
 - provider adapter: built once per stage by
   `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36` through
   `build_structured_provider` at
@@ -155,17 +155,17 @@ Sources, in dispatch order:
   `bedrock-runtime` client both adapters build through
   `packages/atif-models/src/atif_models/infrastructure/bedrock_common.py:88`.
 - analytics dir: `<corpus_root>/analytics/`, defined at
-  `packages/atif-analytics/src/atif_analytics/domain/layout.py:58`, holding both the sharded parquet
+  `packages/atif-analytics/src/atif_analytics/domain/layout.py:62`, holding both the sharded parquet
   caches (`write_part`
   `packages/atif-analytics/src/atif_analytics/infrastructure/parquet_cache.py:90`, called at
   `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:282`) and the single
   SQLite WAL `state.db`
-  (`packages/atif-analytics/src/atif_analytics/domain/layout.py:103`).
+  (`packages/atif-analytics/src/atif_analytics/domain/layout.py:117`).
 - analytics dir, SQLite arm: `filter_unchanged`
-  `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:138` called
+  `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:139` called
   at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:115`;
   `mark_completed`
-  `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:301` called
+  `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:302` called
   at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:290`; retry drain
   `packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/retry_queue.py:265` called
   at `packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:124`.

@@ -32,6 +32,21 @@ The v2 analytics pipelines over the materialized ATIF corpus:
   model and an effort for this stage alone), the output
   cap is the model's own limit, and a session that resumes continues each
   stream from its last narrated step.
+* **Review** — `review` stores where the agent fell short in a session
+  (`analyze --review`; off by default). It reads the session's story and
+  window narrations, a triage call names the windows worth opening, and a
+  review call reads those windows' steps against a nine-heading checklist
+  (`atif_analytics.domain.review`). Each finding is one `session_findings`
+  row: `expected`, `actual`, the checklist heading, and quotes with the
+  uuids of the steps they're in. The pipeline checks every quote against the
+  step it names and drops a finding whose quote isn't there, so a narration
+  decides what gets read and never what gets stored. There's no severity or
+  confidence column. Each reviewed session gets a `session_reviews` row with
+  what was opened, stored and dropped. `ATIF_SQL_REVIEW_ROUTE=steps` reads
+  every step with no narration, `ATIF_SQL_REVIEW_GOAL_FILE` adds the
+  operator's goal (`examples/review-goal.example.md`), and the model
+  defaults to another vendor's than narrate's
+  (`ATIF_SQL_LLM_MODEL_REVIEW`, `ATIF_SQL_LLM_EFFORT_REVIEW`).
 * **Authorship** — `atif_analytics.domain.authorship` decides who wrote a
   user step (`human`, `stop_hook`, `task_notification`, `harness`,
   `audit_prompt`). It's a twin of `atif_duck.domain.authorship`, pinned by

@@ -36,7 +36,7 @@ flowchart LR
 | `atif-corpus` | Corpus materialization: source discovery, watermarks, quiescence, atomic artifact writes |
 | `atif-duck` | The DuckDB views and macros over the materialized corpus, declared in a drift-tested static catalog |
 | `atif-models` | The model alias registry and the structured-output LLM clients for GPT-6 and Claude 5.5. No other package names a Bedrock LLM id (the embedding model ids are `atif-embed` settings) |
-| `atif-analytics` | The LLM pipelines: classify, conflicts, friction, perceived, and narrate on request |
+| `atif-analytics` | The LLM pipelines: classify, conflicts, friction, perceived, and narrate and review on request |
 | `atif-embed` | Cohere Embed v4 on Bedrock or EmbeddingGemma 2 on this machine, a Lance vector store written through DuckDB's lance extension, and the embedding backfill |
 | `atif-cli` | The cyclopts CLI that composes the rest |
 

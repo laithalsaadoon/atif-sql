@@ -166,7 +166,7 @@ stateDiagram-v2
   predicate, not a stored string; the table has no status column (`:45-56`).
 
 Every pipeline named by `PIPELINE_NAMES`
-(`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:37-43`) fires
+(`packages/atif-analytics/src/atif_analytics/infrastructure/sqlite_state/checkpointer.py:37-44`) fires
 the identical call sequence (`drain`, then `blocked_units`, then `enqueue` on failure and
 `mark_done` on success):
 

@@ -18,6 +18,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from atif_analytics.domain.review import Heading
+
 
 class SessionClassification(BaseModel):
     """Classify an entire Claude Code session: what kind of work, toward what goal.
@@ -482,14 +484,156 @@ class SessionStory(BaseModel):
     )
 
 
+#: Length ceiling of one side of a finding. The prompt asks for one or two
+#: sentences; the ceiling is well above that so a long answer still
+#: validates instead of failing a call that was already paid for.
+FINDING_SIDE_MAX_CHARS = 2_000
+
+#: Length ceiling of one quoted line of evidence, generous for the same reason.
+QUOTE_MAX_CHARS = 2_000
+
+#: The most findings the pipeline keeps from one review call, and the most
+#: quotes it reads from one finding. The schema doesn't enforce either: a
+#: reply over the limit is cut by the pipeline, so one finding too many
+#: doesn't cost the nine before it.
+MAX_FINDINGS_PER_CALL = 10
+MAX_QUOTES_PER_FINDING = 3
+
+
+class ReviewLead(BaseModel):
+    """One place a triage call wants opened: a window, and what to look for there.
+
+    A lead is a reason to read steps. It isn't a finding and is never
+    stored as one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    window: str = Field(
+        ...,
+        min_length=1,
+        max_length=120,
+        description=(
+            "The label of the window to open, copied from its header in the input: "
+            "`main/7` for a main-chain window, `sub/<agent id>/2` for a subagent's."
+        ),
+    )
+    heading: Heading = Field(
+        ..., description="The checklist heading the suspected problem falls under."
+    )
+    why: str = Field(
+        ...,
+        min_length=1,
+        max_length=400,
+        description=(
+            "One sentence: what in the narration suggests a problem, and what the steps "
+            "would have to show for it to be one."
+        ),
+    )
+
+
+class ReviewTriage(BaseModel):
+    """The windows of one session worth opening, most promising first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    leads: list[ReviewLead] = Field(
+        default_factory=list,
+        description=(
+            "Windows whose narration suggests the agent fell short, most promising "
+            "first. Empty when nothing does."
+        ),
+    )
+
+
+class ReviewQuote(BaseModel):
+    """One line of evidence: a step number and text copied from that step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: int = Field(
+        ...,
+        description="The number of the step the text is in, from its `[step N]` line.",
+    )
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=QUOTE_MAX_CHARS,
+        description=(
+            "Text copied character for character from that step: one contiguous span "
+            "of at least a dozen characters, with nothing added, dropped or reworded "
+            "and no ellipsis. The pipeline searches the step for it and discards the "
+            "finding when it isn't there."
+        ),
+    )
+
+
+class ReviewFinding(BaseModel):
+    """One place the agent fell short: what it should have done, what it did, and the steps that show it.
+
+    There is no severity and no confidence. A finding is its quotes: each
+    is checked against the step it names, and a finding with a quote that
+    isn't there is dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    heading: Heading = Field(..., description="The checklist heading the finding falls under.")
+    expected: str = Field(
+        ...,
+        min_length=1,
+        max_length=FINDING_SIDE_MAX_CHARS,
+        description=(
+            "What the agent should have done, judged against the request, its "
+            "instructions and the tool results it had. One or two plain sentences."
+        ),
+    )
+    actual: str = Field(
+        ...,
+        min_length=1,
+        max_length=FINDING_SIDE_MAX_CHARS,
+        description=(
+            "What it did instead, stated from the quoted steps only. One or two plain sentences."
+        ),
+    )
+    quotes: list[ReviewQuote] = Field(
+        default_factory=list,
+        description=(
+            "One to three quotes that show the actual behavior: the step where the "
+            "fault is visible first, then any step needed to see that it is a fault "
+            "(the request it contradicts, the result it misreads)."
+        ),
+    )
+
+
+class ReviewFindings(BaseModel):
+    """The findings of one review call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    findings: list[ReviewFinding] = Field(
+        default_factory=list,
+        description="The findings, one per cause. Empty when the steps show no problem.",
+    )
+
+
 __all__ = [
     "DIGEST_MAX_CHARS",
+    "FINDING_SIDE_MAX_CHARS",
+    "MAX_FINDINGS_PER_CALL",
+    "MAX_QUOTES_PER_FINDING",
     "NARRATION_FIELD_MAX_CHARS",
+    "QUOTE_MAX_CHARS",
     "STORY_MAX_CHARS",
     "ConflictPair",
     "ConflictsResult",
     "PerceivedError",
     "PerceivedErrorsResult",
+    "ReviewFinding",
+    "ReviewFindings",
+    "ReviewLead",
+    "ReviewQuote",
+    "ReviewTriage",
     "SessionClassification",
     "SessionStory",
     "SubagentStory",

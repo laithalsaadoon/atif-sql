@@ -37,6 +37,8 @@ class TestDefaults:
         assert settings.llm_size_friction == "small"
         assert settings.llm_size_perceived == "medium"
         assert settings.llm_size_narrate == "small"
+        assert settings.llm_size_review == "medium"
+        assert settings.llm_model_review == "claude-sonnet-5-5"
 
 
 class TestEnvOverrides:
@@ -149,4 +151,46 @@ class TestNarrateModelAndEffort:
     def test_an_unknown_effort_fails_at_load(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATIF_SQL_LLM_EFFORT_NARRATE", "extreme")
         with pytest.raises(ValueError, match="llm_effort_narrate"):
+            _settings()
+
+
+class TestReviewModel:
+    """review names its model, so it defaults to another vendor's than the narrator's."""
+
+    def test_the_default_reviewer_is_not_from_the_narrators_family(self):
+        settings = _settings()
+        review, narrate = settings.spec_for("review"), settings.spec_for("narrate")
+        assert review.model_id == "global.anthropic.claude-sonnet-5-5"
+        assert review.family != narrate.family
+        # Never the high-volume tier: a review is a judgment.
+        assert review.size != "small"
+        # The run's family setting is untouched, and so is every other pipeline.
+        assert settings.llm_family == "openai"
+        assert settings.spec_for("perceived").model_id == "global.openai.gpt-6.1-sol"
+
+    def test_the_model_and_the_effort_can_be_set_for_review_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATIF_SQL_LLM_MODEL_REVIEW", "claude-opus-5-5")
+        monkeypatch.setenv("ATIF_SQL_LLM_EFFORT_REVIEW", "medium")
+        settings = _settings()
+        spec = settings.spec_for("review")
+        assert (spec.model_id, spec.reasoning_effort) == (
+            "global.anthropic.claude-opus-5-5",
+            "medium",
+        )
+        assert settings.spec_for("narrate").reasoning_effort == "high"
+        assert settings.spec_for("narrate").model_id == "global.openai.gpt-6-luna"
+
+    def test_an_empty_model_falls_back_to_the_size_alias_in_the_configured_family(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("ATIF_SQL_LLM_MODEL_REVIEW", "")
+        assert _settings().spec_for("review").model_id == "global.openai.gpt-6.1-sol"
+        monkeypatch.setenv("ATIF_SQL_LLM_SIZE_REVIEW", "large")
+        assert _settings().spec_for("review").model_id == "global.openai.gpt-6-astra"
+
+    def test_an_unknown_review_model_fails_at_load(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("ATIF_SQL_LLM_MODEL_REVIEW", "claude-sonet-5-5")
+        with pytest.raises(ValueError, match="no model named 'claude-sonet-5-5'"):
             _settings()

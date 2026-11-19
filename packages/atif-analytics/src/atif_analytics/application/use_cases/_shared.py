@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-use-case plumbing shared by the five LLM pipelines.
+"""Cross-use-case plumbing shared by the six LLM pipelines.
 
-The five are ``PIPELINE_NAMES`` in
+The six are ``PIPELINE_NAMES`` in
 :mod:`atif_analytics.infrastructure.sqlite_state.checkpointer`: classify,
-conflicts, user_friction, perceived, narrate.
+conflicts, user_friction, perceived, narrate, review.
 
 The provider factory + per-pipeline usage/cost logging (one provider
 instance per pipeline run, usage accumulated in the provider's
@@ -39,7 +39,8 @@ def build_provider(
     """One provider per pipeline run, sized per atif-models settings.
 
     Size assignments (atif-models ``LlmSettings``): classify=small,
-    conflicts=large, friction=small, perceived=medium, narrate=small — all resolved through
+    conflicts=large, friction=small, perceived=medium, narrate=small, and
+    review by model name (medium, another vendor's) — all resolved through
     the atif-models registry (no model id is written down here), and the
     adapter is the one atif-models wires for the spec's family.
 

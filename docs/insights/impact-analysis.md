@@ -55,19 +55,19 @@ The catalogs (`VIEW_NAMES`, `MACRO_NAMES`, `ANALYTICS_VIEW_NAMES`,
 | Downstream | Type | Touch on change | Citation |
 | --- | --- | --- | --- |
 | `atif_duck.domain.examples`: derives every example from every catalog | direct import | yes | `packages/atif-duck/src/atif_duck/domain/examples.py:35-44` |
-| `DESCRIPTIONS`: one entry per object; `_description()` raises `KeyError` without it | direct import | yes | `packages/atif-duck/src/atif_duck/domain/catalog.py:540` and `packages/atif-duck/src/atif_duck/domain/examples.py:182-188` |
+| `DESCRIPTIONS`: one entry per object; `_description()` raises `KeyError` without it | direct import | yes | `packages/atif-duck/src/atif_duck/domain/catalog.py:580` and `packages/atif-duck/src/atif_duck/domain/examples.py:182-188` |
 | `ARG_EXEMPLARS`: needed only when a macro introduces a NEW parameter name; `_macro_sql()` raises `KeyError` without it | direct import | yes | `packages/atif-duck/src/atif_duck/domain/examples.py:76-93` and `packages/atif-duck/src/atif_duck/domain/examples.py:163-171` |
-| `TABLE_MACRO_NAMES`: membership required when the DDL says `AS TABLE`, or the derived SQL uses the wrong call shape | direct import | yes | `packages/atif-duck/src/atif_duck/domain/catalog.py:522` |
+| `TABLE_MACRO_NAMES`: membership required when the DDL says `AS TABLE`, or the derived SQL uses the wrong call shape | direct import | yes | `packages/atif-duck/src/atif_duck/domain/catalog.py:562` |
 | `atif_duck.infrastructure.registry`: owns the real DDL and imports `DEFAULT_PRICING` | direct import | yes | `packages/atif-duck/src/atif_duck/infrastructure/registry.py:87` |
-| `atif_duck.infrastructure.analytics`: `register_analytics` and `register_analytics_macros` own the DDL the analytics catalogs describe | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:148` and `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:266` |
+| `atif_duck.infrastructure.analytics`: `register_analytics` and `register_analytics_macros` own the DDL the analytics catalogs describe | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:159` and `packages/atif-duck/src/atif_duck/infrastructure/analytics.py:277` |
 | `atif_duck.infrastructure.authorship`: `register_authorship` owns the DDL for `step_author`, `user_steps`, `human_turns`, and `session_outcomes` | indirect | yes | `packages/atif-duck/src/atif_duck/infrastructure/authorship.py:38` |
-| `atif_cli.app.schema`: deferred import of `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` | direct import | no | `packages/atif-cli/src/atif_cli/app.py:2489-2494` |
-| `atif_cli.app.examples`: deferred import of `build_examples` + the two value tuples | direct import | no | `packages/atif-cli/src/atif_cli/app.py:2407-2411` |
+| `atif_cli.app.schema`: deferred import of `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` | direct import | no | `packages/atif-cli/src/atif_cli/app.py:2500-2505` |
+| `atif_cli.app.examples`: deferred import of `build_examples` + the two value tuples | direct import | no | `packages/atif-cli/src/atif_cli/app.py:2418-2422` |
 | `test_examples.py::test_every_example_executes`: parametrized over every derived example, `fetchall()` forces materialization | test | yes | `packages/atif-duck/tests/test_examples.py:102-109` |
 | `test_examples.py` drift catchers: description coverage, exemplar coverage, `AS TABLE` set equality, example-or-exclusion coverage | test | yes | `packages/atif-duck/tests/test_examples.py:190-241` |
 | `test_duck_views.py::test_view_schema_matches_describe`: `DESCRIBE` output equals `VIEW_SCHEMA` column-for-column | test | yes | `packages/atif-duck/tests/test_duck_views.py:51-59` |
 | `test_duck_views.py::test_macro_signatures_match_ddl`: regex-parses the DDL and asserts equality | test | yes | `packages/atif-duck/tests/test_duck_views.py:67-89` |
-| `test_analytics_views.py::test_analytics_macro_signatures_match_ddl`: same for the analytics half | test | yes | `packages/atif-duck/tests/test_analytics_views.py:406-421` |
+| `test_analytics_views.py::test_analytics_macro_signatures_match_ddl`: same for the analytics half | test | yes | `packages/atif-duck/tests/test_analytics_views.py:514-529` |
 | `test_duck_views.py::test_default_pricing_matches_published_list_rates_exactly`: oracle table, key-for-key | test | yes | `packages/atif-duck/tests/test_duck_views.py:519-527` |
 | `test_app.py::TestSchema` / `TestExamples`: the JSON payload tests assert against the catalog and `build_examples()`, not literals | test | no | `packages/atif-cli/tests/test_app.py:136-150` and `packages/atif-cli/tests/test_app.py:184-203` |
 
@@ -79,7 +79,7 @@ The catalogs (`VIEW_NAMES`, `MACRO_NAMES`, `ANALYTICS_VIEW_NAMES`,
   emits an example) fails `test_exclusions_reference_real_catalog_objects`
   (`packages/atif-duck/tests/test_examples.py:200`).
 - **`atif-sql schema` prints every catalog, each object tagged with its `requires` value.** It
-  reads the core and analytics schema and signature dicts (`packages/atif-cli/src/atif_cli/app.py:2489-2494`)
+  reads the core and analytics schema and signature dicts (`packages/atif-cli/src/atif_cli/app.py:2500-2505`)
   and labels every name through `object_requires`, so a new view or macro lands in both
   `atif-sql schema` and `atif-sql examples` output. `packages/atif-cli/tests/test_app.py:146`
   asserts set equality against the union of `VIEW_SCHEMA` and `ANALYTICS_VIEW_SCHEMA`, and
@@ -129,7 +129,7 @@ places with no import edge between them.
 | `atif_cli.app.status`: reads the watermark through the producer's public `read_watermark` | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:1281` |
 | `docs/CONTRACT.md:22-60`: the specification; the file declares itself orchestrator-owned and changeable only via itself | config | yes | `docs/CONTRACT.md:3` |
 | `test_domain.py::TestCorpusLayout.test_contract_paths`: pins every contract string | test | yes | `packages/atif-corpus/tests/test_domain.py:245-258` |
-| Independent fixture-corpus builders, one per consuming package | test | yes | `packages/atif-duck/tests/duck_fixtures.py:593`, `packages/atif-embed/tests/embed_fixtures.py:120`, `packages/atif-analytics/tests/analytics_fixtures.py:285` |
+| Independent fixture-corpus builders, one per consuming package | test | yes | `packages/atif-duck/tests/duck_fixtures.py:593`, `packages/atif-embed/tests/embed_fixtures.py:120`, `packages/atif-analytics/tests/analytics_fixtures.py:287` |
 
 ### Blast-radius notes
 
@@ -178,7 +178,7 @@ import-graph query reaches it.
 | `build_structured_provider`: picks the adapter by `spec.family` and returns it typed as the port, so it's where ty and pyright check both adapters against it | direct import | yes | `packages/atif-models/src/atif_models/infrastructure/providers.py:16` and `packages/atif-models/src/atif_models/infrastructure/providers.py:20-34` |
 | `OpenAiBedrockProvider` / `AnthropicBedrockProvider`: the two real adapters, one per family; each imports `CallUsage` / `ProviderUnavailable` / `RefusalError` / `SchemaT` / `UsageAccumulator` from the port module and NOT the Protocol | indirect | yes | `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:41-47` and `packages/atif-models/src/atif_models/infrastructure/openai_bedrock.py:81`, `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:61-67` and `packages/atif-models/src/atif_models/infrastructure/anthropic_bedrock.py:130` |
 | `test_models_ports.py`: binds `OpenAiBedrockProvider` to the port by annotation and `isinstance`; the Anthropic adapter has no such test | test | yes | `packages/atif-models/tests/test_models_ports.py:29-38` |
-| `FakeProvider`: the deterministic double, named in prose only | test | yes | `packages/atif-analytics/tests/analytics_fixtures.py:303` |
+| `FakeProvider`: the deterministic double, named in prose only | test | yes | `packages/atif-analytics/tests/analytics_fixtures.py:305` |
 | `ConverterPort` ← `materialize` use case, in several signature positions | direct import | yes | `packages/atif-corpus/src/atif_corpus/application/materialize.py:615`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:877`, `packages/atif-corpus/src/atif_corpus/application/materialize.py:1501` |
 | `RealConverter`: the production adapter; imports `ConversionOutput` and three other types from the port module, never `ConverterPort`, which it names only in docstrings | indirect | yes | `packages/atif-cli/src/atif_cli/converter_adapter.py:69-74` and `packages/atif-cli/src/atif_cli/converter_adapter.py:80-81` |
 | `FakeConverter`: shipped in `src/` rather than `tests/`; same shape, same non-import | indirect | yes | `packages/atif-corpus/src/atif_corpus/infrastructure/fake_converter.py:21` and `packages/atif-corpus/src/atif_corpus/infrastructure/fake_converter.py:72` |
@@ -257,9 +257,9 @@ driving the CLI reads, so the dict is the surface, not the individual numbers, a
 | `atif_cli.app`: the module-scope import; the dict is on the lean path | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:73` |
 | `atif_cli.app.convert`: exits `invalid_input`, `empty_session`, `runtime_error`, `validation_error` | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:742-772` |
 | `atif_cli.app.query`: `parse_error`, raised after the classified envelope is emitted | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:1517-1528` |
-| `atif_cli.app.embed`: `invalid_input` plus a `EXIT_CODES[kind]` dispatch over the classifier's verdict | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2011-2062` |
-| `atif_cli.app.search`: `no_embeddings`, the exit that tells an operator to run `embed` | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2264-2291` |
-| `atif_cli.app.examples`: `invalid_input` on an unknown `--category` / `--requires` value | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2417-2427` |
+| `atif_cli.app.embed`: `invalid_input` plus a `EXIT_CODES[kind]` dispatch over the classifier's verdict | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2022-2073` |
+| `atif_cli.app.search`: `no_embeddings`, the exit that tells an operator to run `embed` | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2275-2302` |
+| `atif_cli.app.examples`: `invalid_input` on an unknown `--category` / `--requires` value | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:2428-2438` |
 | `atif_cli.duck_errors`: classifies `duckdb.Error` into parse / catalog / runtime plus `embedding_mismatch` | direct import | yes | `packages/atif-cli/src/atif_cli/duck_errors.py:26` and `packages/atif-cli/src/atif_cli/duck_errors.py:35-90` |
 | `atif_cli.cron`: the `install` / `status` companion to the cron lanes, which exits `invalid_input` when it can't find the refresh script; the lane itself, `scripts/atif-sql-refresh.sh`, suppresses retries on code 78 | direct import | likely | `packages/atif-cli/src/atif_cli/cron.py:32` and `packages/atif-cli/src/atif_cli/cron.py:181`, `scripts/atif-sql-refresh.sh:489` |
 | `ClassifiedError.to_payload()`: the JSON error envelope on non-TTY stderr | indirect | likely | `packages/atif-cli/src/atif_cli/errors.py:78-86` |
@@ -338,7 +338,7 @@ it.
 | `atif_cli.errors`: kept `atif_*`-free and duckdb-free so it stays on the lean path | direct import | yes | `packages/atif-cli/src/atif_cli/errors.py:19-21` |
 | `atif_cli.duck_errors`: the concrete `duckdb.Error` classifier, split out for exactly that reason | direct import | yes | `packages/atif-cli/src/atif_cli/duck_errors.py:26` and `packages/atif-cli/src/atif_cli/duck_errors.py:35` |
 | `atif_duck.domain.examples`: a pure domain module with no duckdb import, safe on the lean path | direct import | yes | `packages/atif-duck/src/atif_duck/domain/examples.py:26-27` |
-| Deferred imports inside command bodies (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`, `search`, `examples`, `schema`) | runtime dispatch | likely | `packages/atif-cli/src/atif_cli/app.py:727`, `packages/atif-cli/src/atif_cli/app.py:1544`, `packages/atif-cli/src/atif_cli/app.py:2489` |
+| Deferred imports inside command bodies (`convert`, `materialize`, `status`, `query`, `analyze`, `embed`, `search`, `examples`, `schema`) | runtime dispatch | likely | `packages/atif-cli/src/atif_cli/app.py:727`, `packages/atif-cli/src/atif_cli/app.py:1544`, `packages/atif-cli/src/atif_cli/app.py:2500` |
 | `atif_cli.cron`: imported at module scope, so it must itself stay lean | direct import | yes | `packages/atif-cli/src/atif_cli/app.py:72` |
 | `if TYPE_CHECKING:` blocks: the only way to name a heavy type in an annotation on this path | direct import | likely | `packages/atif-cli/src/atif_cli/app.py:84` |
 
@@ -356,7 +356,7 @@ it.
 
 ## Other notable surfaces
 
-- **`DEFAULT_PRICING`** (`packages/atif-duck/src/atif_duck/domain/catalog.py:687`): models with
+- **`DEFAULT_PRICING`** (`packages/atif-duck/src/atif_duck/domain/catalog.py:748`): models with
   published list rates. A model absent here lands in `cost_estimate`'s `unpriced_steps` rather than
   being dropped, and tests pin the table: an exact oracle
   (`packages/atif-duck/tests/test_duck_views.py:519`) and a corpus-coverage gate
@@ -364,12 +364,12 @@ it.
 - **The model alias registry** (`packages/atif-models/src/atif_models/domain/registry.py:113`): the
   `(family, size)` entries resolved through `resolve()` at
   `packages/atif-models/src/atif_models/domain/registry.py:239`. `ModelSpec` reaches every
-  atif-analytics pipeline, narrate included, through the shared provider builder
-  (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36-71`), and more
+  atif-analytics pipeline, narrate and review included, through the shared provider builder
+  (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:36-72`), and more
   of it than the model id is live: `chars_per_token` turns each `--dry-run` prompt length into
   tokens (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:341-343`),
   and the long-context fields price the post-run usage
-  (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:87-93`).
+  (`packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:88-94`).
   `spec.model_id` appears in every pipeline's `--dry-run` plan
   (`packages/atif-analytics/src/atif_analytics/application/use_cases/classify.py:367`) and in the
   provider log line, but no output parquet column records it, so a re-alias changes which model
