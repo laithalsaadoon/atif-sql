@@ -310,6 +310,19 @@ def test_a_session_that_grew_past_its_narration_waits(root: Path) -> None:
     assert _rows(settings, "reviews") == []
 
 
+def test_trailing_steps_that_render_nothing_do_not_hold_a_session_back(root: Path) -> None:
+    """Narrate writes no window for steps with nothing to show, so they aren't unnarrated work."""
+    settings = _settings(root)
+    _narrate(settings)
+    # The session gains a step with no text, no call and no result. Narration has
+    # nothing to add for it, so a review that waited for it would wait forever.
+    write_session(root, JOB, [*JOB_TURNS, ("agent", "")], day=22)
+    provider = FakeProvider()
+    assert _review(settings, provider) == 1
+    (row,) = _rows(settings, "reviews")
+    assert (row["status"], row["windows_offered"]) == (REVIEWED, 2)
+
+
 # ---------------------------------------------------------------------------
 # the steps route
 # ---------------------------------------------------------------------------

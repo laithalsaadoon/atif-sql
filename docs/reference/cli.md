@@ -295,7 +295,8 @@ that show it. There's no severity and no confidence: a finding is its quotes.
   `ATIF_SQL_REVIEW_SKIP_KINDS` are left out (default `turn_audit`: an audit is a reviewer's own
   session) and don't count against the cap. One-shot jobs and sessions with no human turn are read
   like any other. On the narration route a session with no narration, or one whose steps run past
-  its last narrated window, waits for a later run and is reported as `unnarrated`.
+  its last narrated window, waits for a later run and is reported as `unnarrated`. Trailing steps
+  that render nothing don't count: narrate writes no window for them.
 - Rows. `session_findings` holds `session_id`, `agent_id` (the stream of the anchor step, NULL on
   the main chain), `window_index` (NULL on the steps route), `first_step_uuid` (the anchor: the
   earliest step quoted), `last_step_uuid`, `heading`, `expected`, `actual`, `evidence_step_uuids`
