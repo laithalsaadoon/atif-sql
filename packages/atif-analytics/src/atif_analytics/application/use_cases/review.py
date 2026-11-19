@@ -51,7 +51,9 @@ Sampling. Sessions are admitted newest-first up to
 sessions). One-shot jobs and sessions with no human turn are read like any
 other, which the judgment pipelines don't do. On the narration route a
 session with no narration, or one that grew past its last narrated step, is
-left for a later run and counted as ``unnarrated``.
+left for a later run and counted as ``unnarrated``. Steps after the last
+narrated window that render nothing don't count as growth: narrate writes no
+window for them.
 
 Money. The dollar ceiling is checked before every call. A session stopped by
 the ceiling or by a failed call writes nothing and isn't checkpointed; a
@@ -437,9 +439,11 @@ class _Reviewer:
                         boundary=str(row["boundary"]),
                     )
                 )
-            if key is None and any(step.uuid for step in chain[running:]):
+            if key is None and any(step.uuid and self._render([step]) for step in chain[running:]):
                 # The main chain has steps after its last narrated window:
-                # the session grew, and narrate hasn't caught up.
+                # the session grew, and narrate hasn't caught up. Steps that
+                # render nothing don't count: narrate writes no window for
+                # them, so waiting for one would never end.
                 return None
         return windows
 
