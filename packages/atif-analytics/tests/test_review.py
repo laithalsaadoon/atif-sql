@@ -365,6 +365,13 @@ def test_steps_over_the_call_ceiling_are_split_at_window_ends(root: Path) -> Non
     assert _rows(settings, "reviews")[0]["calls"] == 2
 
 
+def test_a_review_call_holds_one_full_window_by_default_and_not_two() -> None:
+    """A call packed with many windows attends less to each, so the default ceiling fits one."""
+    settings = AnalyticsSettings()
+    window = settings.narrate_window_max_chars
+    assert window <= settings.review_call_max_chars < 2 * window
+
+
 # ---------------------------------------------------------------------------
 # sampling, money, failures
 # ---------------------------------------------------------------------------

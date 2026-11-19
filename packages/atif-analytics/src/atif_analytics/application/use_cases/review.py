@@ -21,14 +21,15 @@ Two routes (``review_route``):
        opened as well unless ``review_always_last_window`` is off, because
        it holds the agent's closing report.
     2. Review. The steps of the opened windows are rendered, each under a
-       ``[step N]`` line, and read against the checklist in one call (more
-       when they exceed ``review_call_max_chars``). The call is shown the
-       story, the opened windows' narrations and the triage's leads as
+       ``[step N]`` line, and read against the checklist in calls of at
+       most ``review_call_max_chars``, about one window each. Each call is
+       shown the story, its windows' narrations and the triage's leads as
        context it's told not to trust.
 
-    The design is two fixed calls with no tool loop: the model can't ask
-    for more steps than the triage named, so a session's cost is bounded
-    before it starts and a call is a pure function of its input.
+    The design is a triage call and a fixed set of review calls with no
+    tool loop: the model can't ask for more steps than the triage named, so
+    a session's cost is bounded before it starts and a call is a pure
+    function of its input.
 
 ``steps``
     No triage and no narration. Every step of every stream is rendered and
@@ -219,6 +220,9 @@ REFUSED = "refused"
 #: when its steps don't start at the session's first step.
 _OPENING_CHARS = 4_000
 
+#: Backstop on one step's rendered size, as a multiple of the window ceiling.
+_HARD_CAP_FACTOR = 4
+
 #: Dry-run OUTPUT budgets per call (reasoning tokens bill as output).
 _AVG_TRIAGE_OUT_TOKENS = 1_500
 _AVG_REVIEW_OUT_TOKENS = 3_000
@@ -365,7 +369,10 @@ class _Reviewer:
         )
 
     def _render(self, steps: Sequence[StepEvent]) -> str:
-        cap = self.settings.review_call_max_chars
+        # A backstop on one step's rendered size, as in narrate: step text is
+        # already cut to a window, so only a step with very many tool calls
+        # reaches it. It's not the call ceiling, which packs whole windows.
+        cap = self.settings.narrate_window_max_chars * _HARD_CAP_FACTOR
         return render_window(
             steps,
             total_max_chars=cap,

@@ -270,12 +270,12 @@ that show it. There's no severity and no confidence: a finding is its quotes.
   the finding's reading of it. `packages/atif-analytics/src/atif_analytics/domain/review.py`
 - Routes. `ATIF_SQL_REVIEW_ROUTE=narration` (the default) makes two kinds of call per session. A
   triage call reads the session story and every window's narration and names at most
-  `ATIF_SQL_REVIEW_MAX_WINDOWS` windows (default 8). A review call then reads the steps of those
+  `ATIF_SQL_REVIEW_MAX_WINDOWS` windows (default 8). Review calls then read the steps of those
   windows, plus the session's last main-chain window unless
   `ATIF_SQL_REVIEW_ALWAYS_LAST_WINDOW=false`, since that window holds the agent's closing report.
   `ATIF_SQL_REVIEW_ROUTE=steps` makes no triage call and needs no narration: every step of every
-  stream is read. Steps over `ATIF_SQL_REVIEW_CALL_MAX_CHARS` rendered characters (default 150000)
-  are split across calls at window ends. There's no tool loop on either route, so a session's calls
+  stream is read. Steps over `ATIF_SQL_REVIEW_CALL_MAX_CHARS` rendered characters (default 40000,
+  about one window) are split across calls at window ends, so each call reads one stretch of work. There's no tool loop on either route, so a session's calls
   are bounded before the first one is made.
 - The checklist. Nine headings: `procedure`, `output_requirements`, `tool_selection`,
   `tool_arguments`, `tool_results`, `progress_completion`, `grounding`, `answer_quality` and
