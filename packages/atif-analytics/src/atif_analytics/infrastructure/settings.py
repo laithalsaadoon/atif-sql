@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -130,6 +130,46 @@ class AnalyticsSettings(BaseSettings):
     #: Length each tool call's arguments are shown at in a narration call
     #: (the other pipelines read 400). Env: ``ATIF_SQL_NARRATE_TOOL_INPUT_CHARS``.
     narrate_tool_input_chars: int = Field(default=DEFAULT_TOOL_INPUT_CHARS, ge=1)
+
+    # --- review pipeline knobs ---
+    #: What a review reads first. ``narration`` (the default) reads a
+    #: session's story and window narrations, then opens the steps of the
+    #: windows a triage call names; it needs the session narrated. ``steps``
+    #: reads every step of the session with no narration and no triage call,
+    #: which costs more and needs no narration. Env: ``ATIF_SQL_REVIEW_ROUTE``.
+    review_route: Literal["narration", "steps"] = "narration"
+    #: The most windows one session's review opens on the narration route.
+    #: Env: ``ATIF_SQL_REVIEW_MAX_WINDOWS``.
+    review_max_windows: int = Field(default=8, ge=1)
+    #: Open a session's last main-chain window even when the triage call
+    #: didn't name it: it holds the agent's closing report, where a claim the
+    #: steps don't support is told to the reader. Env:
+    #: ``ATIF_SQL_REVIEW_ALWAYS_LAST_WINDOW``.
+    review_always_last_window: bool = True
+    #: Ceiling of one review call's steps in rendered characters; more steps
+    #: than that are split across calls at window ends. Env:
+    #: ``ATIF_SQL_REVIEW_CALL_MAX_CHARS``.
+    review_call_max_chars: int = Field(default=150_000, ge=1)
+    #: How much of each tool result a review call is shown: its opening and
+    #: its ending. A reviewer checks claims against results, so it reads more
+    #: of one than a narration call does. Env:
+    #: ``ATIF_SQL_REVIEW_TOOL_RESULT_HEAD_CHARS`` /
+    #: ``ATIF_SQL_REVIEW_TOOL_RESULT_TAIL_CHARS``.
+    review_tool_result_head_chars: int = Field(default=1_500, ge=1)
+    review_tool_result_tail_chars: int = Field(default=1_500, ge=0)
+    #: Length each tool call's arguments are shown at in a review call. Env:
+    #: ``ATIF_SQL_REVIEW_TOOL_INPUT_CHARS``.
+    review_tool_input_chars: int = Field(default=2_000, ge=1)
+    #: A plain-text file saying what the operator wants from the agent and
+    #: which problems matter most; at most 8,000 characters are read. It goes
+    #: last in every review prompt and is part of the rubric digest on each
+    #: row. Unset, the checklist stands alone. Env:
+    #: ``ATIF_SQL_REVIEW_GOAL_FILE``.
+    review_goal_file: Path | None = None
+    #: Session kinds review leaves out, comma-separated. A turn audit is a
+    #: reviewer's own session, so it's skipped by default; every other kind
+    #: is read, one-shot jobs included. Env: ``ATIF_SQL_REVIEW_SKIP_KINDS``.
+    review_skip_kinds: str = "turn_audit"
 
     # ------------------------------------------------------------------
     # Derivations

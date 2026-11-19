@@ -49,7 +49,7 @@ default, each tool result renders as a one-line size stub and its content never 
 `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` sends the bodies, each clipped to
 `session_text_tool_result_max_chars`.
 
-`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:68-154`
+`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:68-194`
 
 ### AnthropicBedrockProvider
 
@@ -257,7 +257,7 @@ def fence_id(text: str) -> str:
 The id a prompt fence around `text` carries: the first 8 hex digits of its SHA-256. It's derived
 from the text, so a prompt is a pure function of its input and a body can't close its own fence.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:1073-1080`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1076-1083`
 
 ### InvalidSessionInput
 
@@ -279,7 +279,7 @@ Env-driven model selection for the LLM analytics pipelines, and the only place a
 resolved from configuration. Settings load refuses an `llm_family` outside `RUNNABLE_FAMILIES`
 (`openai` and `anthropic`), the families with a wired adapter.
 
-`packages/atif-models/src/atif_models/infrastructure/settings.py:37-124`
+`packages/atif-models/src/atif_models/infrastructure/settings.py:37-133`
 
 ### LlmStructuredProvider
 
@@ -326,7 +326,7 @@ The console-script entry point behind the `atif-sql` command; it replaces loguru
 with WARNING-and-up (`ATIF_SQL_LOG_LEVEL` widens it) so routine reads keep stderr quiet, then hands
 off to the cyclopts app and turns a cyclopts usage error into exit `64`.
 
-`packages/atif-cli/src/atif_cli/app.py:2546-2579`
+`packages/atif-cli/src/atif_cli/app.py:2557-2590`
 
 ### materialize
 
@@ -386,7 +386,7 @@ def message_prompt(message: str) -> str:
 The friction stage's user message: the one human message inside a `<message id="...">` fence whose
 id is `fence_id(message)`, then the `FRICTION_REQUEST` line.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:1094-1097`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1097-1100`
 
 ### ModelSpec
 
@@ -498,17 +498,19 @@ def run_analyze(
     skip_conflicts: bool = False,
     skip_friction: bool = False,
     skip_perceived: bool = False,
+    narrate: bool = False,
+    review: bool = False,
     source: SessionSource | None = None,
 ) -> dict[str, Any]:
 ```
 
-Runs the LLM stages in order (classify, conflicts, friction, perceived, and narrate when
-`narrate=True`) over one shared corpus
+Runs the LLM stages in order (classify, conflicts, friction, perceived, narrate when
+`narrate=True`, and review when `review=True`) over one shared corpus
 reader and one run budget, returning a per-stage summary dict; the `skip_*` flags subtract individual
 stages, and `source` says where session data comes from (atif-cli passes the lake's when the lake
 holds the corpus; the default reads the per-session files).
 
-`packages/atif-analytics/src/atif_analytics/application/analyze.py:41-163`
+`packages/atif-analytics/src/atif_analytics/application/analyze.py:45-171`
 
 ### run_backfill
 
@@ -565,9 +567,9 @@ The user message for the classify, conflicts, and perceived stages: the transcri
 `<transcript id="...">` fence whose id is `fence_id(transcript)`, then the one-line `request`. Each
 stage passes its own request constant, `CLASSIFY_REQUEST`, `CONFLICTS_REQUEST`, or
 `PERCEIVED_REQUEST`, declared at
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:1065-1067`.
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1068-1070`.
 
-`packages/atif-analytics/src/atif_analytics/application/prompts.py:1083-1091`
+`packages/atif-analytics/src/atif_analytics/application/prompts.py:1086-1094`
 
 ### VIEW_SCHEMA
 

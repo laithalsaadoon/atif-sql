@@ -18,17 +18,17 @@ workspace-wide (`pyproject.toml:225`).
 ## atif-analytics
 
 `run_analyze` composes the LLM pipelines in a fixed stage order: classify, conflicts, friction,
-perceived (`packages/atif-analytics/src/atif_analytics/application/analyze.py:41`), then narrate
-when the caller asks for it. Every stage calls
+perceived (`packages/atif-analytics/src/atif_analytics/application/analyze.py:45`), then narrate
+and review when the caller asks for them. Every stage calls
 a model and honors `dry_run`, which defaults to True as a cost guard so the stages return plan dicts
-instead of spending (`:14`); each plan turns a measured prompt length into tokens at the resolved
+instead of spending (`:16`); each plan turns a measured prompt length into tokens at the resolved
 model's own `chars_per_token`
 (`packages/atif-analytics/src/atif_analytics/domain/costs.py:28`). Every classifier system prompt
 lives in one module, each assembled by joining a task body to shared sections
-(`packages/atif-analytics/src/atif_analytics/application/prompts.py:1050-1059`), and the same text goes to
+(`packages/atif-analytics/src/atif_analytics/application/prompts.py:1053-1062`), and the same text goes to
 both model families. The user message comes from the same module: the transcript, or friction's one
-message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:1083`,
-`:1094`). The pydantic v2
+message, fenced in a tag pair whose id is a digest of the text, then the one-line request (`:1086`,
+`:1097`). The pydantic v2
 response schemas they bind against are pure domain models whose field descriptions are themselves
 part of the prompt surface (`packages/atif-analytics/src/atif_analytics/domain/models.py:3`). Who
 wrote a user step comes from `atif_analytics.domain.authorship`, a pinned twin of atif-duck's rule
@@ -37,9 +37,9 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
 
 - `packages/atif-analytics/src/atif_analytics/application/prompts.py`: the task-framing
   system prompts, public constants assembled at
-  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1050-1059`, the request lines
-  (`:1065-1068`), and the two user-message builders, `transcript_prompt` (`:1083`) and `message_prompt`
-  (`:1094`).
+  `packages/atif-analytics/src/atif_analytics/application/prompts.py:1053-1062`, the request lines
+  (`:1068-1071`), and the two user-message builders, `transcript_prompt` (`:1086`) and `message_prompt`
+  (`:1097`).
 - `packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py`: the
   friction tiers behind a human-turn and message-length pre-filter: regex fast path, deterministic
   stamp rules, then the LLM (`packages/atif-analytics/src/atif_analytics/application/use_cases/friction.py:5`).
@@ -61,8 +61,8 @@ is the one member permitted to import a sibling: atif-models and nothing else (`
   `ATIF_SQL_SESSION_TEXT_TOOL_RESULT_BODIES=true` puts the bodies back, each clipped at 50,000
   characters (`packages/atif-analytics/src/atif_analytics/infrastructure/settings.py:102`, `:98`).
 - `packages/atif-analytics/src/atif_analytics/domain/models.py`: the response schemas, from
-  `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:22`) to
-  `PerceivedErrorsResult` (`:355`).
+  `SessionClassification` (`packages/atif-analytics/src/atif_analytics/domain/models.py:24`) to
+  `PerceivedErrorsResult` (`:357`).
 
 ## atif-duck
 
@@ -74,7 +74,7 @@ drift tests assert it column-for-column against `DESCRIBE` and signature-for-sig
 DDL (`packages/atif-duck/src/atif_duck/domain/catalog.py:3`). The analytics views and
 macros register separately, each only when its backing parquet is populated, because a corpus with no
 `atif-sql analyze` run is the default state
-(`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:148`). It has `domain/` and
+(`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:159`). It has `domain/` and
 `infrastructure/` but no `application/`, and unlike atif-models, the other member with that shape,
 it carries no layers contract (`pyproject.toml:553`).
 
@@ -103,10 +103,10 @@ it carries no layers contract (`pyproject.toml:553`).
   snapshot expiry.
 - `packages/atif-duck/src/atif_duck/domain/catalog.py`: `VIEW_NAMES`
   (`packages/atif-duck/src/atif_duck/domain/catalog.py:30`), `MACRO_SIGNATURES` (`:343`), the
-  analytics catalogs (`:372-515`), and one `DESCRIPTIONS` entry per object (`:540`).
+  analytics catalogs (`:374-555`), and one `DESCRIPTIONS` entry per object (`:580`).
 - `packages/atif-duck/src/atif_duck/infrastructure/analytics.py`: the v2 views and macros
   over the analytics parquet outputs, gated on file presence
-  (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:148`).
+  (`packages/atif-duck/src/atif_duck/infrastructure/analytics.py:159`).
 - `packages/atif-duck/src/atif_duck/domain/examples.py`: `build_examples` derives one
   runnable query per catalog object from `ARG_EXEMPLARS` rather than hardcoding strings
   (`packages/atif-duck/src/atif_duck/domain/examples.py:191`).
@@ -134,8 +134,8 @@ The composition root: it declares five of its six siblings as `==`-pinned depend
 (`packages/atif-cli/pyproject.toml:32-36`) and wires every cross-package seam: the `ConverterPort`
 adapter, the clock, version pins, the DuckDB connection (`packages/atif-cli/src/atif_cli/app.py:7-9`).
 The commands hang off one cyclopts `App`: `@app.command` functions from `convert`
-(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2472`), plus the `cron`, `lake`, and
-`corpus` sub-apps registered at `:104-109`, with `main` (`:2546`) exposed as the single console
+(`packages/atif-cli/src/atif_cli/app.py:690`) to `schema` (`:2483`), plus the `cron`, `lake`, and
+`corpus` sub-apps registered at `:104-109`, with `main` (`:2557`) exposed as the single console
 script named `atif-sql` (`pyproject.toml:74`). Heavy imports (duckdb, the ATIF models through
 atif-converter, pydantic through atif-corpus) are deferred into the command bodies that use them so
 `schema`, `--help`, and `--version` stay on a lean import graph that a fresh-interpreter test pins

@@ -82,8 +82,8 @@ The limits of this derivation, stated because no index backs it:
   No `getattr` targets a first-party module object; every site takes an
   instance, an upstream class, or a standard-library or third-party module,
   including
-  `packages/atif-models/src/atif_models/infrastructure/settings.py:107`,
-  `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:65`,
+  `packages/atif-models/src/atif_models/infrastructure/settings.py:116`,
+  `packages/atif-analytics/src/atif_analytics/application/use_cases/_shared.py:66`,
   and `packages/atif-cli/src/atif_cli/app.py:306` (`os`).
 
 Enforced gates are why the list is short rather than thin. ruff runs
@@ -133,8 +133,8 @@ intra-module use site is named after the table.
 | `CONFLICTS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:26` | 2026-08-28 |
 | `USER_FRICTION_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:27` | 2026-08-28 |
 | `PERCEIVED_ERRORS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:28` | 2026-08-28 |
-| `REFUSALS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:46` | 2026-08-28 |
-| `STATE_DB_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:48` | 2026-08-28 |
+| `REFUSALS_DIRNAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:50` | 2026-08-28 |
+| `STATE_DB_FILENAME` | `packages/atif-analytics/src/atif_analytics/domain/layout.py:52` | 2026-08-28 |
 | `UUID_HEADER_ESCAPE` | `packages/atif-analytics/src/atif_analytics/domain/transcript.py:79` | 2026-08-28 |
 | `parse_trajectory_step` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:118` | 2026-09-28 |
 | `read_trajectory` | `packages/atif-analytics/src/atif_analytics/infrastructure/corpus_reader.py:270` | 2026-11-15 |
@@ -223,7 +223,7 @@ numbers follow it as plain numbers.
   `ModelSpec.chars_per_token` instead, so the fallback applies only to a caller that omits it.
 - The `*_DIRNAME` constants and `STATE_DB_FILENAME` are each joined onto
   `analytics_dir` by one property in
-  `packages/atif-analytics/src/atif_analytics/domain/layout.py:62-105`, in
+  `packages/atif-analytics/src/atif_analytics/domain/layout.py:66-119`, in
   declaration order.
 - `UUID_HEADER_ESCAPE` is the substitution at
   `packages/atif-analytics/src/atif_analytics/domain/transcript.py:91`.
@@ -366,7 +366,7 @@ modules that declare no `__all__` at all, so they're module-internal helpers:
 
 The rest sit in modules that do declare an `__all__` and are deliberately
 absent from it, which is the module saying they aren't exported:
-`packages/atif-cli/src/atif_cli/app.py:2338` (`search_rows`),
+`packages/atif-cli/src/atif_cli/app.py:2349` (`search_rows`),
 `packages/atif-cli/src/atif_cli/corpus.py:71` (`SessionLayout`) and `:158`
 (`CorpusSlimReport`), and
 `packages/atif-duck/src/atif_duck/infrastructure/lake.py:117`
@@ -464,11 +464,11 @@ write, over every tracked file:
 Every real consumer bypasses the facade for the deep module:
 
 - `packages/atif-cli/src/atif_cli/app.py:1547` and
-  `packages/atif-cli/src/atif_cli/app.py:2200-2204` import `register` from
+  `packages/atif-cli/src/atif_cli/app.py:2211-2215` import `register` from
   `atif_duck.infrastructure.registry`.
-- `packages/atif-cli/src/atif_cli/app.py:2407`:
+- `packages/atif-cli/src/atif_cli/app.py:2418`:
   `from atif_duck.domain.examples import (...)`.
-- `packages/atif-cli/src/atif_cli/app.py:2489`:
+- `packages/atif-cli/src/atif_cli/app.py:2500`:
   `from atif_duck.domain.catalog import (...)`, which takes `MACRO_SIGNATURES`
   and `VIEW_SCHEMA` with their analytics counterparts.
 - `packages/atif-cli/src/atif_cli/duck_errors.py:27`,

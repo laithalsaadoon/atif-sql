@@ -61,7 +61,7 @@ wheel bundles every member; members under `packages/*`):
   embedding model's default). Layered: `infrastructure` > `domain`.
 - `packages/atif-analytics`: the LLM pipelines that spend money at
   Bedrock and are checkpointed per session (classify, conflicts, friction,
-  perceived, narrate; see `PIPELINE_NAMES` in
+  perceived, narrate, review; see `PIPELINE_NAMES` in
   `infrastructure/sqlite_state/checkpointer.py`, which spells friction
   `user_friction`). The first four read human turns only
   (`domain.authorship`), and classify and conflicts skip automated review
@@ -103,7 +103,25 @@ wheel bundles every member; members under `packages/*`):
   append-only and a stream's read position is its last window row, so a
   session that resumes continues each stream from there. It runs only
   under `atif-sql analyze --narrate`, so an unattended `analyze` doesn't
-  start paying for it. Session data comes through the
+  start paying for it. Review is the first stage that reads narrations, and
+  it judges: it stores where the agent fell short as `session_findings` rows,
+  each an `expected` and an `actual` under one of nine checklist headings
+  (`domain.review.CHECKLIST`). A row has no severity and no confidence. Narration is
+  its index and never its evidence. A triage call reads a session's story
+  and window narrations and names the windows worth opening; a review call
+  reads those windows' steps, each under a `[step N]` label
+  (`domain.review.render_labeled`), and returns findings whose quotes name a
+  step number. `domain.review.check_citations` then searches each named step
+  for its quote, verbatim after whitespace is collapsed, and a finding with
+  a quote that isn't there is dropped and counted on the session's
+  `session_reviews` row instead of stored. The `steps` route
+  (`ATIF_SQL_REVIEW_ROUTE`) skips narration and triage and reads every step.
+  A finding's identity is `finding_key` (session, heading, anchor step). An
+  operator's goal file (`ATIF_SQL_REVIEW_GOAL_FILE`) goes last in each
+  prompt as one JSON string and, with the checklist, makes the
+  `rubric_digest` on every row. Review defaults to a model from another
+  vendor than the narrate stage's (`ATIF_SQL_LLM_MODEL_REVIEW`), skips turn audits, and runs
+  only under `atif-sql analyze --review`. Session data comes through the
   `SessionSource` port (`domain.ports`): the default reads each session's
   `trajectory.json` and `edges.jsonl`, and atif-cli plugs in the lake's
   (`atif_cli.lake_sessions`). Both build steps through

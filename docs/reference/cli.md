@@ -2,7 +2,7 @@
 
 The `atif-sql` console script (`pyproject.toml:74`) is the repo's public contract: one cyclopts router (`packages/atif-cli/src/atif_cli/app.py:90`) dispatches the subcommands below, and a root-level `--version` resolves the installed `atif-sql` distribution (`:99`).
 
-These conventions hold across every subcommand. `--format` takes `auto`, `table`, `json`, or `csv` from the `OutputFormat` `StrEnum` at `packages/atif-cli/src/atif_cli/output.py:61`, and `auto` resolves to `table` when stdout is a TTY and `json` otherwise (`packages/atif-cli/src/atif_cli/output.py:84`). Exit codes come from one table, `EXIT_CODES` at `packages/atif-cli/src/atif_cli/errors.py:30`: `0` ok, `2` empty-session / no-embeddings, `64` invalid input or SQL parse error, `65` catalog error / validation error / embedding mismatch / lake mismatch, `70` runtime error / sandbox refusal, `77` root refusal, `78` terminal state / suspicious scan / extension missing / lake unavailable, `127` harbor missing (kept so the table never renumbers; no code path raises it). A number in that table is a wire contract: keys may be added, never renumbered. A usage error cyclopts refuses (an unknown option or command, a missing or uncoercible value) prints cyclopts' error panel and exits `64`, never cyclopts' own `2`. And stderr carries WARNING and above only, so a piped read emits data on stdout and nothing on stderr unless something is wrong; `ATIF_SQL_LOG_LEVEL` widens it (`INFO`, `DEBUG`) and is the only way to reach the INFO surface, because the entry point replaces loguru's default handler and with it the `LOGURU_LEVEL` that would have parameterized it (`packages/atif-cli/src/atif_cli/app.py:2527-2534`).
+These conventions hold across every subcommand. `--format` takes `auto`, `table`, `json`, or `csv` from the `OutputFormat` `StrEnum` at `packages/atif-cli/src/atif_cli/output.py:61`, and `auto` resolves to `table` when stdout is a TTY and `json` otherwise (`packages/atif-cli/src/atif_cli/output.py:84`). Exit codes come from one table, `EXIT_CODES` at `packages/atif-cli/src/atif_cli/errors.py:30`: `0` ok, `2` empty-session / no-embeddings, `64` invalid input or SQL parse error, `65` catalog error / validation error / embedding mismatch / lake mismatch, `70` runtime error / sandbox refusal, `77` root refusal, `78` terminal state / suspicious scan / extension missing / lake unavailable, `127` harbor missing (kept so the table never renumbers; no code path raises it). A number in that table is a wire contract: keys may be added, never renumbered. A usage error cyclopts refuses (an unknown option or command, a missing or uncoercible value) prints cyclopts' error panel and exits `64`, never cyclopts' own `2`. And stderr carries WARNING and above only, so a piped read emits data on stdout and nothing on stderr unless something is wrong; `ATIF_SQL_LOG_LEVEL` widens it (`INFO`, `DEBUG`) and is the only way to reach the INFO surface, because the entry point replaces loguru's default handler and with it the `LOGURU_LEVEL` that would have parameterized it (`packages/atif-cli/src/atif_cli/app.py:2538-2545`).
 
 `analyze` calls Amazon Bedrock and spends money, and so do `embed` and `search` under the default `cohere` embedding provider (the `gemma` provider runs on this machine); the others make no model calls.
 
@@ -125,7 +125,7 @@ atif-sql analyze [OPTIONS]
 ```
 
 Run the LLM analytics pipelines: classify, conflicts, friction, and perceived, plus narrate when
-`--narrate` asks for it.
+`--narrate` asks for it and review when `--review` does.
 `packages/atif-cli/src/atif_cli/app.py:1725`
 
 The stages run on the model family `ATIF_SQL_LLM_FAMILY` names: `openai` (GPT-6, the default) or
@@ -145,11 +145,12 @@ Flags:
 - `--skip-friction`: opt out of the friction stage. `:1735`
 - `--skip-perceived`: opt out of the perceived stage. `:1736`
 - `--narrate`: also run the narrate stage, which is off by default. `:1737`
-- `--corpus-root`: override the materialized corpus root. `:1738`
-- `--lake` / `--no-lake`: read session data from the lake when it holds the corpus (default), or from the per-session files. `:1739`
-- `--format`: summary format. `:1740`
+- `--review`: also run the review stage, after narrate; off by default. `:1738`
+- `--corpus-root`: override the materialized corpus root. `:1739`
+- `--lake` / `--no-lake`: read session data from the lake when it holds the corpus (default), or from the per-session files. `:1740`
+- `--format`: summary format. `:1741`
 
-Session data comes from the lake when it holds the corpus; a session whose lake rows aren't its current artifacts is read from its files, and with no usable lake the command warns once and reads the files. The summary's `session_source` says which source ran (`lake` or `files`), and on the lake `sessions_read_from_files` counts the sessions the last stage read from files. If a lake read fails partway (a `lake rebuild` swapped the lake out from under the run), the command warns once, reads the files for the rest of the run, and reports `lake_read_failed: true`. The plans, the rendered transcripts and the checkpoint bounds are the same whichever source runs. Outputs land under the corpus's `analytics/` directory either way. `:1814-1833`
+Session data comes from the lake when it holds the corpus; a session whose lake rows aren't its current artifacts is read from its files, and with no usable lake the command warns once and reads the files. The summary's `session_source` says which source ran (`lake` or `files`), and on the lake `sessions_read_from_files` counts the sessions the last stage read from files. If a lake read fails partway (a `lake rebuild` swapped the lake out from under the run), the command warns once, reads the files for the rest of the run, and reports `lake_read_failed: true`. The plans, the rendered transcripts and the checkpoint bounds are the same whichever source runs. Outputs land under the corpus's `analytics/` directory either way. `:1824-1844`
 
 classify and conflicts skip non-interactive sessions (`session_outcomes.kind` of `turn_audit` or `one_shot_job`), and friction and perceived read human turns only. The deterministic authorship views (`user_steps`, `human_turns`, `session_outcomes`) are plain views, so they need no `analyze` run.
 
@@ -252,6 +253,76 @@ To run narrate alone, skip the other four:
 atif-sql analyze --narrate --skip-classify --skip-conflicts --skip-friction --skip-perceived
 ```
 
+### The review stage
+
+`--review` adds a stage after narrate. It reads each session's narrations, opens the steps worth a
+closer look, and stores where the agent fell short. A finding is a pair, what the agent should have
+done (`expected`) and what it did (`actual`), under a checklist heading, with quotes of the steps
+that show it. There's no severity and no confidence: a finding is its quotes.
+`packages/atif-analytics/src/atif_analytics/application/use_cases/review.py`
+
+- The pass bar. Every quote names a step by its number in the call and is searched for in that
+  step: its message, its tool calls' arguments and its tool results, verbatim once whitespace is
+  collapsed. A finding with a quote that isn't in its step, a step number the call wasn't shown, a
+  quote under 12 characters, or no quote is dropped and counted. A narration is what a review reads
+  to decide which steps to open. It's never evidence: a finding that quotes a narration isn't
+  stored. The check proves the quoted text is in the cited step; it doesn't prove the quote supports
+  the finding's reading of it. `packages/atif-analytics/src/atif_analytics/domain/review.py`
+- Routes. `ATIF_SQL_REVIEW_ROUTE=narration` (the default) makes two kinds of call per session. A
+  triage call reads the session story and every window's narration and names at most
+  `ATIF_SQL_REVIEW_MAX_WINDOWS` windows (default 8). A review call then reads the steps of those
+  windows, plus the session's last main-chain window unless
+  `ATIF_SQL_REVIEW_ALWAYS_LAST_WINDOW=false`, since that window holds the agent's closing report.
+  `ATIF_SQL_REVIEW_ROUTE=steps` makes no triage call and needs no narration: every step of every
+  stream is read. Steps over `ATIF_SQL_REVIEW_CALL_MAX_CHARS` rendered characters (default 150000)
+  are split across calls at window ends. There's no tool loop on either route, so a session's calls
+  are bounded before the first one is made.
+- The checklist. Nine headings: `procedure`, `output_requirements`, `tool_selection`,
+  `tool_arguments`, `tool_results`, `progress_completion`, `grounding`, `answer_quality` and
+  `configuration`. The prompt gives them as places to look, tells the model not to judge style or a
+  person's decision, and says that hook and harness text isn't the person speaking.
+- The goal file. `ATIF_SQL_REVIEW_GOAL_FILE` names a plain-text file that says what the operator
+  wants from the agent, which failures matter most, and which to ignore; at most 8,000 characters
+  are read. It goes last in every prompt as one JSON string, under a header saying it's never by
+  itself a reason for a finding. An example is at
+  `packages/atif-analytics/examples/review-goal.example.md`. A path that's set and unreadable stops
+  the run.
+- What a call is shown. Tool arguments at `ATIF_SQL_REVIEW_TOOL_INPUT_CHARS` characters (default
+  2000) and each tool result as its first `ATIF_SQL_REVIEW_TOOL_RESULT_HEAD_CHARS` (default 1500)
+  and last `ATIF_SQL_REVIEW_TOOL_RESULT_TAIL_CHARS` (default 1500). Lines carry the labels and
+  the cut wording the narrate stage uses.
+- Sampling. Sessions are admitted newest-first up to `--max-sessions`. Kinds in
+  `ATIF_SQL_REVIEW_SKIP_KINDS` are left out (default `turn_audit`: an audit is a reviewer's own
+  session) and don't count against the cap. One-shot jobs and sessions with no human turn are read
+  like any other. On the narration route a session with no narration, or one whose steps run past
+  its last narrated window, waits for a later run and is reported as `unnarrated`.
+- Rows. `session_findings` holds `session_id`, `agent_id` (the stream of the anchor step, NULL on
+  the main chain), `window_index` (NULL on the steps route), `first_step_uuid` (the anchor: the
+  earliest step quoted), `last_step_uuid`, `heading`, `expected`, `actual`, `evidence_step_uuids`
+  and `evidence_quotes` (parallel lists), `finding_key`, `route`, `model_id`, `prompt_digest`,
+  `rubric_digest` (the checklist and the goal file) and `reviewed_at`. `finding_key` is the
+  session, the heading and the anchor step, so the same finding found again has the same key, and
+  the view keeps the newest row per key. `session_reviews` holds one row each time a session is
+  read: `route`, `status` (`reviewed` or `refused`), `windows_offered`, `windows_opened`,
+  `steps_read`, `calls`, `findings`, `dropped`, `dropped_reasons` (a JSON object), the session's
+  first and last step uuid, and the same provenance columns. A session with a review row and no
+  finding was read and nothing was found.
+- Model. The stage names its model, `claude-sonnet-5-5` by default, so that the reviewer isn't
+  from the narrator's vendor. `ATIF_SQL_LLM_MODEL_REVIEW` names another,
+  `ATIF_SQL_LLM_EFFORT_REVIEW` sets the reasoning effort of its calls, and an empty model name
+  falls back to `ATIF_SQL_LLM_SIZE_REVIEW` (default `medium`) in the run's family. Every call sends
+  the model's own output limit as its cap.
+- Cost. `--max-sessions` and `--max-cost-usd` bound it like the other stages, and the dollar
+  ceiling is checked before every call. A session stopped by the ceiling or by a failed call writes
+  nothing; a failed one goes on the retry queue. The dry run reports the calls and an upper bound
+  on cost, assuming every session opens its largest windows.
+
+To narrate and review in one run, with nothing else:
+
+```
+atif-sql analyze --narrate --review --skip-classify --skip-conflicts --skip-friction --skip-perceived
+```
+
 ## embed
 
 ```
@@ -259,7 +330,7 @@ atif-sql embed [OPTIONS]
 ```
 
 Embed unembedded corpus steps and append them to the Lance store, with Cohere Embed v4 on Bedrock by default or with EmbeddingGemma 2 on this machine.
-`packages/atif-cli/src/atif_cli/app.py:1901`
+`packages/atif-cli/src/atif_cli/app.py:1912`
 
 `ATIF_SQL_EMBED_PROVIDER` picks the embedder:
 
@@ -270,18 +341,18 @@ Each store is stamped with the model and width that wrote it, so a store written
 
 Flags:
 
-- `--limit`: cap the number of steps embedded this run. `packages/atif-cli/src/atif_cli/app.py:1903`
-- `--all`: explicitly embed every unembedded step, a full backfill. `:1904`
-- `--dry-run`: preview only; emit the plan JSON with keys `pipeline, discovery, candidates, batches, batch_size, concurrency, provider, model, dim, store, limit, dry_run` and make no embedding calls. `:1905`
-- `--install-extension`: install the lance DuckDB extension and exit. It touches neither Bedrock nor the store. `:1906`
-- `--prune-orphans`: count the stored rows whose uuid no lake step carries, and with `--no-dry-run` delete them; it never calls Bedrock. `:1907`
-- `--lake` / `--no-lake`: discover the steps to embed from the lake when it holds the corpus (default), or from the per-session files. `:1908`
-- `--corpus-root`: override the materialized corpus root. `:1909`
-- `--format`: output format. `:1910`
+- `--limit`: cap the number of steps embedded this run. `packages/atif-cli/src/atif_cli/app.py:1914`
+- `--all`: explicitly embed every unembedded step, a full backfill. `:1915`
+- `--dry-run`: preview only; emit the plan JSON with keys `pipeline, discovery, candidates, batches, batch_size, concurrency, provider, model, dim, store, limit, dry_run` and make no embedding calls. `:1916`
+- `--install-extension`: install the lance DuckDB extension and exit. It touches neither Bedrock nor the store. `:1917`
+- `--prune-orphans`: count the stored rows whose uuid no lake step carries, and with `--no-dry-run` delete them; it never calls Bedrock. `:1918`
+- `--lake` / `--no-lake`: discover the steps to embed from the lake when it holds the corpus (default), or from the per-session files. `:1919`
+- `--corpus-root`: override the materialized corpus root. `:1920`
+- `--format`: output format. `:1921`
 
-A real run requires an explicit scope: a bare `atif-sql embed` exits `64` with a hint rather than starting an unbounded backfill. `:2011-2021`
+A real run requires an explicit scope: a bare `atif-sql embed` exits `64` with a hint rather than starting an unbounded backfill. `:2022-2032`
 
-Exit codes: `0` success, `64` missing `--limit` or `--all`, or an `ATIF_SQL_OUTPUT_DIMENSION` the provider can't emit, `70` runtime (Bedrock, local model, DuckDB, or Lance failure: transient, safe to retry), `78` terminal state, where the store or its config needs operator action and unattended lanes suppress retries. The `gemma` provider without the `local` extra exits `78` with the install command in the message. So does a store holding a Lance dataset the extension can't open, such as one whose newest manifest is cut short: embed stops before any text reaches the embedder, and the message names the store and says to restore it or move it aside (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:320-328`). `--prune-orphans` exits `78` (`lake_unavailable`) without a usable lake, and refuses to delete while a session of the corpus is pending a lake write. `packages/atif-cli/src/atif_cli/app.py:1990-1995`
+Exit codes: `0` success, `64` missing `--limit` or `--all`, or an `ATIF_SQL_OUTPUT_DIMENSION` the provider can't emit, `70` runtime (Bedrock, local model, DuckDB, or Lance failure: transient, safe to retry), `78` terminal state, where the store or its config needs operator action and unattended lanes suppress retries. The `gemma` provider without the `local` extra exits `78` with the install command in the message. So does a store holding a Lance dataset the extension can't open, such as one whose newest manifest is cut short: embed stops before any text reaches the embedder, and the message names the store and says to restore it or move it aside (`packages/atif-embed/src/atif_embed/infrastructure/lance_store.py:320-328`). `--prune-orphans` exits `78` (`lake_unavailable`) without a usable lake, and refuses to delete while a session of the corpus is pending a lake write. `packages/atif-cli/src/atif_cli/app.py:2001-2006`
 
 ## search
 
@@ -290,21 +361,21 @@ atif-sql search [OPTIONS] QUERY_TEXT
 ```
 
 Semantic top-k nearest-neighbor search over step embeddings.
-`packages/atif-cli/src/atif_cli/app.py:2131`
+`packages/atif-cli/src/atif_cli/app.py:2142`
 
 Flags:
 
-- `QUERY_TEXT`: required positional-only text, embedded by the provider `ATIF_SQL_EMBED_PROVIDER` selects: Cohere Embed v4 in `search_query` mode, or EmbeddingGemma 2 on this machine under its `SearchQuery` prompt. The search reads that provider's store. `:2132`
-- `-k` / `--k`: top-k; default `10`. Apart from the `-h` help flag cyclopts adds, it's the CLI's only short flag. `:2135`
-- `--session-id`: confine the kNN to one session. `:2136`
-- `--corpus-root`: override the materialized corpus root. `:2137`
-- `--all-corpora`: search every corpus's embedding store and add a `corpus` column; exits `78` without a usable lake and `64` together with `--no-lake`. `:2138`
-- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files. `:2139`
-- `--format`: output format. `:2140`
+- `QUERY_TEXT`: required positional-only text, embedded by the provider `ATIF_SQL_EMBED_PROVIDER` selects: Cohere Embed v4 in `search_query` mode, or EmbeddingGemma 2 on this machine under its `SearchQuery` prompt. The search reads that provider's store. `:2143`
+- `-k` / `--k`: top-k; default `10`. Apart from the `-h` help flag cyclopts adds, it's the CLI's only short flag. `:2146`
+- `--session-id`: confine the kNN to one session. `:2147`
+- `--corpus-root`: override the materialized corpus root. `:2148`
+- `--all-corpora`: search every corpus's embedding store and add a `corpus` column; exits `78` without a usable lake and `64` together with `--no-lake`. `:2149`
+- `--lake` / `--no-lake`: read the lake when it holds the corpus (default), or read the per-session files. `:2150`
+- `--format`: output format. `:2151`
 
-Output columns are `uuid`, `session_id`, `snippet`, and `sim` (`:2325-2328`), plus `corpus` under `--all-corpora`, ranked by cosine distance ascending so the highest similarity comes first (`:2333`).
+Output columns are `uuid`, `session_id`, `snippet`, and `sim` (`:2336-2339`), plus `corpus` under `--all-corpora`, ranked by cosine distance ascending so the highest similarity comes first (`:2344`).
 
-Exit codes: `0` success, `2` no embeddings yet, `64` `--all-corpora` together with `--no-lake`, `65` embedding mismatch when the store was written by another provider, `70` runtime, including a failed query embedding, `77` `root_refused`, `78` a store whose lance DuckDB extension isn't installed, `--all-corpora` without a usable lake, the `gemma` provider without the `local` extra, or a store holding a Lance dataset the extension can't open; that message names the store and says how to restore it. `:2182-2189`
+Exit codes: `0` success, `2` no embeddings yet, `64` `--all-corpora` together with `--no-lake`, `65` embedding mismatch when the store was written by another provider, `70` runtime, including a failed query embedding, `77` `root_refused`, `78` a store whose lance DuckDB extension isn't installed, `--all-corpora` without a usable lake, the `gemma` provider without the `local` extra, or a store holding a Lance dataset the extension can't open; that message names the store and says how to restore it. `:2193-2200`
 
 ## examples
 
@@ -313,17 +384,17 @@ atif-sql examples [OPTIONS]
 ```
 
 List tested example queries for every view and macro, derived from the static atif-duck catalog.
-`packages/atif-cli/src/atif_cli/app.py:2380`
+`packages/atif-cli/src/atif_cli/app.py:2391`
 
 Flags:
 
-- `--category`: filter to one of `view`, `table-macro`, `scalar-macro`, validated against `CATEGORY_VALUES`. `:2382`
-- `--requires`: filter to one of `core`, `analytics`, `vss`, validated against `REQUIRES_VALUES`. `:2383`
-- `--format`: a TTY table grouped by `requires`, or a JSON object carrying `note` and `examples`. `:2384`
+- `--category`: filter to one of `view`, `table-macro`, `scalar-macro`, validated against `CATEGORY_VALUES`. `:2393`
+- `--requires`: filter to one of `core`, `analytics`, `vss`, validated against `REQUIRES_VALUES`. `:2394`
+- `--format`: a TTY table grouped by `requires`, or a JSON object carrying `note` and `examples`. `:2395`
 
 Both value sets are `Literal` aliases in the producer package: `Requires` at `packages/atif-duck/src/atif_duck/domain/examples.py:49` and `Category` at `:54`, exported as tuples at `:56` and `:57`.
 
-Exit codes: `0` ok, `64` unknown `--category` or `--requires` value. `packages/atif-cli/src/atif_cli/app.py:2417-2427`
+Exit codes: `0` ok, `64` unknown `--category` or `--requires` value. `packages/atif-cli/src/atif_cli/app.py:2428-2438`
 
 ## schema
 
@@ -332,13 +403,13 @@ atif-sql schema [OPTIONS]
 ```
 
 List every core and analytics view with its columns and every macro signature, each with its `requires` value.
-`packages/atif-cli/src/atif_cli/app.py:2472`
+`packages/atif-cli/src/atif_cli/app.py:2483`
 
 Flags:
 
-- `--format`: a TTY listing, or a JSON object carrying `views`, `view_requires` (view name to `requires`), `macros` (each with `name`, `params`, and `requires`), and `examples_hint`. `:2474`
+- `--format`: a TTY listing, or a JSON object carrying `views`, `view_requires` (view name to `requires`), `macros` (each with `name`, `params`, and `requires`), and `examples_hint`. `:2485`
 
-The answer comes from the static `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `requires` is `core` for an object that binds on any corpus, `analytics` for one that binds once `analyze` has written its parquet, and `vss` for one that needs the embedding store. `:2489-2498`
+The answer comes from the static `VIEW_SCHEMA`, `MACRO_SIGNATURES`, `ANALYTICS_VIEW_SCHEMA`, and `ANALYTICS_MACRO_SIGNATURES` dicts with no DuckDB import and no view registration. `requires` is `core` for an object that binds on any corpus, `analytics` for one that binds once `analyze` has written its parquet, and `vss` for one that needs the embedding store. `:2500-2509`
 
 ## `lake`
 

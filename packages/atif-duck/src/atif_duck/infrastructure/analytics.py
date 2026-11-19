@@ -72,6 +72,8 @@ _ANALYTICS_SOURCES: dict[str, str] = {
     "session_narration": "session_narration",
     "session_stories": "session_stories",
     "subagent_stories": "subagent_stories",
+    "session_findings": "session_findings",
+    "session_reviews": "session_reviews",
 }
 
 #: Per-view projections; a view absent here selects ``*``.
@@ -100,6 +102,12 @@ _VIEW_PROJECTIONS: dict[str, str] = {
 #: windows. Over every corpus of the lake, a session id two corpora share (a
 #: copied corpus) keeps one story between them. ``session_narration`` needs no
 #: filter: a window row is written once.
+#:
+#: ``session_findings`` is append-only too, and a session reviewed again can
+#: report the same finding again (same session, checklist heading and anchor
+#: step, so the same ``finding_key``); the view keeps the newest row per key.
+#: ``session_reviews`` keeps every row: it's the history of when each session
+#: was read and what the read found.
 _VIEW_ROW_FILTERS: dict[str, str] = {
     "session_stories": (
         "QUALIFY row_number() OVER (PARTITION BY session_id "
@@ -108,6 +116,9 @@ _VIEW_ROW_FILTERS: dict[str, str] = {
     "subagent_stories": (
         "QUALIFY row_number() OVER ("
         "PARTITION BY session_id, agent_id ORDER BY window_count DESC, narrated_at DESC) = 1"
+    ),
+    "session_findings": (
+        "QUALIFY row_number() OVER (PARTITION BY finding_key ORDER BY reviewed_at DESC) = 1"
     ),
 }
 

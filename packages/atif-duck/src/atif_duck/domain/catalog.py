@@ -364,7 +364,9 @@ MACRO_SIGNATURES: dict[str, tuple[str, ...]] = {
 # (parquet-gated; ``session_goals`` / ``conflicts_summary`` /
 # ``perceived_summary`` derive from their upstream view). ``session_narration``
 # ``session_stories`` and ``subagent_stories`` are the narrate stage's, written
-# only by ``atif-sql analyze --narrate``.
+# only by ``atif-sql analyze --narrate``; ``session_findings`` and
+# ``session_reviews`` are the review stage's, written only by
+# ``atif-sql analyze --review``.
 #
 # Removed 2026-09-27 with the trajectory and structural pipelines:
 # ``message_trajectory``, ``message_clusters``, ``cluster_terms``,
@@ -380,6 +382,8 @@ ANALYTICS_VIEW_NAMES: tuple[str, ...] = (
     "session_narration",
     "session_stories",
     "subagent_stories",
+    "session_findings",
+    "session_reviews",
 )
 
 # Column schema for every analytics view, in DESCRIBE order. Drift-tested by
@@ -492,6 +496,42 @@ ANALYTICS_VIEW_SCHEMA: dict[str, tuple[tuple[str, str], ...]] = {
         ("model_id", "VARCHAR"),
         ("prompt_digest", "VARCHAR"),
         ("narrated_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "session_findings": (
+        ("session_id", "VARCHAR"),
+        ("agent_id", "VARCHAR"),
+        ("window_index", "INTEGER"),
+        ("first_step_uuid", "VARCHAR"),
+        ("last_step_uuid", "VARCHAR"),
+        ("heading", "VARCHAR"),
+        ("expected", "VARCHAR"),
+        ("actual", "VARCHAR"),
+        ("evidence_step_uuids", "VARCHAR[]"),
+        ("evidence_quotes", "VARCHAR[]"),
+        ("finding_key", "VARCHAR"),
+        ("route", "VARCHAR"),
+        ("model_id", "VARCHAR"),
+        ("prompt_digest", "VARCHAR"),
+        ("rubric_digest", "VARCHAR"),
+        ("reviewed_at", "TIMESTAMP WITH TIME ZONE"),
+    ),
+    "session_reviews": (
+        ("session_id", "VARCHAR"),
+        ("route", "VARCHAR"),
+        ("status", "VARCHAR"),
+        ("windows_offered", "INTEGER"),
+        ("windows_opened", "INTEGER"),
+        ("steps_read", "INTEGER"),
+        ("calls", "INTEGER"),
+        ("findings", "INTEGER"),
+        ("dropped", "INTEGER"),
+        ("dropped_reasons", "VARCHAR"),
+        ("first_step_uuid", "VARCHAR"),
+        ("last_step_uuid", "VARCHAR"),
+        ("model_id", "VARCHAR"),
+        ("prompt_digest", "VARCHAR"),
+        ("rubric_digest", "VARCHAR"),
+        ("reviewed_at", "TIMESTAMP WITH TIME ZONE"),
     ),
 }
 
@@ -660,6 +700,27 @@ DESCRIPTIONS: dict[str, str] = {
         "steps, plus digest (two to four sentences: what it was asked, did and "
         "returned) and returned (whether the launching transcript shows it coming "
         "back). Join subagents on session_id, agent_id for its type and launch."
+    ),
+    "session_findings": (
+        "Where the agent fell short in a session, one row per finding from the review "
+        "stage: expected (what it should have done) and actual (what it did), under "
+        "a checklist heading (procedure, output_requirements, tool_selection, "
+        "tool_arguments, tool_results, progress_completion, grounding, answer_quality, "
+        "configuration). evidence_quotes holds text found verbatim in the steps "
+        "evidence_step_uuids names (steps.source_uuids->>0); a finding whose quotes "
+        "aren't in its steps is never stored. first_step_uuid is the anchor, the "
+        "earliest step quoted; agent_id is NULL when that step is on the main chain. "
+        "There's no severity or confidence column. finding_key (session, heading, "
+        "anchor) is the same for the same finding found again; the view keeps the "
+        "newest row per key. model_id, prompt_digest and rubric_digest say what "
+        "wrote the row."
+    ),
+    "session_reviews": (
+        "One row each time the review stage read a session: route (narration or "
+        "steps), status (reviewed or refused), how many windows it had and how many "
+        "were opened, model calls, findings stored, and findings dropped by the "
+        "citation check with the reasons as a JSON object. A session with a row "
+        "here and none in session_findings was read and nothing was found."
     ),
     # -- analytics macros ---------------------------------------------------
     "work_mix": "Work-category counts over the last N days.",

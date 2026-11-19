@@ -85,12 +85,21 @@ class LlmSettings(BaseSettings):
     # ATIF_SQL_LLM_MODEL_NARRATE / ATIF_SQL_LLM_EFFORT_NARRATE.
     llm_model_narrate: str | None = None
     llm_effort_narrate: ReasoningEffort | None = None
+    # review judges whether the agent fell short, from narrations another
+    # model wrote. It names its model so that it defaults to a different
+    # vendor's than narrate's default: a reviewer from the narrator's own
+    # family tends to share its blind spots. An empty value falls back to the
+    # size alias in the configured family. Env: ATIF_SQL_LLM_MODEL_REVIEW /
+    # ATIF_SQL_LLM_EFFORT_REVIEW / ATIF_SQL_LLM_SIZE_REVIEW.
+    llm_size_review: Size = "medium"
+    llm_model_review: str | None = "claude-sonnet-5-5"
+    llm_effort_review: ReasoningEffort | None = None
 
-    @field_validator("llm_model_narrate")
+    @field_validator("llm_model_narrate", "llm_model_review")
     @classmethod
     def _model_must_be_known(cls, value: str | None) -> str | None:
         """Refuse a model name the registry can't resolve, with the names it can."""
-        if value is None:
+        if not value:
             return None
         try:
             resolve_model(value)
@@ -101,7 +110,7 @@ class LlmSettings(BaseSettings):
     def size_for(self, pipeline: str) -> Size:
         """The configured size alias for ``pipeline``.
 
-        Pipelines: classify / conflicts / friction / perceived / narrate.
+        Pipelines: classify / conflicts / friction / perceived / narrate / review.
         """
         try:
             size = getattr(self, f"llm_size_{pipeline}")
@@ -116,7 +125,7 @@ class LlmSettings(BaseSettings):
         The pipeline's size alias in the configured family, unless the
         pipeline has a ``llm_model_<pipeline>`` setting that names a model;
         a ``llm_effort_<pipeline>`` setting then replaces the spec's
-        reasoning effort. Only narrate has either.
+        reasoning effort. Narrate and review have both.
         """
         name = getattr(self, f"llm_model_{pipeline}", None)
         spec = resolve_model(name) if name else resolve(self.size_for(pipeline), self.llm_family)

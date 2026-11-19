@@ -121,13 +121,18 @@ parquet is populated — run `atif-sql analyze` first.
 - **Views**: `session_classifications`, `session_goals`,
   `session_conflicts`, `conflicts_summary`, `user_friction`,
   `perceived_errors`, `perceived_summary`, `session_narration`,
-  `session_stories`, `subagent_stories`. In `session_classifications`,
+  `session_stories`, `subagent_stories`, `session_findings`,
+  `session_reviews`. In `session_classifications`,
   `category` is an alias of `work_category`, and `autonomy_tier` and
   `success` are compatibility columns that are always NULL.
   `session_narration` (one row per narrated window; `agent_id` is NULL on
   the main chain and joins `subagents` otherwise), `session_stories` (the
   newest story per session) and `subagent_stories` (the newest per
   subagent) exist once `atif-sql analyze --narrate` has run.
+  `session_findings` (one row per review finding, the newest per
+  `finding_key`; `evidence_step_uuids` are step keys) and `session_reviews`
+  (one row per review of a session) exist once `atif-sql analyze --review`
+  has run.
 - **Macros**: `work_mix`, `friction_counts`, `friction_rate`,
   `friction_examples`, `conflicts_over_time`, `perceived_counts`,
   `perceived_rate`, `perceived_examples`. `friction_rate` and
