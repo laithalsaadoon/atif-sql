@@ -147,9 +147,12 @@ class AnalyticsSettings(BaseSettings):
     #: ``ATIF_SQL_REVIEW_ALWAYS_LAST_WINDOW``.
     review_always_last_window: bool = True
     #: Ceiling of one review call's steps in rendered characters; more steps
-    #: than that are split across calls at window ends. Env:
+    #: than that are split across calls at window ends. The default holds
+    #: one full narration window and not two: a call packed with many
+    #: windows attends less to each, and the faults in the middle of a long
+    #: session are the ones it then misses. Env:
     #: ``ATIF_SQL_REVIEW_CALL_MAX_CHARS``.
-    review_call_max_chars: int = Field(default=150_000, ge=1)
+    review_call_max_chars: int = Field(default=40_000, ge=1)
     #: How much of each tool result a review call is shown: its opening and
     #: its ending. A reviewer checks claims against results, so it reads more
     #: of one than a narration call does. Env:
