@@ -1,3 +1,18 @@
+## v0.8.0 (2026-11-19)
+
+### Feat
+
+- **analytics**: review sessions into findings whose quotes are checked against the steps
+
+### Fix
+
+- **analytics**: give each review call about one window of steps
+- **analytics**: review a session whose last steps render nothing
+- **analytics**: tell the narrator where a window sits, who wrote each line, and what the view cuts
+- **security**: drop the http-cache-semantics VEX statement
+- **site**: align the satteri processor with astro 7.4.7
+- **deps**: rename ty rule unresolved-import to import-not-found
+
 ## v0.7.0 (2026-11-15)
 
 ### Feat
