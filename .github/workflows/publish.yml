@@ -89,7 +89,7 @@ jobs:
       # pull-request run write one the default branch can read, so a release build that
       # restored a cache would let a fork's run choose bytes that get signed and published.
       # This job pays the full cold-resolve instead, once per release.
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
           # `minimum_release_age` because a mise release exists on GitHub before its assets finish
           # uploading: the 2026-09-08 scheduled security run asked for the just-cut v2026.9.3, its
