@@ -101,12 +101,19 @@ History:
   of the four rate families and from the request's own tier variant, and applies
   every exceeded threshold lowest first, so a key the highest one leaves out keeps
   the lower threshold's rate. The new ``balanced`` tier reads its own keys.
+* 12 — prices from litellm v1.109.1. The table adds five ids (gpt-6.1-terra direct
+  and as ``us.openai.`` and ``global.openai.`` on Bedrock, gpt-6-rosalind and
+  gpt-6-astra-law), so sessions on those that were unpriced now carry a cost.
+  gpt-5-nano and gpt-5-nano-2025-08-07 lose their priority input rate, so a priority
+  step on those bills input at the standard rate. No Claude rate changes and no id
+  is removed. Upstream dropped ``max_tokens`` from every entry and added 12-hour
+  cache-write rates to nine OpenAI ids; the arithmetic here reads neither.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-CONVERTER_SCHEMA_VERSION: Final = 11
+CONVERTER_SCHEMA_VERSION: Final = 12
 
 __all__ = ["CONVERTER_SCHEMA_VERSION"]
